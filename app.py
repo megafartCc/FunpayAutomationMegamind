@@ -50,8 +50,7 @@ def require_funpay_account():
 
 class AccountCreate(BaseModel):
     account_name: str
-    path_to_maFile: Optional[str] = None
-    mafile_json: Optional[str] = None
+    mafile_json: str
     login: str
     password: str
     rental_duration: int = Field(ge=1)
@@ -60,7 +59,6 @@ class AccountCreate(BaseModel):
 
 class AccountUpdate(BaseModel):
     account_name: Optional[str] = None
-    path_to_maFile: Optional[str] = None
     mafile_json: Optional[str] = None
     login: Optional[str] = None
     password: Optional[str] = None
@@ -113,11 +111,11 @@ def account_detail(account_id: int) -> dict:
 
 @app.post("/api/accounts", dependencies=[Depends(require_admin)])
 def create_account(payload: AccountCreate) -> dict:
-    if not payload.path_to_maFile and not payload.mafile_json:
-        raise HTTPException(status_code=400, detail="Provide path_to_maFile or mafile_json")
+    if not payload.mafile_json.strip():
+        raise HTTPException(status_code=400, detail="mafile_json is required")
     success = db.add_account(
         payload.account_name,
-        payload.path_to_maFile or "",
+        "",
         payload.login,
         payload.password,
         payload.rental_duration,

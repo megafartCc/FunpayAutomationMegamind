@@ -100,14 +100,14 @@ def check_rental_expiration():
                         
                         send_message_by_owner(
                             owner,
-                            f"ВНИМАНИЕ! Время аренды истекает через ~10 минут!\n\n"
-                            f"Аккаунт ID: {account_id}\n"
-                            f"Осталось времени: ~{int(hours_remaining * 60)} минут\n"
-                            f"СРОЧНО: Оставьте отзыв, чтобы продлить аренду на +{HOURS_FOR_REVIEW} час!\n\n"
-                            f"Как продлить:\n"
-                            f"• Оставьте отзыв на FunPay\n"
-                            f"• Или купите продление\n\n"
-                            f"Время истечения: {expiry_time.strftime('%H:%M:%S')}"
+                            f"????????! ?????? ????? ?????????? (~10 ?????).\n\n"
+                            f"ID ????????: {account_id}\n"
+                            f"????????: ~{int(hours_remaining * 60)} ???\n"
+                            f"???? ???????? ????? ?? FunPay ? ??????? +{HOURS_FOR_REVIEW} ?.\n\n"
+                            f"???????:\n"
+                            f"!acc ? ?????? ????????\n"
+                            f"!code ? ??? Steam Guard\n\n"
+                            f"?????????: {expiry_time.strftime('%H:%M:%S')} ???"
                         )
                         logger.info(f"Warning notification sent to {owner} for account {account_id} - {hours_remaining:.1f} hours remaining")
                     except Exception as e:
@@ -156,12 +156,10 @@ def check_rental_expiration():
                         try:
                             send_message_by_owner(
                                 owner,
-                                f"Срок аренды истек!\n\n"
-                                f"Аккаунт ID: {account_id}\n"
-                                f"Доступ прекращен\n\n"
-                                f"Не забудьте подтвердить заказ на FunPay!\n"
-                                f"Оставьте отзыв для будущих покупок!\n\n"
-                                f"Спасибо за использование нашего сервиса!"
+                                f"???? ?????? ?????.\n\n"
+                                f"ID ????????: {account_id}\n"
+                                f"?????? ??????, ?????? ???????.\n"
+                                f"???? ????? ?????? ??? ????????? ? ???????? ? ???."
                             )
                             logger.info(
                                 f"Expiration notification sent to user {owner}."
@@ -260,11 +258,9 @@ def startFunpay():
                     if number_of_orders > 1:
                         acc.send_message(
                             chat.id,
-                            f"ВНИМАНИЕ!\n\n"
-                            f"Вы заказали {number_of_orders} аккаунтов типа '{order_name}', но система выдает максимум 1 аккаунт каждому пользователю.\n\n"
-                            f"Вам будет выдан 1 аккаунт на {number_of_orders} часа (время аренды = количество заказанных).\n"
-                            f"Если хотите продлить время аренды, оставьте отзыв или купите продление.\n\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            f"?? ???????? {number_of_orders} ??. '{order_name}'.\n"
+                            f"??????? ?????? 1 ??????? ?? {number_of_orders} ????? (1 ?? = 1 ???).\n\n"
+                            f"???? ????? ?????? ??????? ? ???????? ? ???."
                         )
                         logger.info(f"User {event.order.buyer_username} ordered {number_of_orders} accounts but will receive only 1 for {number_of_orders} hours")
 
@@ -276,8 +272,8 @@ def startFunpay():
                         logger.error(f"Account with name '{order_name}' not found in database")
                         acc.send_message(
                             chat.id,
-                            f"Ошибка: Аккаунт '{order_name}' не найден в базе данных.\n"
-                            f"Обратитесь к администратору."
+                            f"??????: ??????? '{order_name}' ?? ??????.\n"
+                            f"??????? ????????. ????????, ???????."
                         )
                         acc.refund(event.order.id)
                         continue
@@ -288,8 +284,8 @@ def startFunpay():
                         logger.warning(f"Account '{order_name}' is already rented by {specific_account['owner']}")
                         acc.send_message(
                             chat.id,
-                            f"К сожалению, аккаунт '{order_name}' уже занят другим пользователем.\n"
-                            f"Попробуйте позже или выберите другой аккаунт."
+                            f"??????? '{order_name}' ?????? ?????.\n"
+                            f"??????? ????????. ????????, ???????? ??????."
                         )
                         acc.refund(event.order.id)
                         continue
@@ -308,11 +304,11 @@ def startFunpay():
                         # Уведомляем пользователя о продлении
                         acc.send_message(
                             chat.id,
-                            f"Аренда продлена!\n\n"
-                            f"Тип аккаунта: {order_name}\n"
-                            f"Продление: +{number_of_orders} часа\n"
-                            f"Аккаунт ID: {rental['id']}\n\n"
-                            f"Детали аккаунта:\n"
+                            f"?????? ????????!\n\n"
+                            f"??? ????????: {order_name}\n"
+                            f"?????????: +{number_of_orders} ?\n"
+                            f"ID: {rental['id']}\n\n"
+                            f"?????? ???????? ????."
                         )
                         
                         # Показываем детали продленного аккаунта
@@ -327,10 +323,10 @@ def startFunpay():
                             acc.send_message(
                                 chat.id,
                                 f"ID: {rental['id']}\n"
-                                f"Логин: {rental['login']}\n"
-                                f"Истекает: {expiry_time.strftime('%H:%M:%S')}\n"
-                                f"Пароль: {rental['password']}\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                f"?????: {rental['login']}\n"
+                                f"??????: {rental['password']}\n"
+                                f"????????: {expiry_time.strftime('%H:%M:%S')} ???\n"
+                                f"???????: !acc, !code"
                             )
                         
                         # Уведомляем админа
@@ -385,18 +381,17 @@ def startFunpay():
 
                         acc.send_message(
                             chat.id,
-                            text=f"Ваш аккаунт:\n"
-                            f"Уникальный ID: {specific_account['id']}\n"
-                            f"Название: {specific_account['account_name']}\n\n"
-                            f"Срок аренды: {number_of_orders} часа \n\n"
-                            f"Логин: {specific_account['login']}\n"
-                            f"Пароль: {specific_account['password']}\n\n"
-                            f"Что-бы запросить код подтверждения, отправьте /code\n\n"
-                            f"За отзыв - вы получите дополнительные {HOURS_FOR_REVIEW} час/часа аренды.\n"
-                            f"ВНИМАНИЕ: Система предупредит вас за 10 минут до истечения!\n\n"
-                            f"------------------------------------------------------------------------------\n\n"
-                            "Если вы еще не прочитали инструкцию по входу в аккаунт, сделайте это прямо сейчас!\n"
-                            "При возникновении проблем или вопросов позовите меня командой /question",
+                            text=f"??? ???????:\n"
+                            f"ID: {specific_account['id']}\n"
+                            f"????????: {specific_account['account_name']}\n"
+                            f"?????: {specific_account['login']}\n"
+                            f"??????: {specific_account['password']}\n"
+                            f"??????: {number_of_orders} ?\n\n"
+                            f"???????:\n"
+                            f"!acc ? ?????? ????????\n"
+                            f"!code ? ??? Steam Guard\n"
+                            f"!stock ? ???????\n\n"
+                            f"???? ????? ?????? ? ???????? ? ???."
                         )
                         
                         # Подтверждаем заказ
@@ -418,7 +413,9 @@ def startFunpay():
 
                     logger.info(f"{event.message.author} : {event.message.text}")
 
-                    if "/code" == event.message.text.strip():
+                    message_text = event.message.text.strip().lower()
+
+                    if message_text == "!code":
                         try:
                             owner_data = db.get_owner_mafile(event.message.author)
 
@@ -441,7 +438,7 @@ def startFunpay():
                                     )
                                     acc.send_message(
                                         chat.id,
-                                        f"ID {account_id} -> {guard_code}",
+                                        f"Код для ID {account_id}: {guard_code}",
                                     )
                             else:
                                 acc.send_message(chat.id, "Ошибка: аккаунт не найден")
@@ -450,16 +447,16 @@ def startFunpay():
                                 chat.id, f"Ошибка при генерации кода: {str(e)}"
                             )
 
-                    elif event.message.text.strip() == "!acc":
+                    elif message_text == "!acc":
                         try:
                             accounts = db.get_user_active_accounts(event.message.author)
 
                             if not accounts:
-                                acc.send_message(chat.id, "No active rentals found.")
+                                acc.send_message(chat.id, "???????? ????? ???.")
                                 return
 
                             current_time = datetime.now(tz=moscow_tz)
-                            lines = ["Your active rentals:"]
+                            lines = ["???? ???????? ??????:"]
 
                             for account in accounts:
                                 rental_start = account.get("rental_start")
@@ -483,21 +480,21 @@ def startFunpay():
                                         (remaining.total_seconds() % 3600) // 60
                                     )
                                     expiry_str = expiry_time.strftime("%H:%M:%S")
-                                    remaining_str = f"{hours}h {minutes}m"
+                                    remaining_str = f"{hours}? {minutes}?"
                                 else:
-                                    expiry_str = "unknown"
-                                    remaining_str = "unknown"
+                                    expiry_str = "??????????"
+                                    remaining_str = "??????????"
 
                                 lines.append(
                                     f"ID {account['id']} | {account['account_name']}"
                                 )
-                                lines.append(f"Login: {account['login']}")
-                                lines.append(f"Password: {account['password']}")
+                                lines.append(f"?????: {account['login']}")
+                                lines.append(f"??????: {account['password']}")
                                 lines.append(
-                                    "Duration: "
-                                    f"{account['rental_duration']}h | "
-                                    f"Expires: {expiry_str} MSK | "
-                                    f"Left: {remaining_str}"
+                                    "????: "
+                                    f"{account['rental_duration']}? | "
+                                    f"????????: {expiry_str} ??? | "
+                                    f"????????: {remaining_str}"
                                 )
                                 lines.append("-----")
 
@@ -507,14 +504,9 @@ def startFunpay():
                                 f"Failed to send account details to {event.message.author}: {str(e)}"
                             )
                             acc.send_message(
-                                chat.id, "Error retrieving account details."
+                                chat.id, "?? ??????? ???????? ?????? ?????????."
                             )
-
-                    elif event.message.text == "/question":
-
-                        acc.send_message(chat.id, "Оператор скоро ответит вам.")
-
-                    elif "/stock" == event.message.text:
+                    elif message_text == "!stock":
 
                         chatData = acc.get_chat(chat.id)
 
@@ -557,10 +549,8 @@ def startFunpay():
                         # Send the count to the user
                         acc.send_message(
                             chat.id,
-                            f"Вы смотрите аккаунт: {lookingAccountName}\n\n"
-                            f"Свободные аккаунты: {total_unwoned_accounts}/{total_accounts}",
+                            f"??????? ??? '{lookingAccountName}': {total_unwoned_accounts}/{total_accounts}",
                         )
-
                     elif event.message.type == types.MessageTypes.NEW_FEEDBACK:
                         try:
                             conn, cursor = db.open_connection()
@@ -625,15 +615,11 @@ def startFunpay():
                                     chat = acc.get_chat_by_name(owner, True)
                                     acc.send_message(
                                         chat.id,
-                                        f"Спасибо за ваш отзыв!\n\n"
-                                        f"Время аренды продлено на +{HOURS_FOR_REVIEW} час!\n\n"
-                                        f"Ваши активные аккаунты:\n"
-                                        f"• Количество: {len(accounts)}\n"
-                                        f"• Новое время аренды: {HOURS_FOR_REVIEW + 1} часа\n\n"
-                                        f"Совет: Оставляйте отзывы заранее, чтобы получить максимальное продление!\n"
-                                        f"Напоминание: Система предупредит вас за 10 минут до истечения!",
+                                        f"Спасибо за отзыв!\n\n"
+                                        f"Аренда продлена на +{HOURS_FOR_REVIEW} ч.\n"
+                                        f"Активных аккаунтов: {len(accounts)}\n\n"
+                                        f"Команда !acc — данные аккаунта."
                                     )
-
                                     logger.info(
                                         f"Rental duration extended for {len(accounts)} accounts of user {owner} by +{HOURS_FOR_REVIEW} hours."
                                     )
