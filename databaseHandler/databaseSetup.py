@@ -45,6 +45,7 @@ class SQLiteDB:
         self, account_name, path_to_maFile, login, password, duration, owner=None
     ):
         """Add an account to the database."""
+        cursor = None
         try:
             # Проверяем, не существует ли уже аккаунт с таким названием
             existing_account = self.get_account_by_name(account_name)
@@ -304,7 +305,8 @@ class SQLiteDB:
             logger.error(f"Error releasing account: {str(e)}")
             return False
         finally:
-            cursor.close()
+            if cursor:
+                cursor.close()
 
     def update_account(self, account_id: int, fields: dict) -> bool:
         """Update editable fields for a single account."""
