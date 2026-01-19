@@ -450,6 +450,66 @@ def startFunpay():
                                 chat.id, f"Ошибка при генерации кода: {str(e)}"
                             )
 
+                    elif event.message.text.strip() == "!acc":
+                        try:
+                            accounts = db.get_user_active_accounts(event.message.author)
+
+                            if not accounts:
+                                acc.send_message(chat.id, "No active rentals found.")
+                                return
+
+                            current_time = datetime.now(tz=moscow_tz)
+                            lines = ["Your active rentals:"]
+
+                            for account in accounts:
+                                rental_start = account.get("rental_start")
+                                if rental_start:
+                                    if isinstance(rental_start, datetime):
+                                        start_dt = rental_start
+                                    else:
+                                        start_dt = datetime.strptime(
+                                            rental_start, "%Y-%m-%d %H:%M:%S"
+                                        )
+                                    if start_dt.tzinfo is None:
+                                        start_dt = moscow_tz.localize(start_dt)
+                                    expiry_time = start_dt + timedelta(
+                                        hours=int(account["rental_duration"])
+                                    )
+                                    remaining = expiry_time - current_time
+                                    if remaining.total_seconds() < 0:
+                                        remaining = timedelta(0)
+                                    hours = int(remaining.total_seconds() // 3600)
+                                    minutes = int(
+                                        (remaining.total_seconds() % 3600) // 60
+                                    )
+                                    expiry_str = expiry_time.strftime("%H:%M:%S")
+                                    remaining_str = f"{hours}h {minutes}m"
+                                else:
+                                    expiry_str = "unknown"
+                                    remaining_str = "unknown"
+
+                                lines.append(
+                                    f"ID {account['id']} | {account['account_name']}"
+                                )
+                                lines.append(f"Login: {account['login']}")
+                                lines.append(f"Password: {account['password']}")
+                                lines.append(
+                                    "Duration: "
+                                    f"{account['rental_duration']}h | "
+                                    f"Expires: {expiry_str} MSK | "
+                                    f"Left: {remaining_str}"
+                                )
+                                lines.append("-----")
+
+                            acc.send_message(chat.id, "\n".join(lines))
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to send account details to {event.message.author}: {str(e)}"
+                            )
+                            acc.send_message(
+                                chat.id, "Error retrieving account details."
+                            )
+
                     elif event.message.text == "/question":
 
                         acc.send_message(chat.id, "Оператор скоро ответит вам.")
