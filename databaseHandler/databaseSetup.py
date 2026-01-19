@@ -19,9 +19,10 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 class _CursorWrapper:
-    def __init__(self, cursor, formatter):
+    def __init__(self, cursor, formatter, connection=None):
         self._cursor = cursor
         self._formatter = formatter
+        self._connection = connection
 
     def execute(self, sql, params=None):
         if params is None:
@@ -42,10 +43,19 @@ class _CursorWrapper:
         return self._cursor.rowcount
 
     def close(self):
-        return self._cursor.close()
+        try:
+            return self._cursor.close()
+        finally:
+            if self._connection is not None:
+                self._connection.close()
 
-    def __getattr__(self, name):
-        return getattr(self._cursor, name)
+
+class _NoopConnection:
+    def commit(self):
+        return None
+
+    def close(self):
+        return None
 
 
 class SQLiteDB:
@@ -55,13 +65,7 @@ class SQLiteDB:
         if self.db_type == "mysql":
             if mysql_connector is None:
                 raise RuntimeError("mysql-connector-python is required for MySQL support.")
-            self.conn = mysql_connector.connect(
-                host=MYSQLHOST,
-                port=MYSQLPORT,
-                user=MYSQLUSER,
-                password=MYSQLPASSWORD,
-                database=MYSQLDATABASE,
-            )
+            self.conn = _NoopConnection()
         else:
             self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
         self.create_table()
@@ -72,10 +76,18 @@ class SQLiteDB:
         return sql
 
     def _cursor(self):
-        cursor = self.conn.cursor()
         if self.db_type == "mysql":
-            return _CursorWrapper(cursor, self._format_sql)
-        return cursor
+            conn = mysql_connector.connect(
+                host=MYSQLHOST,
+                port=MYSQLPORT,
+                user=MYSQLUSER,
+                password=MYSQLPASSWORD,
+                database=MYSQLDATABASE,
+                autocommit=True,
+                use_pure=True,
+            )
+            return _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
+        return self.conn.cursor()
 
     def open_connection(self):
         if self.db_type == "mysql":
@@ -87,8 +99,10 @@ class SQLiteDB:
                 user=MYSQLUSER,
                 password=MYSQLPASSWORD,
                 database=MYSQLDATABASE,
+                autocommit=True,
+                use_pure=True,
             )
-            return conn, _CursorWrapper(conn.cursor(), self._format_sql)
+            return conn, _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
         conn = sqlite3.connect(self.db_name, check_same_thread=False)
         return conn, conn.cursor()
 
