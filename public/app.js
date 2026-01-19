@@ -13,6 +13,17 @@ const ui = {
   search: document.getElementById("searchAccounts"),
   showPasswords: document.getElementById("showPasswords"),
   toast: document.getElementById("toast"),
+  chats: {
+    list: document.getElementById("chatList"),
+    search: document.getElementById("chatSearch"),
+    refresh: document.getElementById("refreshChats"),
+    loadHistory: document.getElementById("loadHistory"),
+    title: document.getElementById("chatTitle"),
+    subtitle: document.getElementById("chatSubtitle"),
+    messages: document.getElementById("chatMessages"),
+    form: document.getElementById("chatSendForm"),
+    input: document.getElementById("chatMessageInput"),
+  },
   manage: {
     id: document.getElementById("manageId"),
     name: document.getElementById("manageName"),
@@ -37,6 +48,8 @@ const ui = {
 
 let accountsCache = [];
 let selectedId = null;
+let chatsCache = [];
+let selectedChatId = null;
 
 const toast = (message, isError = false) => {
   ui.toast.textContent = message;
@@ -74,6 +87,16 @@ const formatDate = (value) => {
   return parsed.toLocaleString();
 };
 
+const escapeHtml = (value) => {
+  if (!value) return "";
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+};
+
 const setManagePanel = (account) => {
   if (!account) {
     ui.manage.id.value = "";
@@ -105,8 +128,10 @@ const renderStats = (stats) => {
 };
 
 const renderHealth = (status) => {
-  if (status?.funpay_enabled) {
-    ui.health.textContent = "FunPay active";
+  if (status?.funpay_ready) {
+    ui.health.textContent = "FunPay ready";
+  } else if (status?.funpay_enabled) {
+    ui.health.textContent = "FunPay starting";
   } else {
     ui.health.textContent = "FunPay disabled";
   }
@@ -184,12 +209,105 @@ const renderNotifications = (items) => {
       (item) => `
         <div class="notice">
           <h4>${item.level?.toUpperCase() || "INFO"} - ${formatDate(item.created_at)}</h4>
-          <p>${item.message}</p>
+          <p>${escapeHtml(item.message)}</p>
           <p>Owner: ${item.owner || "-"} | Account: ${item.account_id || "-"}</p>
         </div>
       `
     )
     .join("");
+};
+
+const renderChatList = (items) => {
+  const query = ui.chats.search.value.trim().toLowerCase();
+  const filtered = items.filter((chat) => {
+    const name = chat.name?.toLowerCase() || "";
+    const last = chat.last_message_text?.toLowerCase() || "";
+    return !query || name.includes(query) || last.includes(query);
+  });
+
+  if (!filtered.length) {
+    ui.chats.list.innerHTML = "<div class=\"notice\"><h4>No chats</h4><p>No chats found.</p></div>";
+    return;
+  }
+
+  ui.chats.list.innerHTML = filtered
+    .map(
+      (chat) => `
+        <button class="chat-item ${chat.id === selectedChatId ? "active" : ""}" data-id="${chat.id}">
+          <div>
+            <h4>${escapeHtml(chat.name || "Unknown")}</h4>
+            <p>${escapeHtml(chat.last_message_text || "")}</p>
+          </div>
+          ${chat.unread ? '<span class="badge">new</span>' : ''}
+        </button>
+      `
+    )
+    .join("");
+
+  document.querySelectorAll(".chat-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      selectedChatId = Number(item.dataset.id);
+      const chat = chatsCache.find((c) => c.id === selectedChatId);
+      ui.chats.title.textContent = chat?.name || "Chat";
+      ui.chats.subtitle.textContent = `Chat ID: ${selectedChatId}`;
+      ui.chats.list.querySelectorAll(".chat-item").forEach((row) => {
+        row.classList.toggle("active", Number(row.dataset.id) === selectedChatId);
+      });
+      loadChatHistory();
+    });
+  });
+};
+
+const renderChatMessages = (items) => {
+  if (!items.length) {
+    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>No messages</h4><p>Select a chat to load history.</p></div>";
+    return;
+  }
+
+  ui.chats.messages.innerHTML = items
+    .map((message) => {
+      const author = message.author || "Unknown";
+      const text = escapeHtml(message.text || "");
+      const image = message.image_link
+        ? `<a href="${message.image_link}" target="_blank" rel="noreferrer">View image</a>`
+        : "";
+      const type = message.type ? `(${message.type})` : "";
+      return `
+        <div class="chat-message ${message.by_bot ? "self" : ""}">
+          <h5>${escapeHtml(author)} ${type}</h5>
+          <p>${text || "(no text)"}</p>
+          ${image}
+        </div>
+      `;
+    })
+    .join("");
+};
+
+const loadChats = async () => {
+  if (!getAdminKey()) {
+    ui.chats.list.innerHTML = "<div class=\"notice\"><h4>Admin key needed</h4><p>Set the admin key to load chats.</p></div>";
+    return;
+  }
+  try {
+    const data = await apiFetch("/api/chats");
+    chatsCache = data.items || [];
+    renderChatList(chatsCache);
+  } catch (error) {
+    toast(error.message || "Failed to load chats", true);
+  }
+};
+
+const loadChatHistory = async () => {
+  if (!selectedChatId) {
+    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>Select a chat</h4><p>Pick a chat to view messages.</p></div>";
+    return;
+  }
+  try {
+    const data = await apiFetch(`/api/chats/${selectedChatId}/history?limit=60`);
+    renderChatMessages(data.items || []);
+  } catch (error) {
+    toast(error.message || "Failed to load history", true);
+  }
 };
 
 const loadAll = async () => {
@@ -213,6 +331,8 @@ const loadAll = async () => {
       const selected = accountsCache.find((acc) => acc.id === selectedId);
       setManagePanel(selected || null);
     }
+
+    loadChats();
   } catch (error) {
     toast(error.message || "Failed to load data", true);
   }
@@ -221,6 +341,7 @@ const loadAll = async () => {
 ui.saveKey.addEventListener("click", () => {
   sessionStorage.setItem("adminKey", ui.adminKey.value.trim());
   toast("Admin key saved.");
+  loadChats();
 });
 
 ui.refreshAll.addEventListener("click", () => {
@@ -229,6 +350,34 @@ ui.refreshAll.addEventListener("click", () => {
 
 ui.search.addEventListener("input", () => renderInventory(accountsCache));
 ui.showPasswords.addEventListener("change", () => renderInventory(accountsCache));
+
+ui.chats.search.addEventListener("input", () => renderChatList(chatsCache));
+ui.chats.refresh.addEventListener("click", () => loadChats());
+ui.chats.loadHistory.addEventListener("click", () => loadChatHistory());
+
+ui.chats.form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedChatId) {
+    toast("Select a chat first.", true);
+    return;
+  }
+  const text = ui.chats.input.value.trim();
+  if (!text) {
+    toast("Message is empty.", true);
+    return;
+  }
+  try {
+    await apiFetch(`/api/chats/${selectedChatId}/send`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    ui.chats.input.value = "";
+    toast("Message sent.");
+    loadChatHistory();
+  } catch (error) {
+    toast(error.message || "Send failed", true);
+  }
+});
 
 ui.addForm.addEventListener("submit", async (event) => {
   event.preventDefault();

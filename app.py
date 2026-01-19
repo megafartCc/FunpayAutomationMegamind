@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from config import ADMIN_API_KEY, FUNPAY_GOLDEN_KEY
 from databaseHandler.databaseSetup import SQLiteDB
-from funpayHandler.funpay import startFunpay
+from funpayHandler.funpay import get_account, startFunpay
 from logger import logger
 from notifications import list_notifications
 
@@ -41,6 +41,13 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid admin key")
 
 
+def require_funpay_account():
+    account = get_account()
+    if account is None:
+        raise HTTPException(status_code=503, detail="FunPay session not initialized")
+    return account
+
+
 class AccountCreate(BaseModel):
     account_name: str
     path_to_maFile: str
@@ -66,9 +73,17 @@ class ExtendRequest(BaseModel):
     hours: int = Field(ge=1)
 
 
+class ChatMessage(BaseModel):
+    text: str
+
+
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "funpay_enabled": bool(FUNPAY_GOLDEN_KEY)}
+    return {
+        "status": "ok",
+        "funpay_enabled": bool(FUNPAY_GOLDEN_KEY),
+        "funpay_ready": get_account() is not None,
+    }
 
 
 @app.get("/api/stats")
@@ -165,6 +180,66 @@ def extend_owner(owner: str, payload: ExtendRequest) -> dict:
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rentals")
     return {"status": "ok"}
+
+
+@app.get("/api/chats", dependencies=[Depends(require_admin)])
+def chats(account=Depends(require_funpay_account)) -> dict:
+    try:
+        chats_map = account.get_chats(update=True)
+        items = []
+        for chat in chats_map.values():
+            items.append(
+                {
+                    "id": chat.id,
+                    "name": chat.name,
+                    "last_message_text": chat.last_message_text,
+                    "unread": chat.unread,
+                    "node_msg_id": chat.node_msg_id,
+                    "user_msg_id": chat.user_msg_id,
+                }
+            )
+        return {"items": items}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/chats/{chat_id}/history", dependencies=[Depends(require_admin)])
+def chat_history(chat_id: int, limit: int = 50, account=Depends(require_funpay_account)) -> dict:
+    try:
+        messages = account.get_chat_history(chat_id) or []
+        trimmed = messages[-limit:]
+        items = []
+        for message in trimmed:
+            items.append(
+                {
+                    "id": message.id,
+                    "text": message.text,
+                    "author": message.author,
+                    "author_id": message.author_id,
+                    "chat_id": message.chat_id,
+                    "chat_name": message.chat_name,
+                    "image_link": message.image_link,
+                    "by_bot": message.by_bot,
+                    "by_vertex": message.by_vertex,
+                    "type": message.type.name if message.type else None,
+                }
+            )
+        return {"items": items}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
+def chat_send(chat_id: int, payload: ChatMessage, account=Depends(require_funpay_account)) -> dict:
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Message text is required")
+    try:
+        chat = account.get_chat_by_id(chat_id, make_request=True)
+        chat_name = chat.name if chat else None
+        message = account.send_message(chat_id, payload.text, chat_name)
+        return {"status": "ok", "message_id": message.id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/", include_in_schema=False)

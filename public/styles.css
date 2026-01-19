@@ -339,6 +339,129 @@ select:focus {
   gap: 10px;
 }
 
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 16px;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-list-head {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-items {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.chat-item {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-item h4 {
+  font-size: 0.95rem;
+}
+
+.chat-item p {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+
+.chat-item .badge {
+  background: rgba(242, 176, 90, 0.2);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  height: fit-content;
+}
+
+.chat-item.active {
+  border-color: rgba(242, 176, 90, 0.5);
+  background: rgba(242, 176, 90, 0.08);
+}
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-window-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.chat-messages {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  max-height: 380px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.chat-message {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  max-width: 70%;
+}
+
+.chat-message.self {
+  margin-left: auto;
+  background: rgba(242, 176, 90, 0.16);
+  border-color: rgba(242, 176, 90, 0.5);
+}
+
+.chat-message h5 {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.chat-message p {
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+
+.chat-message a {
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.chat-send {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.chat-send textarea {
+  flex: 1;
+}
+
 .notice {
   padding: 12px 14px;
   border-radius: 12px;
@@ -387,5 +510,9 @@ select:focus {
 
   .topbar {
     flex-direction: column;
+  }
+
+  .chat-layout {
+    grid-template-columns: 1fr;
   }
 }

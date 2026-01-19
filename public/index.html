@@ -22,6 +22,7 @@
           <a href="#overview">Overview</a>
           <a href="#rentals">Active rentals</a>
           <a href="#inventory">Inventory</a>
+          <a href="#chats">FunPay chats</a>
           <a href="#manage">Manage account</a>
           <a href="#add">Add account</a>
           <a href="#notifications">Notifications</a>
@@ -122,6 +123,36 @@
               </thead>
               <tbody id="inventoryTable"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="section" id="chats">
+          <div class="section-head">
+            <h2>FunPay chats</h2>
+            <p>Review and reply to buyers from the dashboard.</p>
+          </div>
+          <div class="panel chat-layout">
+            <div class="chat-list">
+              <div class="chat-list-head">
+                <input id="chatSearch" type="search" placeholder="Search chats" />
+                <button class="btn ghost" id="refreshChats">Refresh</button>
+              </div>
+              <div id="chatList" class="chat-items"></div>
+            </div>
+            <div class="chat-window">
+              <div class="chat-window-head">
+                <div>
+                  <h3 id="chatTitle">Select a chat</h3>
+                  <span class="helper" id="chatSubtitle">Messages will appear here.</span>
+                </div>
+                <button class="btn ghost" id="loadHistory">Load history</button>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <form id="chatSendForm" class="chat-send">
+                <textarea id="chatMessageInput" rows="2" placeholder="Write a reply..."></textarea>
+                <button class="btn" type="submit">Send</button>
+              </form>
+            </div>
           </div>
         </section>
 

@@ -589,5 +589,10 @@ def send_message_by_owner(owner, message):
         logger.error(f"Failed to send message to {owner}: {str(e)}")
 
 
+def get_account():
+    """Return the current FunPay account session, if initialized."""
+    return acc
+
+
 # Ensure the function is available for import
-__all__ = ["send_message_by_owner"]
+__all__ = ["send_message_by_owner", "get_account"]
