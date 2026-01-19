@@ -26,6 +26,7 @@ Open http://localhost:8000
 Create a `.env` file (see `.env.example`):
 
 - `FUNPAY_GOLDEN_KEY` (required)
+- `ADMIN_API_KEY` (optional, protects write endpoints)
 - `HOURS_FOR_REVIEW` (default: 1)
 - `AUTO_EXTEND_ENABLED` (default: true)
 - `MAX_EXTENSION_HOURS` (default: 24)

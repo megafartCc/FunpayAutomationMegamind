@@ -21,6 +21,7 @@ def _get_bool(name: str, default: bool) -> bool:
 
 
 FUNPAY_GOLDEN_KEY = os.getenv("FUNPAY_GOLDEN_KEY", "").strip()
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "").strip()
 HOURS_FOR_REVIEW = _get_int("HOURS_FOR_REVIEW", 1)
 AUTO_EXTEND_ENABLED = _get_bool("AUTO_EXTEND_ENABLED", True)
 MAX_EXTENSION_HOURS = _get_int("MAX_EXTENSION_HOURS", 24)

@@ -229,7 +229,7 @@ class SQLiteDB:
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner
+            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start
             FROM accounts
             """
         )
@@ -244,6 +244,7 @@ class SQLiteDB:
                 "password": row[4],
                 "rental_duration": row[5],
                 "owner": row[6],
+                "rental_start": row[7],
             }
             for row in rows
         ]
@@ -280,6 +281,62 @@ class SQLiteDB:
             return success
         except Exception as e:
             logger.error(f"Error deleting accounts: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
+    def release_account(self, account_id: int) -> bool:
+        """Clear owner and rental start for an account."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET owner = NULL, rental_start = NULL
+                WHERE ID = ?
+                """,
+                (account_id,),
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as e:
+            logger.error(f"Error releasing account: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
+    def update_account(self, account_id: int, fields: dict) -> bool:
+        """Update editable fields for a single account."""
+        allowed_fields = {
+            "account_name",
+            "path_to_maFile",
+            "login",
+            "password",
+            "rental_duration",
+        }
+        updates = {key: value for key, value in fields.items() if key in allowed_fields}
+        if not updates:
+            return False
+
+        try:
+            cursor = self.conn.cursor()
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values())
+            values.append(account_id)
+            cursor.execute(
+                f"""
+                UPDATE accounts
+                SET {set_clause}
+                WHERE ID = ?
+                """,
+                values,
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as e:
+            logger.error(f"Error updating account: {str(e)}")
             return False
         finally:
             cursor.close()
