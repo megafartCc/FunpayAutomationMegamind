@@ -27,7 +27,7 @@ propcache==0.3.0
 protobuf==5.28.2
 psutil==7.0.0
 pyasn1==0.6.1
-pydantic==1.9.0
+pydantic==1.10.15
 pyreadline3==3.5.4
 pysteamauth==1.1.2
 pysteamlib==1.0.1
