@@ -30,6 +30,7 @@ const ui = {
     login: document.getElementById("manageLogin"),
     password: document.getElementById("managePassword"),
     maFile: document.getElementById("manageMaFile"),
+    maFileJson: document.getElementById("manageMaFileJson"),
     duration: document.getElementById("manageDuration"),
     owner: document.getElementById("manageOwner"),
     start: document.getElementById("manageStart"),
@@ -104,6 +105,7 @@ const setManagePanel = (account) => {
     ui.manage.login.value = "";
     ui.manage.password.value = "";
     ui.manage.maFile.value = "";
+    ui.manage.maFileJson.value = "";
     ui.manage.duration.value = "";
     ui.manage.owner.value = "";
     ui.manage.start.value = "";
@@ -115,6 +117,7 @@ const setManagePanel = (account) => {
   ui.manage.login.value = account.login || "";
   ui.manage.password.value = account.password || "";
   ui.manage.maFile.value = account.path_to_maFile || "";
+  ui.manage.maFileJson.value = "";
   ui.manage.duration.value = account.rental_duration || "";
   ui.manage.owner.value = account.owner || "";
   ui.manage.start.value = formatDate(account.rental_start);
@@ -384,6 +387,12 @@ ui.addForm.addEventListener("submit", async (event) => {
   const formData = new FormData(ui.addForm);
   const payload = Object.fromEntries(formData.entries());
   payload.rental_duration = Number(payload.rental_duration || 0);
+  if (!payload.path_to_maFile) {
+    delete payload.path_to_maFile;
+  }
+  if (!payload.mafile_json) {
+    delete payload.mafile_json;
+  }
   if (!payload.owner) {
     delete payload.owner;
   }
@@ -410,8 +419,15 @@ ui.manage.update.addEventListener("click", async () => {
     login: ui.manage.login.value.trim(),
     password: ui.manage.password.value.trim(),
     path_to_maFile: ui.manage.maFile.value.trim(),
+    mafile_json: ui.manage.maFileJson.value.trim(),
     rental_duration: Number(ui.manage.duration.value || 0),
   };
+  if (!payload.path_to_maFile) {
+    delete payload.path_to_maFile;
+  }
+  if (!payload.mafile_json) {
+    delete payload.mafile_json;
+  }
   try {
     await apiFetch(`/api/accounts/${selectedId}`, {
       method: "PATCH",

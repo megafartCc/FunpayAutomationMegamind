@@ -33,13 +33,24 @@ def generate_password(length: int = 12) -> str:
     return password
 
 
-async def changeSteamPassword(path_to_maFile: str, password: str) -> str:
+async def changeSteamPassword(
+    path_to_maFile: str | None,
+    password: str,
+    mafile_json: str | dict | None = None,
+) -> str:
 
     logger.info("Started changing password")
 
-    with open(path_to_maFile, "r") as f:
-        data = json.load(f)
-        logger.info(f"Started changing password for {data['account_name']}")
+    data = None
+    if mafile_json:
+        data = mafile_json if isinstance(mafile_json, dict) else json.loads(mafile_json)
+    elif path_to_maFile:
+        with open(path_to_maFile, "r") as f:
+            data = json.load(f)
+    else:
+        raise ValueError("Missing .maFile data")
+
+    logger.info(f"Started changing password for {data['account_name']}")
     steam = CustomSteam(
         login=data["account_name"],
         password=password,

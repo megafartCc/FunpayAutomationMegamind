@@ -2,7 +2,6 @@
 import random
 import time
 import asyncio
-import sqlite3
 import threading
 import re
 from datetime import datetime, timedelta
@@ -12,7 +11,6 @@ from FunPayAPI import Account, Runner, types, enums, events
 
 # Project-specific imports
 from config import (
-    DATABASE_PATH,
     FUNPAY_GOLDEN_KEY,
     HOURS_FOR_REVIEW,
     RENTAL_CHECK_INTERVAL,
@@ -52,15 +50,14 @@ def check_rental_expiration():
     invalid_accs = []
     while True:
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
+            conn, cursor = db.open_connection()
 
             current_time = datetime.now(tz=moscow_tz)
 
             # Get all active rentals with their maFile paths
             cursor.execute(
                 """
-                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.password
+                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.mafile_json, a.password
                 FROM accounts a
                 WHERE a.owner IS NOT NULL 
                 AND a.rental_start IS NOT NULL
@@ -70,10 +67,13 @@ def check_rental_expiration():
             accounts_data = cursor.fetchall()
 
             for row in accounts_data:
-                account_id, owner, start_time, duration, mafile_path, password = row
+                account_id, owner, start_time, duration, mafile_path, mafile_json, password = row
                 logger.debug(f"Processing account ID: {account_id}, Owner: {owner}")
 
-                start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                if isinstance(start_time, datetime):
+                    start_datetime = start_time
+                else:
+                    start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
                 start_datetime = moscow_tz.localize(start_datetime)
                 expiry_time = start_datetime + timedelta(hours=int(duration))
                 
@@ -123,6 +123,7 @@ def check_rental_expiration():
                             changeSteamPassword(
                                 path_to_maFile=mafile_path,
                                 password=password,
+                                mafile_json=mafile_json,
                             )
                         )
                         logger.info(
@@ -179,7 +180,7 @@ def check_rental_expiration():
                         continue
 
             conn.commit()
-
+            cursor.close()
             conn.close()
 
         except Exception as e:
@@ -317,7 +318,12 @@ def startFunpay():
                         # Показываем детали продленного аккаунта
                         account = db.get_account_by_id(rental['id'])
                         if account:
-                            expiry_time = datetime.strptime(account['rental_start'], "%Y-%m-%d %H:%M:%S") + timedelta(hours=int(account['rental_duration']))
+                            rental_start = account['rental_start']
+                            if isinstance(rental_start, datetime):
+                                start_dt = rental_start
+                            else:
+                                start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
+                            expiry_time = start_dt + timedelta(hours=int(account['rental_duration']))
                             acc.send_message(
                                 chat.id,
                                 f"ID: {rental['id']}\n"
@@ -351,8 +357,7 @@ def startFunpay():
                         )
                         
                         # Обновляем время аренды на количество заказанных часов
-                        conn = sqlite3.connect(DATABASE_PATH)
-                        cursor = conn.cursor()
+                        conn, cursor = db.open_connection()
                         cursor.execute(
                             """
                             UPDATE accounts
@@ -362,6 +367,7 @@ def startFunpay():
                             (number_of_orders, specific_account["id"]),
                         )
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         
                         send_message_to_admin(
@@ -425,10 +431,14 @@ def startFunpay():
                                         account_id,
                                         account_name,
                                         mafile_path,
+                                        mafile_json,
                                         login,
                                         rental_duration,
                                     ) = account
-                                    guard_code = get_steam_guard_code(mafile_path)
+                                    guard_code = get_steam_guard_code(
+                                        mafile_path=mafile_path,
+                                        mafile_json=mafile_json,
+                                    )
                                     acc.send_message(
                                         chat.id,
                                         f"ID {account_id} -> {guard_code}",
@@ -493,8 +503,7 @@ def startFunpay():
 
                     elif event.message.type == types.MessageTypes.NEW_FEEDBACK:
                         try:
-                            conn = sqlite3.connect(DATABASE_PATH)
-                            cursor = conn.cursor()
+                            conn, cursor = db.open_connection()
 
                             # Extract the owner's username from the feedback message
                             feedback_text = event.message.text
@@ -525,9 +534,12 @@ def startFunpay():
                                         account_id, rental_start, rental_duration = account
                                         
                                         # Calculate current expiry time
-                                        start_time = datetime.strptime(
-                                            rental_start, "%Y-%m-%d %H:%M:%S"
-                                        )
+                                        if isinstance(rental_start, datetime):
+                                            start_time = rental_start
+                                        else:
+                                            start_time = datetime.strptime(
+                                                rental_start, "%Y-%m-%d %H:%M:%S"
+                                            )
                                         current_expiry = start_time + timedelta(hours=int(rental_duration))
                                         
                                         # Add extension hours to the duration (not to start time)
@@ -569,6 +581,7 @@ def startFunpay():
                         except Exception as e:
                             logger.error(f"Error handling NEW_FEEDBACK event: {str(e)}")
                         finally:
+                            cursor.close()
                             conn.close()
 
                 logger.info("New message processed successfully.")

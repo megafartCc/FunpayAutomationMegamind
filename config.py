@@ -28,3 +28,14 @@ MAX_EXTENSION_HOURS = _get_int("MAX_EXTENSION_HOURS", 24)
 RENTAL_CHECK_INTERVAL = _get_int("RENTAL_CHECK_INTERVAL", 60)
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
+
+MYSQLHOST = os.getenv("MYSQLHOST", "").strip()
+MYSQLPORT = _get_int("MYSQLPORT", 3306)
+MYSQLUSER = os.getenv("MYSQLUSER", "").strip()
+MYSQLPASSWORD = os.getenv("MYSQLPASSWORD", "").strip()
+MYSQLDATABASE = os.getenv("MYSQLDATABASE", "").strip()
+
+DATABASE_ENGINE = os.getenv(
+    "DATABASE_ENGINE",
+    "mysql" if MYSQLHOST and MYSQLDATABASE else "sqlite",
+).strip().lower()

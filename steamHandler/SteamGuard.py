@@ -36,12 +36,22 @@ def getGuardCode(shared_secret):
     return code
 
 
-def get_steam_guard_code(mafile_path):
+def get_steam_guard_code(mafile_path=None, mafile_json=None):
     try:
-        with open(mafile_path, "r") as file:
-            data = json.loads(file.read())
-            code = getGuardCode(data["shared_secret"])
-            return code
+        data = None
+        if mafile_json:
+            if isinstance(mafile_json, dict):
+                data = mafile_json
+            else:
+                data = json.loads(mafile_json)
+        elif mafile_path:
+            with open(mafile_path, "r") as file:
+                data = json.loads(file.read())
+        else:
+            return {"success": False, "error": "Missing .maFile data"}
+
+        code = getGuardCode(data["shared_secret"])
+        return code
 
     except FileNotFoundError:
         return {"success": False, "error": "File not found"}

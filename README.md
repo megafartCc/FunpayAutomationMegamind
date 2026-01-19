@@ -32,6 +32,8 @@ Create a `.env` file (see `.env.example`):
 - `MAX_EXTENSION_HOURS` (default: 24)
 - `RENTAL_CHECK_INTERVAL` (default: 60)
 - `DATABASE_PATH` (default: database.db)
+- `DATABASE_ENGINE` (set to `mysql` to enable MySQL)
+- `MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD`, `MYSQLDATABASE` (MySQL connection)
 
 ## APIs
 

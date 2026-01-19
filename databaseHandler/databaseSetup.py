@@ -1,48 +1,185 @@
 import sqlite3
-
 from datetime import datetime, timedelta
 
-from config import DATABASE_PATH
+from config import (
+    DATABASE_ENGINE,
+    DATABASE_PATH,
+    MYSQLDATABASE,
+    MYSQLHOST,
+    MYSQLPASSWORD,
+    MYSQLPORT,
+    MYSQLUSER,
+)
 from logger import logger
+
+try:
+    import mysql.connector as mysql_connector
+except Exception:  # pragma: no cover - optional dependency
+    mysql_connector = None
+
+
+class _CursorWrapper:
+    def __init__(self, cursor, formatter):
+        self._cursor = cursor
+        self._formatter = formatter
+
+    def execute(self, sql, params=None):
+        if params is None:
+            return self._cursor.execute(self._formatter(sql))
+        return self._cursor.execute(self._formatter(sql), params)
+
+    def executemany(self, sql, seq_of_params):
+        return self._cursor.executemany(self._formatter(sql), seq_of_params)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def close(self):
+        return self._cursor.close()
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
 
 
 class SQLiteDB:
     def __init__(self, db_name=DATABASE_PATH):
         self.db_name = db_name
-        # Open a persistent connection to the database
-        self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
+        self.db_type = DATABASE_ENGINE
+        if self.db_type == "mysql":
+            if mysql_connector is None:
+                raise RuntimeError("mysql-connector-python is required for MySQL support.")
+            self.conn = mysql_connector.connect(
+                host=MYSQLHOST,
+                port=MYSQLPORT,
+                user=MYSQLUSER,
+                password=MYSQLPASSWORD,
+                database=MYSQLDATABASE,
+            )
+        else:
+            self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
         self.create_table()
+
+    def _format_sql(self, sql: str) -> str:
+        if self.db_type == "mysql":
+            return sql.replace("?", "%s")
+        return sql
+
+    def _cursor(self):
+        cursor = self.conn.cursor()
+        if self.db_type == "mysql":
+            return _CursorWrapper(cursor, self._format_sql)
+        return cursor
+
+    def open_connection(self):
+        if self.db_type == "mysql":
+            if mysql_connector is None:
+                raise RuntimeError("mysql-connector-python is required for MySQL support.")
+            conn = mysql_connector.connect(
+                host=MYSQLHOST,
+                port=MYSQLPORT,
+                user=MYSQLUSER,
+                password=MYSQLPASSWORD,
+                database=MYSQLDATABASE,
+            )
+            return conn, _CursorWrapper(conn.cursor(), self._format_sql)
+        conn = sqlite3.connect(self.db_name, check_same_thread=False)
+        return conn, conn.cursor()
 
     def create_table(self):
         """Create the 'accounts' table if it does not exist."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS accounts (
-                ID INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_name TEXT NOT NULL UNIQUE,
-                path_to_maFile TEXT NOT NULL,
-                login TEXT NOT NULL,
-                password TEXT NOT NULL,
-                rental_duration INTEGER NOT NULL,
-                owner TEXT DEFAULT NULL,
-                rental_start TIMESTAMP DEFAULT NULL
+        cursor = self._cursor()
+        if self.db_type == "mysql":
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS accounts (
+                    ID INT AUTO_INCREMENT PRIMARY KEY,
+                    account_name VARCHAR(255) NOT NULL UNIQUE,
+                    path_to_maFile TEXT NOT NULL,
+                    mafile_json LONGTEXT NULL,
+                    login VARCHAR(255) NOT NULL,
+                    password TEXT NOT NULL,
+                    rental_duration INT NOT NULL,
+                    owner VARCHAR(255) DEFAULT NULL,
+                    rental_start DATETIME DEFAULT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
             )
-            """
-        )
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS authorized_users (
-                user_id INTEGER PRIMARY KEY,
-                authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    user_id BIGINT PRIMARY KEY,
+                    authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
             )
-            """
-        )
+        else:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS accounts (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_name TEXT NOT NULL UNIQUE,
+                    path_to_maFile TEXT NOT NULL,
+                    mafile_json TEXT,
+                    login TEXT NOT NULL,
+                    password TEXT NOT NULL,
+                    rental_duration INTEGER NOT NULL,
+                    owner TEXT DEFAULT NULL,
+                    rental_start TIMESTAMP DEFAULT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    user_id INTEGER PRIMARY KEY,
+                    authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
         self.conn.commit()
         cursor.close()
+        self._ensure_mafile_column()
+
+    def _ensure_mafile_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'accounts' AND column_name = 'mafile_json'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE accounts ADD COLUMN mafile_json LONGTEXT NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN mafile_json TEXT")
+                self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
 
     def add_account(
-        self, account_name, path_to_maFile, login, password, duration, owner=None
+        self,
+        account_name,
+        path_to_maFile,
+        login,
+        password,
+        duration,
+        owner=None,
+        mafile_json=None,
     ):
         """Add an account to the database."""
         cursor = None
@@ -53,13 +190,18 @@ class SQLiteDB:
                 logger.error(f"Account with name '{account_name}' already exists!")
                 return False
             
-            cursor = self.conn.cursor()
+            if not path_to_maFile and mafile_json:
+                path_to_maFile = ""
+
+            cursor = self._cursor()
             cursor.execute(
                 """
-                INSERT INTO accounts (account_name, path_to_maFile, login, password, rental_duration, owner)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO accounts (
+                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, owner
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (account_name, path_to_maFile, login, password, duration, owner),
+                (account_name, path_to_maFile, mafile_json, login, password, duration, owner),
             )
             self.conn.commit()
             logger.info(f"Account '{account_name}' added successfully")
@@ -68,11 +210,12 @@ class SQLiteDB:
             logger.error(f"Error adding account: {str(e)}")
             return False
         finally:
-            cursor.close()
+            if cursor:
+                cursor.close()
 
     def get_unowned_accounts(self):
         """Retrieve all accounts with no owner assigned."""
-        cursor = self.conn.cursor()
+        cursor = self._cursor()
         cursor.execute(
             """
             SELECT ID, account_name, path_to_maFile, login, password, rental_duration
@@ -101,15 +244,18 @@ class SQLiteDB:
         Also marks all accounts with the same login as 'OTHER_ACCOUNT'.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
+            rental_start = (datetime.utcnow() + timedelta(hours=3, minutes=10)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             # Update owner and set rental start time
             cursor.execute(
                 """
                 UPDATE accounts 
-                SET owner = ?, rental_start = DATETIME(CURRENT_TIMESTAMP, '+3 hours', '+10 minutes')
+                SET owner = ?, rental_start = ?
                 WHERE ID = ? AND owner IS NULL
                 """,
-                (owner_id, account_id),
+                (owner_id, rental_start, account_id),
             )
             if cursor.rowcount == 0:
                 return False
@@ -144,7 +290,7 @@ class SQLiteDB:
 
     def get_active_owners(self):
         """Retrieve all unique owner IDs where owner is not NULL."""
-        cursor = self.conn.cursor()
+        cursor = self._cursor()
         cursor.execute(
             """
             SELECT DISTINCT owner 
@@ -161,10 +307,10 @@ class SQLiteDB:
         Retrieve the .maFile path and account details from the most recent account
         associated with the given owner ID.
         """
-        cursor = self.conn.cursor()
+        cursor = self._cursor()
         cursor.execute(
             """
-            SELECT ID, account_name, path_to_maFile, login, rental_duration
+            SELECT ID, account_name, path_to_maFile, mafile_json, login, rental_duration
             FROM accounts 
             WHERE owner = ?
             ORDER BY rental_start DESC
@@ -180,7 +326,7 @@ class SQLiteDB:
         Update the password for the most recent account owned by the specified owner.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 UPDATE accounts 
@@ -208,10 +354,10 @@ class SQLiteDB:
         Retrieve all unique owner IDs and their associated maFile paths,
         based on the most recent rental_start for each owner.
         """
-        cursor = self.conn.cursor()
+        cursor = self._cursor()
         cursor.execute(
             """
-            SELECT DISTINCT a.owner, a.path_to_maFile
+            SELECT DISTINCT a.owner, a.path_to_maFile, a.mafile_json
             FROM accounts a
             INNER JOIN (
                 SELECT owner, MAX(rental_start) as latest_rental
@@ -227,7 +373,7 @@ class SQLiteDB:
 
     def get_all_accounts(self):
         """Retrieve all accounts from the database."""
-        cursor = self.conn.cursor()
+        cursor = self._cursor()
         cursor.execute(
             """
             SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start
@@ -256,7 +402,7 @@ class SQLiteDB:
         Delete all accounts that share the same login as the account with the given ID.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT login
@@ -289,7 +435,7 @@ class SQLiteDB:
     def release_account(self, account_id: int) -> bool:
         """Clear owner and rental start for an account."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 UPDATE accounts
@@ -313,6 +459,7 @@ class SQLiteDB:
         allowed_fields = {
             "account_name",
             "path_to_maFile",
+            "mafile_json",
             "login",
             "password",
             "rental_duration",
@@ -322,7 +469,7 @@ class SQLiteDB:
             return False
 
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
             values = list(updates.values())
             values.append(account_id)
@@ -346,7 +493,7 @@ class SQLiteDB:
     def get_total_accounts(self):
         """Retrieve the total number of accounts."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute("SELECT COUNT(*) FROM accounts")
             total_accounts = cursor.fetchone()[0]
             return total_accounts
@@ -359,7 +506,7 @@ class SQLiteDB:
     def get_all_account_names(self) -> list:
         """Retrieve all distinct account names."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute("SELECT account_name FROM accounts")
             account_names = [row[0] for row in cursor.fetchall()]
             return account_names
@@ -372,7 +519,7 @@ class SQLiteDB:
     def get_unowned_account_names(self) -> list:
         """Retrieve account names for accounts with no owner."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute("SELECT account_name FROM accounts WHERE owner IS NULL")
             unowned_account_names = [row[0] for row in cursor.fetchall()]
             return unowned_account_names
@@ -385,7 +532,7 @@ class SQLiteDB:
     def get_account_by_name(self, account_name: str):
         """Get account by its name."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start
@@ -424,7 +571,7 @@ class SQLiteDB:
             dict: Account details or None if not found
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT ID, account_name, path_to_maFile, login, password, 
@@ -461,7 +608,7 @@ class SQLiteDB:
             dict: Statistics including total accounts, active rentals, etc.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             
             # Total accounts
             cursor.execute("SELECT COUNT(*) FROM accounts")
@@ -480,12 +627,14 @@ class SQLiteDB:
             total_hours = cursor.fetchone()[0] or 0
             
             # Recent rentals (last 24 hours)
+            since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM accounts 
                 WHERE owner IS NOT NULL 
-                AND rental_start >= datetime('now', '-1 day')
-                """
+                AND rental_start >= ?
+                """,
+                (since,),
             )
             recent_rentals = cursor.fetchone()[0]
             
@@ -513,7 +662,7 @@ class SQLiteDB:
             list: List of rental records
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT ID, account_name, login, rental_duration, rental_start
@@ -546,7 +695,7 @@ class SQLiteDB:
         and update the rental_start field for all accounts with the same owner.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             # Retrieve the current rental_start timestamps for the owner
             cursor.execute(
                 """
@@ -567,10 +716,12 @@ class SQLiteDB:
             # Update each account with the new timestamp
             for account_id, rental_start in accounts:
                 if rental_start:
-                    # Parse the timestamp and add the specified hours
-                    new_rental_start = datetime.strptime(
-                        rental_start, "%Y-%m-%d %H:%M:%S"
-                    ) - timedelta(hours=hours)
+                    if isinstance(rental_start, datetime):
+                        new_rental_start = rental_start - timedelta(hours=hours)
+                    else:
+                        new_rental_start = datetime.strptime(
+                            rental_start, "%Y-%m-%d %H:%M:%S"
+                        ) - timedelta(hours=hours)
                     new_rental_start_str = new_rental_start.strftime(
                         "%Y-%m-%d %H:%M:%S"
                     )
@@ -602,7 +753,7 @@ class SQLiteDB:
             list: A list of dictionaries containing active user details
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT 
@@ -652,7 +803,7 @@ class SQLiteDB:
             list: List of active accounts with the specified name
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT ID, account_name, login, password, rental_duration, rental_start
@@ -690,7 +841,7 @@ class SQLiteDB:
             list: List of all active accounts for the user
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 SELECT ID, account_name, login, password, rental_duration, rental_start
@@ -725,14 +876,23 @@ class SQLiteDB:
     def add_authorized_user(self, user_id: int) -> bool:
         """Add a user to the authorized users list."""
         try:
-            cursor = self.conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO authorized_users (user_id)
-                VALUES (?)
-                """,
-                (user_id,),
-            )
+            cursor = self._cursor()
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO authorized_users (user_id)
+                    VALUES (?)
+                    """,
+                    (user_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO authorized_users (user_id)
+                    VALUES (?)
+                    """,
+                    (user_id,),
+                )
             self.conn.commit()
             return True
         except Exception as e:
@@ -744,7 +904,7 @@ class SQLiteDB:
     def get_authorized_users(self) -> list:
         """Retrieve all authorized user IDs."""
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute("SELECT user_id FROM authorized_users")
             users = [row[0] for row in cursor.fetchall()]
             return users
@@ -766,7 +926,7 @@ class SQLiteDB:
             bool: True if successful, False otherwise
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._cursor()
             cursor.execute(
                 """
                 UPDATE accounts 
