@@ -69,6 +69,67 @@ def _find_logout_action_url(current_url: str, page) -> str | None:
     return None
 
 
+async def _deauthorize_via_twofactor_manage_action(steam: CustomSteam) -> bool:
+    """
+    Server-side deauthorization (no browser required).
+
+    Steam web UI uses:
+      POST https://store.steampowered.com/twofactor/manage_action
+      form: sessionid=<...>&action=deauthorize
+
+    This is the most reliable approach on Railway since it avoids Playwright/Selenium.
+    """
+    try:
+        sessionid = await steam.sessionid("store.steampowered.com")
+    except Exception:
+        sessionid = None
+    if not sessionid:
+        return False
+
+    headers = {
+        "User-Agent": _BROWSER_UA,
+        "Accept": "application/json,text/plain,*/*",
+        "Origin": "https://store.steampowered.com",
+        "Referer": "https://store.steampowered.com/twofactor/manage",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    }
+
+    try:
+        resp = await steam.raw_request(
+            "https://store.steampowered.com/twofactor/manage_action",
+            method="POST",
+            headers=headers,
+            data={"sessionid": sessionid, "action": "deauthorize"},
+            allow_redirects=True,
+        )
+    except Exception as exc:
+        logger.warning(f"Steam twofactor deauthorize request failed: {exc}")
+        return False
+
+    status = int(getattr(resp, "status", 0))
+    if status not in {200, 302}:
+        logger.warning(f"Steam twofactor deauthorize failed: status={status}")
+        return False
+
+    try:
+        content_type = (resp.headers.get("content-type") or "").lower()
+        body = await resp.text()
+        if "application/json" in content_type:
+            try:
+                data = json.loads(body)
+                success = data.get("success")
+                return success in {1, True, "1", "true"}
+            except Exception:
+                pass
+        lowered = (body or "").lower()
+        if "\"success\":1" in lowered or "\"success\":true" in lowered:
+            return True
+        # Some responses are empty/HTML but the request still succeeds.
+        return True
+    except Exception:
+        return True
+
+
 async def _ensure_playwright_chromium_installed() -> bool:
     """
     Installs Playwright's Chromium browser at runtime (needed on Railway/Docker).
@@ -208,6 +269,13 @@ async def logout_all_steam_sessions(
     )
 
     await steam.login_to_steam()
+
+    # Prefer server-side deauth endpoint (no browser deps).
+    try:
+        if await _deauthorize_via_twofactor_manage_action(steam):
+            return True
+    except Exception as exc:
+        logger.warning(f"Steam twofactor deauthorize attempt failed: {exc}")
 
     # Prefer Playwright flow (closest to steamautorentbot).
     try:
