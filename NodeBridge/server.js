@@ -99,6 +99,16 @@ function isInDotaMatch(rp) {
   );
 }
 
+function isInDotaMatchRaw(raw) {
+  if (!Array.isArray(raw)) return false;
+  const lobbyEntry = raw.find((e) => (e.key || "").toLowerCase() === "lobby");
+  if (lobbyEntry && typeof lobbyEntry.value === "string") {
+    const lv = lobbyEntry.value.toLowerCase();
+    if (lv.includes("lobby_state: run") || lv.includes("lobby_state: serversetup")) return true;
+  }
+  return false;
+}
+
 function logOn() {
   if (!STEAM_BRIDGE_USERNAME || !STEAM_BRIDGE_PASSWORD) {
     console.error("[bridge] Missing STEAM_BRIDGE_USERNAME/STEAM_BRIDGE_PASSWORD");
@@ -125,11 +135,13 @@ app.get("/presence/:steamid", (req, res) => {
   const data = presence.get(sid);
   if (!data) return res.status(404).json({ error: "not_found" });
   const rp = data.rich_presence || {};
-  const in_match = data.appid === 570 ? isInDotaMatch(rp) : false;
+  const rpRaw = data.rich_presence_raw || [];
+  const in_match =
+    data.appid === 570 ? isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) : false;
   const status =
     rp.status ||
     rp.steam_display ||
-    (rp.lobby ? "lobby" : "") ||
+    (rp.lobby ? rp.lobby : rpRaw.find((e) => e.key === "lobby")?.value || "") ||
     (data.in_game ? "in_game" : "offline");
   res.json({
     presence_state: data.in_game ? "in_game" : "not_in_game",
@@ -139,7 +151,7 @@ app.get("/presence/:steamid", (req, res) => {
     appid: data.appid,
     steamid64: data.steamid64,
     presence_status: status,
-    lobby_info: rp.lobby || "",
+    lobby_info: rp.lobby || rpRaw.find((e) => e.key === "lobby")?.value || "",
   });
 });
 
