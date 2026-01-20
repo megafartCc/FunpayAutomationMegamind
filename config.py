@@ -41,15 +41,10 @@ DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE = _get_bool("DOTA_MATCH_BLOCK_MANUAL_DEAUTHO
 DOTA_MATCH_DELAY_EXPIRE = _get_bool("DOTA_MATCH_DELAY_EXPIRE", True)
 DOTA_MATCH_GRACE_MINUTES = _get_int("DOTA_MATCH_GRACE_MINUTES", 90)
 
-DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
-
 MYSQLHOST = os.getenv("MYSQLHOST", "").strip()
 MYSQLPORT = _get_int("MYSQLPORT", 3306)
 MYSQLUSER = os.getenv("MYSQLUSER", "").strip()
 MYSQLPASSWORD = os.getenv("MYSQLPASSWORD", "").strip()
 MYSQLDATABASE = os.getenv("MYSQLDATABASE", "").strip()
-
-DATABASE_ENGINE = os.getenv(
-    "DATABASE_ENGINE",
-    "mysql" if MYSQLHOST and MYSQLDATABASE else "sqlite",
-).strip().lower()
+DATABASE_ENGINE = "mysql"
+DATABASE_PATH = None

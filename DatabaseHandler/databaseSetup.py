@@ -1,11 +1,9 @@
-import sqlite3
 import secrets
 import bcrypt
 from datetime import datetime, timedelta
 
 from config import (
     DATABASE_ENGINE,
-    DATABASE_PATH,
     MYSQLDATABASE,
     MYSQLHOST,
     MYSQLPASSWORD,
@@ -14,10 +12,7 @@ from config import (
 )
 from logger import logger
 
-try:
-    import mysql.connector as mysql_connector
-except Exception:  # pragma: no cover - optional dependency
-    mysql_connector = None
+import mysql.connector as mysql_connector
 
 
 class _CursorWrapper:
@@ -52,24 +47,11 @@ class _CursorWrapper:
                 self._connection.close()
 
 
-class _NoopConnection:
-    def commit(self):
-        return None
-
-    def close(self):
-        return None
-
-
 class SQLiteDB:
-    def __init__(self, db_name=DATABASE_PATH):
-        self.db_name = db_name
-        self.db_type = DATABASE_ENGINE
-        if self.db_type == "mysql":
-            if mysql_connector is None:
-                raise RuntimeError("mysql-connector-python is required for MySQL support.")
-            self.conn = _NoopConnection()
-        else:
-            self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
+    def __init__(self, db_name=None):
+        self.db_name = None
+        self.db_type = "mysql"
+        self.conn = _NoopConnection()
         self.create_table()
 
     def _format_sql(self, sql: str) -> str:
