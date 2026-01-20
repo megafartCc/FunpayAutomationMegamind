@@ -34,6 +34,9 @@
     update: document.getElementById("updateAccount"),
     assign: document.getElementById("assignAccount"),
     release: document.getElementById("releaseAccount"),
+    steamDeauth: document.getElementById("steamDeauth"),
+    steamNewPassword: document.getElementById("steamNewPassword"),
+    steamChangePassword: document.getElementById("steamChangePassword"),
     extend: document.getElementById("extendAccount"),
     extendHours: document.getElementById("extendHours"),
     extendOwner: document.getElementById("extendOwner"),
@@ -546,6 +549,55 @@ ui.manage.update.addEventListener("click", async () => {
     loadAll();
   } catch (error) {
     toast(error.message || "Update failed", true);
+  }
+});
+
+ui.manage.steamDeauth.addEventListener("click", async () => {
+  if (!selectedId) {
+    toast("Select an account first.", true);
+    return;
+  }
+  try {
+    toast("Steam deauthorize started...");
+    await apiFetch(`/api/accounts/${selectedId}/steam/deauthorize`, { method: "POST" });
+    toast("Steam sessions deauthorized.");
+  } catch (error) {
+    toast(error.message || "Steam deauthorize failed", true);
+  }
+});
+
+ui.manage.steamChangePassword.addEventListener("click", async () => {
+  if (!selectedId) {
+    toast("Select an account first.", true);
+    return;
+  }
+  const newPassword = ui.manage.steamNewPassword.value.trim();
+  try {
+    toast("Changing Steam password...");
+    const result = await apiFetch(`/api/accounts/${selectedId}/steam/password`, {
+      method: "POST",
+      body: JSON.stringify({ new_password: newPassword || null }),
+    });
+    const password = result?.new_password;
+    if (password) {
+      ui.manage.password.value = password;
+      const selected = accountsCache.find((acc) => acc.id === selectedId);
+      if (selected?.login) {
+        accountsCache.forEach((acc) => {
+          if (acc.login === selected.login) {
+            acc.password = password;
+          }
+        });
+      } else if (selected) {
+        selected.password = password;
+      }
+      renderInventory(accountsCache);
+      toast(`Steam password changed: ${password}`);
+    } else {
+      toast("Steam password changed.");
+    }
+  } catch (error) {
+    toast(error.message || "Steam password change failed", true);
   }
 });
 

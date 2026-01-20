@@ -13,6 +13,8 @@ from DatabaseHandler.databaseSetup import SQLiteDB
 from FunpayHandler.funpay import get_account, startFunpay
 from logger import logger
 from notifications import list_notifications
+from SteamHandler.changePassword import changeSteamPassword
+from SteamHandler.deauthorize import logout_all_steam_sessions
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -82,6 +84,10 @@ class LotMapping(BaseModel):
     lot_number: int = Field(ge=1)
     account_id: int = Field(ge=1)
     lot_url: Optional[str] = None
+
+
+class SteamPasswordRequest(BaseModel):
+    new_password: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -196,6 +202,55 @@ def extend_account(account_id: int, payload: ExtendRequest) -> dict:
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rental")
     return {"status": "ok"}
+
+
+@app.post("/api/accounts/{account_id}/steam/deauthorize", dependencies=[Depends(require_admin)])
+async def steam_deauthorize(account_id: int) -> dict:
+    account = db.get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    mafile_json = account.get("mafile_json")
+    if not mafile_json:
+        raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
+
+    ok = await logout_all_steam_sessions(
+        steam_login=account.get("login") or account.get("account_name"),
+        steam_password=account.get("password"),
+        mafile_json=mafile_json,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to deauthorize Steam sessions")
+    return {"success": True}
+
+
+@app.post("/api/accounts/{account_id}/steam/password", dependencies=[Depends(require_admin)])
+async def steam_change_password(account_id: int, payload: SteamPasswordRequest) -> dict:
+    account = db.get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    mafile_json = account.get("mafile_json")
+    if not mafile_json:
+        raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
+
+    new_password = payload.new_password.strip() if payload.new_password else None
+    if new_password == "":
+        new_password = None
+
+    updated_password = await changeSteamPassword(
+        path_to_maFile=None,
+        password=account.get("password"),
+        mafile_json=mafile_json,
+        new_password=new_password,
+        steam_login=account.get("login") or account.get("account_name"),
+    )
+
+    login = account.get("login")
+    if login:
+        db.update_password_by_login(login, updated_password)
+    else:
+        db.update_account(account_id, {"password": updated_password})
+
+    return {"success": True, "new_password": updated_password}
 
 
 @app.get("/api/rentals/active")

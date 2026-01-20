@@ -37,6 +37,8 @@ async def changeSteamPassword(
     path_to_maFile: str | None,
     password: str,
     mafile_json: str | dict | None = None,
+    new_password: str | None = None,
+    steam_login: str | None = None,
 ) -> str:
 
     logger.info("Started changing password")
@@ -50,9 +52,13 @@ async def changeSteamPassword(
     else:
         raise ValueError("Missing .maFile data")
 
-    logger.info(f"Started changing password for {data['account_name']}")
+    steam_username = steam_login or data.get("account_name")
+    if not steam_username:
+        raise ValueError("Missing Steam login in .maFile data")
+
+    logger.info(f"Started changing password for {steam_username}")
     steam = CustomSteam(
-        login=data["account_name"],
+        login=steam_username,
         password=password,
         shared_secret=data["shared_secret"],
         identity_secret=data["identity_secret"],
@@ -60,10 +66,11 @@ async def changeSteamPassword(
         steamid=int(data["Session"]["SteamID"]),
     )
 
-    new_password = generate_password(12)
+    if new_password is None:
+        new_password = generate_password(12)
 
     await SteamPasswordChange(steam).change(new_password)
 
-    logger.info(f"{data['account_name']} new password -> {new_password}")
+    logger.info(f"{steam_username} password changed successfully")
 
     return new_password

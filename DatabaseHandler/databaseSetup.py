@@ -1085,6 +1085,31 @@ class SQLiteDB:
         finally:
             cursor.close()
 
+    def update_password_by_login(self, login: str, new_password: str) -> int:
+        """
+        Update password for all rows sharing the same Steam login.
+
+        Returns number of rows updated.
+        """
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET password = ?
+                WHERE login = ?
+                """,
+                (new_password, login),
+            )
+            updated = cursor.rowcount
+            self.conn.commit()
+            return int(updated or 0)
+        except Exception as e:
+            logger.error(f"Error updating password by login: {str(e)}")
+            return 0
+        finally:
+            cursor.close()
+
     def get_user_active_lot_accounts(self, owner_id: str) -> list:
         """
         Get all active accounts of a specific user with lot mapping info (if configured).
