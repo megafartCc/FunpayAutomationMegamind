@@ -1,6 +1,6 @@
-import express from 'express';
-import SteamUser from 'steam-user';
-import SteamTotp from 'steam-totp';
+import express from "express";
+import SteamUser from "steam-user";
+import SteamTotp from "steam-totp";
 
 const {
   STEAM_BRIDGE_USERNAME,
@@ -15,43 +15,52 @@ const client = new SteamUser();
 const presence = new Map();
 let loggedOn = false;
 
-client.on('loggedOn', () => {
+client.on("loggedOn", () => {
   loggedOn = true;
-  console.log('[bridge] Logged into Steam');
+  console.log("[bridge] Logged into Steam");
   client.setPersona(SteamUser.EPersonaState.Online);
 });
 
-client.on('error', (err) => {
+client.on("error", (err) => {
   loggedOn = false;
-  console.error('[bridge] Steam error', err);
+  console.error("[bridge] Steam error", err);
 });
 
-client.on('disconnected', () => {
+client.on("disconnected", () => {
   loggedOn = false;
-  console.warn('[bridge] Steam disconnected');
+  console.warn("[bridge] Steam disconnected");
 });
 
-client.on('friendsList', () => {
+client.on("friendsList", () => {
   for (const steamid of Object.keys(client.myFriends || {})) {
     client.getPersonas([steamid]);
   }
 });
 
-client.on('user', (sid, user) => {
+client.on("user", (sid, user) => {
   const id64 = sid.getSteamID64();
+  const rp = user.rich_presence || {};
   presence.set(id64, {
     steamid64: id64,
     persona_state: user.persona_state,
     appid: user.gameid || null,
     in_game: !!user.gameid,
-    rich_presence: user.rich_presence || {},
+    rich_presence: rp,
     last_updated: Date.now(),
   });
 });
 
+function isInDotaMatch(rp) {
+  if (!rp || typeof rp !== "object") return false;
+  const display = String(rp.steam_display || "").toLowerCase();
+  const hasLevel = rp.level !== undefined;
+  const indicators = ["heroselection", "strategytime"];
+  return hasLevel || indicators.some((kw) => display.includes(kw));
+}
+
 function logOn() {
   if (!STEAM_BRIDGE_USERNAME || !STEAM_BRIDGE_PASSWORD) {
-    console.error('[bridge] Missing STEAM_BRIDGE_USERNAME/STEAM_BRIDGE_PASSWORD');
+    console.error("[bridge] Missing STEAM_BRIDGE_USERNAME/STEAM_BRIDGE_PASSWORD");
     return;
   }
   const details = {
@@ -66,18 +75,19 @@ function logOn() {
 
 logOn();
 
-app.get('/health', (_req, res) => {
-  res.json({ status: loggedOn ? 'ok' : 'down', loggedOn });
+app.get("/health", (_req, res) => {
+  res.json({ status: loggedOn ? "ok" : "down", loggedOn });
 });
 
-app.get('/presence/:steamid', (req, res) => {
+app.get("/presence/:steamid", (req, res) => {
   const sid = req.params.steamid;
   const data = presence.get(sid);
-  if (!data) return res.status(404).json({ error: 'not_found' });
+  if (!data) return res.status(404).json({ error: "not_found" });
+  const in_match = data.appid === 570 ? isInDotaMatch(data.rich_presence) : false;
   res.json({
-    presence_state: data.in_game ? 'in_game' : 'not_in_game',
-    presence_display: data.appid || '',
-    presence_in_match: false,
+    presence_state: data.in_game ? "in_game" : "not_in_game",
+    presence_display: data.appid || "",
+    presence_in_match: in_match,
     persona_state: data.persona_state,
     appid: data.appid,
     steamid64: data.steamid64,
