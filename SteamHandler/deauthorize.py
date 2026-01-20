@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import asyncio
 from typing import Any
 
 from lxml.html import document_fromstring
@@ -67,6 +69,34 @@ def _find_logout_action_url(current_url: str, page) -> str | None:
     return None
 
 
+async def _ensure_playwright_chromium_installed() -> bool:
+    """
+    Installs Playwright's Chromium browser at runtime (needed on Railway/Docker).
+    """
+    if not _PLAYWRIGHT_AVAILABLE or async_playwright is None:
+        return False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "playwright",
+            "install",
+            "chromium",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            out = (stdout or b"")[-1500:].decode("utf-8", errors="ignore")
+            err = (stderr or b"")[-1500:].decode("utf-8", errors="ignore")
+            logger.warning(f"playwright install chromium failed (code={proc.returncode}). stdout={out} stderr={err}")
+            return False
+        return True
+    except Exception as exc:
+        logger.warning(f"playwright install chromium failed: {exc}")
+        return False
+
+
 async def _logout_all_steam_sessions_playwright(steam: CustomSteam) -> bool:
     """
     Replicates the Playwright click-flow from steamautorentbot, but reuses already
@@ -83,7 +113,17 @@ async def _logout_all_steam_sessions_playwright(steam: CustomSteam) -> bool:
         return [{"name": k, "value": v, "url": url} for k, v in cookies.items()]
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        except Exception as exc:
+            msg = str(exc)
+            if "Executable doesn't exist" in msg or "playwright install" in msg:
+                if await _ensure_playwright_chromium_installed():
+                    browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                else:
+                    raise
+            else:
+                raise
         context = await browser.new_context(user_agent=_BROWSER_UA, locale="ru-RU", timezone_id="Europe/Moscow")
         await context.add_cookies(
             build("https://store.steampowered.com/", dict(store_cookies))
