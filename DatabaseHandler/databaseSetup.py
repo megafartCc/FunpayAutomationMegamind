@@ -1600,6 +1600,19 @@ class SQLiteDB:
         finally:
             cursor.close()
 
+    def list_users_with_keys(self):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                "SELECT id, username, golden_key FROM users WHERE golden_key IS NOT NULL AND golden_key <> ''"
+            )
+            return [
+                {"id": row[0], "username": row[1], "golden_key": row[2]}
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+
     def has_any_golden_key(self) -> bool:
         cursor = self._cursor()
         try:

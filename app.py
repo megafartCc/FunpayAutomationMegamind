@@ -1,7 +1,7 @@
-import asyncio
 import json
 from pathlib import Path
 from threading import Thread
+from threading import Lock
 from typing import Optional
 from urllib.parse import quote
 import secrets
@@ -26,6 +26,7 @@ from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.presence_bot import get_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
+from FunpayHandler.bot import FunpayBot
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,12 +35,45 @@ PUBLIC_DIR = BASE_DIR / "Public"
 app = FastAPI(title="FunpaySeller")
 db = SQLiteDB()
 
+
+class BotManager:
+    def __init__(self):
+        self._bots: dict[int, dict] = {}
+        self._lock = Lock()
+
+    def start_for_user(self, user_id: int, golden_key: str) -> None:
+        if not golden_key:
+            return
+        with self._lock:
+            existing = self._bots.get(user_id)
+            if existing and existing.get("key") == golden_key and existing.get("thread") and existing["thread"].is_alive():
+                return
+            try:
+                bot = FunpayBot(token=golden_key, db=db)
+                thread = Thread(target=bot.start, daemon=True)
+                thread.start()
+                self._bots[user_id] = {"bot": bot, "key": golden_key, "thread": thread}
+                logger.info(f"FunPay bot started for user {user_id}")
+            except Exception as exc:
+                logger.error(f"Failed to start FunPay bot for user {user_id}: {exc}")
+
+    def start_all(self) -> None:
+        for user in db.list_users_with_keys():
+            try:
+                self.start_for_user(user["id"], user["golden_key"])
+            except Exception as exc:
+                logger.error(f"Failed to start bot for user {user.get('id')}: {exc}")
+
+
+bot_manager = BotManager()
+
 app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 
 @app.on_event("startup")
 def start_background_services() -> None:
-    logger.info("Startup complete (no global FunPay session configured).")
+    bot_manager.start_all()
+    logger.info("Startup complete (per-user FunPay bots initialized if keys are present).")
 
 
 def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
@@ -170,6 +204,9 @@ def auth_register(payload: AuthRegister) -> dict:
     token = db.create_user(payload.username, payload.password, payload.golden_key)
     if not token:
         raise HTTPException(status_code=400, detail="User already exists or invalid data")
+    user = db.get_user_by_username(payload.username)
+    if user:
+        bot_manager.start_for_user(user["id"], user["golden_key"])
     return {"token": token, "username": payload.username}
 
 
@@ -180,6 +217,7 @@ def auth_login(payload: AuthLogin) -> dict:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = secrets.token_urlsafe(32)
     db.update_session_token(user["id"], token)
+    bot_manager.start_for_user(user["id"], user["golden_key"])
     return {"token": token, "username": user["username"]}
 
 
@@ -206,6 +244,7 @@ def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
     ok = db.update_golden_key(user["id"], payload.golden_key)
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update golden key")
+    bot_manager.start_for_user(user["id"], payload.golden_key)
     return {"success": True}
 
 
