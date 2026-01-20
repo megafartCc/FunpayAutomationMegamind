@@ -43,6 +43,9 @@
     extendOwnerHours: document.getElementById("extendOwnerHours"),
     delete: document.getElementById("deleteAccount"),
   },
+  settings: {
+    autoDeauth: document.getElementById("autoDeauthToggle"),
+  },
   addForm: document.getElementById("addAccountForm"),
   addStatus: document.getElementById("addStatus"),
   lots: {
@@ -237,18 +240,11 @@ const renderInventory = (items) => {
   });
 
   if (!filtered.length) {
-    ui.inventoryTable.innerHTML = "<tr><td colspan=\"7\">No accounts found.</td></tr>";
+    ui.inventoryTable.innerHTML = "<tr><td colspan=\"6\">No accounts found.</td></tr>";
     return;
   }
 
   const showPasswords = ui.showPasswords.checked;
-  const presenceLabel = (item) => {
-    if (item.presence_state === "match" || item.presence_in_match) return "В матче";
-    if (item.presence_state === "menu") return "В меню";
-    if (item.presence_state === "offline") return "Не в игре";
-    if (item.presence_display) return item.presence_display;
-    return "—";
-  };
 
   ui.inventoryTable.innerHTML = filtered
     .map(
@@ -260,7 +256,6 @@ const renderInventory = (items) => {
           <td>${showPasswords ? item.password : "******"}</td>
           <td>${item.owner || "-"}</td>
           <td>${item.rental_duration}</td>
-          <td>${presenceLabel(item)}</td>
         </tr>
       `
     )
@@ -422,13 +417,14 @@ const loadChatHistory = async () => {
 
 const loadAll = async () => {
   try {
-    const [health, stats, accounts, rentals, notices, lots] = await Promise.all([
+    const [health, stats, accounts, rentals, notices, lots, settings] = await Promise.all([
       apiFetch("/api/health"),
       apiFetch("/api/stats"),
       apiFetch("/api/accounts"),
       apiFetch("/api/rentals/active"),
       apiFetch("/api/notifications"),
       apiFetch("/api/lots"),
+      apiFetch("/api/settings/auto-deauthorize"),
     ]);
 
     renderHealth(health);
@@ -439,6 +435,9 @@ const loadAll = async () => {
     renderLots(lots.items || []);
     renderActiveRentals(rentals.items || []);
     renderNotifications(notices.items || []);
+    if (ui.settings.autoDeauth && settings) {
+      ui.settings.autoDeauth.checked = Boolean(settings.enabled);
+    }
 
     if (selectedId) {
       const selected = accountsCache.find((acc) => acc.id === selectedId);
@@ -461,6 +460,21 @@ ui.showPasswords.addEventListener("change", () => renderInventory(accountsCache)
 ui.chats.search.addEventListener("input", () => renderChatList(chatsCache));
 ui.chats.refresh.addEventListener("click", () => loadChats());
 ui.chats.loadHistory.addEventListener("click", () => loadChatHistory());
+
+if (ui.settings.autoDeauth) {
+  ui.settings.autoDeauth.addEventListener("change", async (event) => {
+    try {
+      const enabled = Boolean(event.target.checked);
+      await apiFetch("/api/settings/auto-deauthorize", {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+      toast(enabled ? "Авто-разлогин включен." : "Авто-разлогин выключен.");
+    } catch (error) {
+      toast(error.message || "Не удалось обновить настройку", true);
+    }
+  });
+}
 
 ui.chats.form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -749,8 +763,3 @@ const init = async () => {
 };
 
 init();
-
-
-
-
-

@@ -127,6 +127,14 @@ class SQLiteDB:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS settings (
+                    `key` VARCHAR(191) PRIMARY KEY,
+                    value TEXT NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS authorized_users (
                     user_id BIGINT PRIMARY KEY,
                     authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -162,6 +170,14 @@ class SQLiteDB:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS authorized_users (
                     user_id INTEGER PRIMARY KEY,
                     authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -183,6 +199,49 @@ class SQLiteDB:
         cursor.close()
         self._ensure_mafile_column()
         self._ensure_lot_url_column()
+
+    def get_setting(self, key: str) -> str | None:
+        cursor = self._cursor()
+        try:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return row[0]
+        finally:
+            cursor.close()
+
+    def set_setting(self, key: str, value: str) -> None:
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT INTO settings (`key`, value)
+                    VALUES (?, ?)
+                    ON DUPLICATE KEY UPDATE value = VALUES(value)
+                    """,
+                    (key, value),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO settings (key, value)
+                    VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (key, value),
+                )
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def get_bool_setting(self, key: str, default: bool) -> bool:
+        value = self.get_setting(key)
+        if value is None:
+            self.set_setting(key, "1" if default else "0")
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()

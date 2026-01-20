@@ -110,15 +110,14 @@
                   <th>ID</th>
                   <th>Аккаунт</th>
                   <th>Логин</th>
-              <th>Пароль</th>
-              <th>Владелец</th>
-              <th>Длительность (ч)</th>
-              <th>Статус</th>
-            </tr>
-          </thead>
-          <tbody id="inventoryTable"></tbody>
-        </table>
-      </div>
+                  <th>Пароль</th>
+                  <th>Владелец</th>
+                  <th>Длительность (ч)</th>
+                </tr>
+              </thead>
+              <tbody id="inventoryTable"></tbody>
+            </table>
+          </div>
         </section>
 
         <section class="section" id="lots">
@@ -240,6 +239,10 @@
               </div>
               <button class="btn ghost" id="releaseAccount">Освободить</button>
               <button class="btn ghost" id="steamDeauth">Steam: разлогинить всех</button>
+              <label class="toggle">
+                <input id="autoDeauthToggle" type="checkbox" />
+                <span>Авто-разлогин при окончании аренды</span>
+              </label>
               <div class="inline">
                 <input id="extendHours" type="number" min="1" placeholder="+часы" />
                 <button class="btn" id="extendAccount">Продлить</button>
@@ -299,4 +302,3 @@
     <div class="toast" id="toast"></div>
   </body>
 </html>
-
