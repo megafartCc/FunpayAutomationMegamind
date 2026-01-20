@@ -137,22 +137,37 @@ app.get("/presence/:steamid", (req, res) => {
   const rp = data.rich_presence || {};
   const rpRaw = data.rich_presence_raw || [];
   const appid = data.appid ? String(data.appid) : null;
+  const lobbyRaw =
+    rp.lobby ||
+    (Array.isArray(rpRaw)
+      ? rpRaw.find((e) => (e.key || "").toLowerCase() === "lobby")?.value || ""
+      : "");
+  const lobbyLower = String(lobbyRaw || "").toLowerCase();
+  const lobbyStateHit = /lobby_state:\s*(run|serversetup)/.test(lobbyLower);
+  const statusLower = String(rp.status || "").toLowerCase();
+  const displayLower = String(rp.steam_display || "").toLowerCase();
+  const statusKeywords = ["private_lobby", "finding_match", "playing", "match", "ranked", "turbo"];
+  const statusHit = statusKeywords.some(
+    (kw) => statusLower.includes(kw) || displayLower.includes(kw)
+  );
   const in_match =
-    appid === "570" ? isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) : false;
+    appid === "570" ? isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit : false;
   const status =
     rp.status ||
     rp.steam_display ||
-    (rp.lobby ? rp.lobby : rpRaw.find((e) => e.key === "lobby")?.value || "") ||
+    lobbyRaw ||
     (data.in_game ? "in_game" : "offline");
   res.json({
     presence_state: data.in_game ? "in_game" : "not_in_game",
     presence_display: appid || "",
     presence_in_match: in_match,
+    in_game: data.in_game,
+    in_match: in_match,
     persona_state: data.persona_state,
     appid,
     steamid64: data.steamid64,
     presence_status: status,
-    lobby_info: rp.lobby || rpRaw.find((e) => e.key === "lobby")?.value || "",
+    lobby_info: lobbyRaw,
   });
 });
 
