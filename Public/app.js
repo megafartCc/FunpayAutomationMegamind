@@ -243,11 +243,17 @@ const renderInventory = (items) => {
 
   const showPasswords = ui.showPasswords.checked;
   const presenceLabel = (item) => {
-    if (item.presence_state === "match" || item.presence_in_match) return "В матче";
-    if (item.presence_state === "menu") return "В меню";
     if (item.presence_state === "offline") return "Не в игре";
-    if (item.presence_display) return item.presence_display;
-    return "—";
+    if (item.presence_state === "dota") {
+      if (item.presence_match === "match" || item.presence_in_match) return "Dota 2: в матче";
+      if (item.presence_match === "menu") return "Dota 2: в меню";
+      return "Dota 2: статус матча неизвестен";
+    }
+    if (item.presence_state === "in_game") {
+      const name = item.presence_game || item.presence_display;
+      return name ? `В игре: ${name}` : "В игре";
+    }
+    return "Статус недоступен";
   };
 
   ui.inventoryTable.innerHTML = filtered
@@ -749,8 +755,6 @@ const init = async () => {
 };
 
 init();
-
-
 
 
 

@@ -1,5 +1,6 @@
-import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 from threading import Thread
 from typing import Optional
@@ -10,27 +11,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from config import (
-    ADMIN_API_KEY,
-    FUNPAY_GOLDEN_KEY,
-    DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
-    STEAM_PRESENCE_ENABLED,
-    STEAM_PRESENCE_IDENTITY_SECRET,
-    STEAM_PRESENCE_LOGIN,
-    STEAM_PRESENCE_PASSWORD,
-    STEAM_PRESENCE_REFRESH_TOKEN,
-    STEAM_PRESENCE_SHARED_SECRET,
-    STEAM_WEB_API_KEY,
-)
+from config import ADMIN_API_KEY, FUNPAY_GOLDEN_KEY, STEAM_PRESENCE_POLL_SECONDS, STEAM_WEB_API_KEY
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunpayHandler.funpay import get_account, startFunpay
 from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
-from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
+from SteamHandler.web_presence import fetch_player_summaries
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -41,30 +30,13 @@ db = SQLiteDB()
 
 app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
-
-@app.on_event("startup")
-def start_background_services() -> None:
-    try:
-        init_presence_bot(
-            enabled=STEAM_PRESENCE_ENABLED,
-            login=STEAM_PRESENCE_LOGIN,
-            password=STEAM_PRESENCE_PASSWORD,
-            shared_secret=STEAM_PRESENCE_SHARED_SECRET or None,
-            identity_secret=STEAM_PRESENCE_IDENTITY_SECRET or None,
-            refresh_token=STEAM_PRESENCE_REFRESH_TOKEN or None,
-        )
-    except Exception as exc:
-        logger.error(f"Failed to start Steam presence bot: {exc}")
-
-    if not FUNPAY_GOLDEN_KEY:
-        logger.warning("FUNPAY_GOLDEN_KEY is empty. FunPay automation not started.")
-        return
-    thread = Thread(target=startFunpay, daemon=True)
-    thread.start()
-    logger.info("FunPay automation started in background thread.")
+_presence_lock = threading.Lock()
+_presence_cache: dict[int, dict] = {}
 
 
-def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
+def _steamid64_from_mafile(mafile_json: str | dict | None) -> int | None:
+    if not mafile_json:
+        return None
     try:
         data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
         value = (data or {}).get("Session", {}).get("SteamID")
@@ -75,6 +47,73 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
         return int(value)
     except Exception:
         return None
+
+
+def _build_presence_payload(player: dict) -> dict:
+    gameid = str(player.get("gameid") or "")
+    game_name = player.get("gameextrainfo") or ""
+    if not gameid:
+        return {
+            "presence_state": "offline",
+            "presence_game": "",
+            "presence_display": "",
+            "presence_in_match": False,
+            "presence_match": "offline",
+        }
+    if gameid == "570":
+        return {
+            "presence_state": "dota",
+            "presence_game": game_name or "Dota 2",
+            "presence_display": game_name or "Dota 2",
+            "presence_in_match": False,
+            "presence_match": "unknown",
+        }
+    return {
+        "presence_state": "in_game",
+        "presence_game": game_name,
+        "presence_display": game_name,
+        "presence_in_match": False,
+        "presence_match": "unknown",
+    }
+
+
+def _presence_poll_loop() -> None:
+    while True:
+        try:
+            accounts = db.get_all_accounts()
+            steamids: list[int] = []
+            for acc in accounts:
+                steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+                if steamid64 is None:
+                    continue
+                steamids.append(steamid64)
+            updated: dict[int, dict] = {}
+            for i in range(0, len(steamids), 100):
+                chunk = steamids[i : i + 100]
+                players = fetch_player_summaries(chunk, STEAM_WEB_API_KEY)
+                for sid in chunk:
+                    player = players.get(str(sid))
+                    if player:
+                        updated[sid] = _build_presence_payload(player)
+            with _presence_lock:
+                _presence_cache.clear()
+                _presence_cache.update(updated)
+        except Exception as exc:
+            logger.warning(f"Presence poll failed: {exc}")
+        time.sleep(STEAM_PRESENCE_POLL_SECONDS)
+
+
+@app.on_event("startup")
+def start_background_services() -> None:
+    if STEAM_WEB_API_KEY:
+        thread = Thread(target=_presence_poll_loop, daemon=True)
+        thread.start()
+    if not FUNPAY_GOLDEN_KEY:
+        logger.warning("FUNPAY_GOLDEN_KEY is empty. FunPay automation not started.")
+        return
+    thread = Thread(target=startFunpay, daemon=True)
+    thread.start()
+    logger.info("FunPay automation started in background thread.")
 
 
 def require_admin(request: Request) -> None:
@@ -155,60 +194,19 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
-async def _presence_for_account(account: dict) -> dict:
-    bot = get_presence_bot()
-    if bot is None:
-        if STEAM_WEB_API_KEY:
-            steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-            if steamid64 is None:
-                return {}
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
-    steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-    if steamid64 is None:
-        return {}
-
-    if not bot.wait_ready(timeout=0.5):
-        if STEAM_WEB_API_KEY:
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
-
-    snapshot = bot.get_cached(steamid64)
-    if snapshot is None:
-        try:
-            snapshot = await bot.fetch_presence(steamid64, timeout=3.0)
-        except Exception:
-            snapshot = None
-
-    if snapshot is None:
-        if STEAM_WEB_API_KEY:
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
-
-    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
-    state = "match" if snapshot.in_match else ("menu" if snapshot.playing_dota else "offline")
-    return {
-        "presence_in_match": bool(snapshot.in_match),
-        "presence_display": steam_display or "",
-        "presence_state": state,
-    }
-
-
 @app.get("/api/accounts")
 async def accounts() -> dict:
     items = db.get_all_accounts()
-    bot = get_presence_bot()
-    if bot is None or not items:
-        return {"items": items}
-
-    for acc in items:
-        try:
-            acc.update(await _presence_for_account(acc))
-        except Exception:
-            continue
+    if STEAM_WEB_API_KEY:
+        with _presence_lock:
+            cache = dict(_presence_cache)
+        for acc in items:
+            steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+            if steamid64 is None:
+                continue
+            snapshot = cache.get(steamid64)
+            if snapshot:
+                acc.update(snapshot)
     return {"items": items}
 
 
@@ -305,24 +303,6 @@ async def steam_deauthorize(account_id: int) -> dict:
     mafile_json = account.get("mafile_json")
     if not mafile_json:
         raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
-
-    if DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE:
-        bot = get_presence_bot()
-        if bot is not None:
-            steamid64 = _steamid64_from_mafile(mafile_json)
-            if steamid64 is not None:
-                if not bot.wait_ready(timeout=0.5):
-                    raise HTTPException(status_code=503, detail="Steam presence bot is not ready yet. Try again.")
-                snapshot = bot.get_cached(steamid64)
-                if snapshot is None:
-                    snapshot = await bot.fetch_presence(steamid64)
-                if snapshot and snapshot.in_match:
-                    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
-                    extra = f" ({steam_display})" if steam_display else ""
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Аккаунт сейчас в матче Dota 2{extra}. Попробуйте снова после окончания матча.",
-                    )
 
     ok = await logout_all_steam_sessions(
         steam_login=account.get("login") or account.get("account_name"),

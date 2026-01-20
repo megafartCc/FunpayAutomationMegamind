@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 from dataclasses import dataclass
@@ -12,8 +11,6 @@ from FunPayAPI import Account, Runner, events, types
 
 from config import (
     AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
-    DOTA_MATCH_DELAY_EXPIRE,
-    DOTA_MATCH_GRACE_MINUTES,
     FUNPAY_GOLDEN_KEY,
     HOURS_FOR_REVIEW,
     RENTAL_CHECK_INTERVAL,
@@ -24,7 +21,6 @@ from notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.presence_bot import get_presence_bot
 
 from .messages import USER
 from .utils import (
@@ -62,8 +58,6 @@ class FunpayBot:
         self._processed_order_ids: set[int] = set()
 
         self._last_refresh_ts = 0.0
-        self._expire_delay_since: dict[int, datetime] = {}
-        self._expire_delay_notified: set[int] = set()
 
     @property
     def account(self) -> Account | None:
@@ -740,13 +734,6 @@ class FunpayBot:
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
                     steam_login = login or account_name
-                    if self._should_delay_expire_due_to_dota_match(
-                        account_id=account_id,
-                        owner=owner,
-                        current_time=current_time,
-                        mafile_json=mafile_json,
-                    ):
-                        continue
                     self._expire_rental(
                         cursor=cursor,
                         conn=conn,
@@ -764,86 +751,6 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
-
-    def _steamid64_from_mafile(self, mafile_json: str | None) -> int | None:
-        if not mafile_json:
-            return None
-        try:
-            data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
-            value = (data or {}).get("Session", {}).get("SteamID")
-            if value is None:
-                value = (data or {}).get("steamid") or (data or {}).get("SteamID")
-            if value is None:
-                return None
-            return int(value)
-        except Exception:
-            return None
-
-    def _should_delay_expire_due_to_dota_match(
-        self,
-        *,
-        account_id: int,
-        owner: str,
-        current_time: datetime,
-        mafile_json: str | None,
-    ) -> bool:
-        if not DOTA_MATCH_DELAY_EXPIRE:
-            return False
-        bot = get_presence_bot()
-        if bot is None:
-            return False
-
-        steamid64 = self._steamid64_from_mafile(mafile_json)
-        if steamid64 is None:
-            return False
-
-        snapshot = bot.get_cached(steamid64)
-        if snapshot is None:
-            try:
-                snapshot = asyncio.run(bot.fetch_presence(steamid64))
-            except Exception:
-                snapshot = None
-
-        if not snapshot or not snapshot.in_match:
-            self._expire_delay_since.pop(account_id, None)
-            self._expire_delay_notified.discard(account_id)
-            return False
-
-        since = self._expire_delay_since.get(account_id)
-        if since is None:
-            self._expire_delay_since[account_id] = current_time
-            since = current_time
-
-        if current_time - since >= timedelta(minutes=DOTA_MATCH_GRACE_MINUTES):
-            self._expire_delay_since.pop(account_id, None)
-            self._expire_delay_notified.discard(account_id)
-            return False
-
-        if account_id not in self._expire_delay_notified:
-            steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
-            extra = f"\nСтатус: {steam_display}\n" if steam_display else ""
-            try:
-                self.send_message_by_owner(
-                    owner,
-                    "Ваша аренда уже закончилась, но вы сейчас в матче Dota 2.\n"
-                    f"Я подожду до {DOTA_MATCH_GRACE_MINUTES} минут и затем автоматически закрою доступ.\n"
-                    f"{extra}",
-                )
-            except Exception:
-                pass
-            try:
-                send_message_to_admin(
-                    "EXPIRE DELAYED (DOTA MATCH)\n\n"
-                    f"Account ID: {account_id}\n"
-                    f"Owner: {owner}\n"
-                    f"steam_display: {steam_display}\n"
-                    f"Grace: {DOTA_MATCH_GRACE_MINUTES} minutes\n",
-                )
-            except Exception:
-                pass
-            self._expire_delay_notified.add(account_id)
-
-        return True
 
     def _send_expiration_warning(self, owner: str, account_id: int, hours_remaining: float, expiry_time: datetime) -> None:
         try:

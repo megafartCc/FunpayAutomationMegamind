@@ -1,37 +1,22 @@
+from __future__ import annotations
+
+from typing import Any
+
 import requests
-from typing import Optional
 
 
-_DOTA2_APP_ID = "570"
+_PLAYER_SUMMARIES_URL = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/"
 
 
-def fetch_web_presence(steamid64: int, api_key: str, timeout: float = 6.0) -> Optional[dict]:
-    """
-    Fetch basic presence info via Steam Web API (GetPlayerSummaries).
-
-    Returns dict with presence_in_match/presence_display or None on failure.
-    """
-    if not api_key:
-        return None
-    try:
-        resp = requests.get(
-            "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/",
-            params={"key": api_key, "steamids": str(int(steamid64))},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        players = resp.json().get("response", {}).get("players", [])
-        if not players:
-            return None
-        player = players[0]
-        gameid = str(player.get("gameid") or "")
-        display = player.get("gameextrainfo") or ""
-        in_match = gameid == _DOTA2_APP_ID
-        state = "match" if in_match else ("menu" if gameid == _DOTA2_APP_ID else "offline")
-        return {
-            "presence_in_match": in_match,
-            "presence_display": display,
-            "presence_state": state,
-        }
-    except Exception:
-        return None
+def fetch_player_summaries(steamids: list[int], api_key: str, timeout: float = 6.0) -> dict[str, Any]:
+    if not api_key or not steamids:
+        return {}
+    chunk = ",".join(str(int(sid)) for sid in steamids)
+    resp = requests.get(
+        _PLAYER_SUMMARIES_URL,
+        params={"key": api_key, "steamids": chunk},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    players = resp.json().get("response", {}).get("players", [])
+    return {str(player.get("steamid")): player for player in players}
