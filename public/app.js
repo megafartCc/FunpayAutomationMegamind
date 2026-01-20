@@ -58,7 +58,7 @@ const toast = (message, isError = false) => {
 
 const getAdminKey = () => sessionStorage.getItem("adminKey") || "";
 
-const apiFetch = async (path, options = {}) => {
+const apiFetch = async (path, options = {}, retry = true) => {
   const headers = options.headers ? { ...options.headers } : {};
   headers["Content-Type"] = "application/json";
   const adminKey = getAdminKey();
@@ -68,6 +68,21 @@ const apiFetch = async (path, options = {}) => {
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
     const message = await response.text();
+    if (response.status === 401 && message.includes("Invalid admin key") && retry) {
+      sessionStorage.removeItem("adminKey");
+      try {
+        const keyResponse = await fetch("/api/admin-key");
+        if (keyResponse.ok) {
+          const data = await keyResponse.json();
+          if (data.key) {
+            sessionStorage.setItem("adminKey", data.key);
+            return apiFetch(path, options, false);
+          }
+        }
+      } catch (error) {
+        // Fall through to the original error.
+      }
+    }
     throw new Error(message || "Request failed");
   }
   if (response.status === 204) {
