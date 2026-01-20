@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+import traceback
 
 from logger import logger
 
@@ -133,23 +134,32 @@ class SteamPresenceBot:
         return self._ready.wait(timeout=timeout)
 
     def _run(self) -> None:
-        try:
-            login_params = {"username": self._login, "password": self._password}
+        """
+        Keep the steam client running; if it crashes, log and retry with backoff.
+        """
+        backoff = 5
+        while True:
             try:
-                sig = inspect.signature(self._client.login)  # type: ignore[attr-defined]
-                if "shared_secret" in sig.parameters and self._shared_secret:
-                    login_params["shared_secret"] = self._shared_secret
-                if "identity_secret" in sig.parameters and self._identity_secret:
-                    login_params["identity_secret"] = self._identity_secret
-                if "refresh_token" in sig.parameters and self._refresh_token:
-                    login_params["refresh_token"] = self._refresh_token
-            except Exception:
-                if self._shared_secret:
-                    login_params["shared_secret"] = self._shared_secret
+                login_params = {"username": self._login, "password": self._password}
+                try:
+                    sig = inspect.signature(self._client.login)  # type: ignore[attr-defined]
+                    if "shared_secret" in sig.parameters and self._shared_secret:
+                        login_params["shared_secret"] = self._shared_secret
+                    if "identity_secret" in sig.parameters and self._identity_secret:
+                        login_params["identity_secret"] = self._identity_secret
+                    if "refresh_token" in sig.parameters and self._refresh_token:
+                        login_params["refresh_token"] = self._refresh_token
+                except Exception:
+                    if self._shared_secret:
+                        login_params["shared_secret"] = self._shared_secret
 
-            self._client.run(**login_params)  # type: ignore[arg-type]
-        except Exception as exc:
-            logger.error(f"Steam presence bot crashed: {exc}")
+                self._client.run(**login_params)  # type: ignore[arg-type]
+                backoff = 5
+            except Exception as exc:
+                logger.error(f"Steam presence bot crashed: {exc}\n{traceback.format_exc()}")
+                self._ready.clear()
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
 
     def get_cached(self, steamid64: int) -> PresenceSnapshot | None:
         with self._lock:
