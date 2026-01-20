@@ -201,6 +201,7 @@ class SQLiteDB:
         self._ensure_lot_url_column()
         self._ensure_users_table()
         self._ensure_user_owner_columns()
+        self._migrate_lots_schema()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -625,6 +626,7 @@ class SQLiteDB:
     def set_lot_mapping(self, lot_number: int, account_id: int, lot_url: str | None = None, user_id: int | None = None) -> bool:
         cursor = self._cursor()
         try:
+            effective_user_id = user_id if user_id is not None else 0
             if user_id is None:
                 cursor.execute(
                     "SELECT ID FROM accounts WHERE ID = ?",
@@ -637,13 +639,10 @@ class SQLiteDB:
                 )
             if cursor.fetchone() is None:
                 return False
+            # Upsert mapping per user
             cursor.execute(
-                "DELETE FROM lots WHERE (lot_number = ? OR account_id = ?) " + ("AND user_id = ?" if user_id else ""),
-                (lot_number, account_id) + ((user_id,) if user_id else ()),
-            )
-            cursor.execute(
-                "INSERT INTO lots (lot_number, account_id, lot_url, user_id) VALUES (?, ?, ?, ?)",
-                (lot_number, account_id, lot_url, user_id),
+                "REPLACE INTO lots (lot_number, account_id, lot_url, user_id) VALUES (?, ?, ?, ?)",
+                (lot_number, account_id, lot_url, effective_user_id),
             )
             self.conn.commit()
             return True
@@ -1396,6 +1395,59 @@ class SQLiteDB:
             self.conn.commit()
         except Exception:
             pass
+        finally:
+            cursor.close()
+
+    def _migrate_lots_schema(self):
+        """Ensure lots table supports per-user mappings with composite keys (MySQL only)."""
+        if self.db_type != "mysql":
+            return
+        cursor = self._cursor()
+        try:
+            # Add user_id column if missing
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = 'lots' AND column_name = 'user_id'
+                """,
+                (MYSQLDATABASE,),
+            )
+            has_user = cursor.fetchone()[0] > 0
+            if not has_user:
+                cursor.execute("ALTER TABLE lots ADD COLUMN user_id INT NOT NULL DEFAULT 0")
+
+            # Ensure primary key is (lot_number, user_id)
+            cursor.execute(
+                """
+                SELECT column_name, sequence_in_index
+                FROM information_schema.statistics
+                WHERE table_schema = %s AND table_name = 'lots' AND index_name = 'PRIMARY'
+                ORDER BY sequence_in_index
+                """,
+                (MYSQLDATABASE,),
+            )
+            pk_cols = [row[0] for row in cursor.fetchall()]
+            if pk_cols != ["lot_number", "user_id"]:
+                cursor.execute("ALTER TABLE lots DROP PRIMARY KEY")
+                cursor.execute("ALTER TABLE lots ADD PRIMARY KEY (lot_number, user_id)")
+
+            # Ensure uniqueness of (account_id, user_id)
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.statistics
+                WHERE table_schema = %s AND table_name = 'lots' AND index_name = 'uniq_account_user'
+                """,
+                (MYSQLDATABASE,),
+            )
+            has_unique = cursor.fetchone()[0] > 0
+            if not has_unique:
+                try:
+                    cursor.execute("ALTER TABLE lots DROP INDEX account_id")
+                except Exception:
+                    pass
+                cursor.execute("ALTER TABLE lots ADD UNIQUE KEY uniq_account_user (account_id, user_id)")
         finally:
             cursor.close()
 
