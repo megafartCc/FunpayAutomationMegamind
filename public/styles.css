@@ -32,7 +32,7 @@ a {
 
 .app {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) 1fr;
+  grid-template-columns: 1fr;
   min-height: 100vh;
 }
 
@@ -257,6 +257,12 @@ select {
   width: 100%;
 }
 
+#manageMaFileJson,
+textarea[name="mafile_json"] {
+  height: 42px;
+  resize: none;
+}
+
 input:focus,
 textarea:focus,
 select:focus {
@@ -360,7 +366,8 @@ select:focus {
   display: grid;
   gap: 10px;
   max-height: 420px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 
@@ -419,7 +426,8 @@ select:focus {
   display: grid;
   gap: 10px;
   max-height: 380px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 

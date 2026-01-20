@@ -472,7 +472,6 @@ def startFunpay():
                                         f"Истекает: {expiry_str} МСК | "
                                         f"Осталось: {remaining_str}"
                                     )
-                                    lines.append("-----")
 
                                 acc.send_message(chat.id, "\n".join(lines))
                         except Exception as e:
