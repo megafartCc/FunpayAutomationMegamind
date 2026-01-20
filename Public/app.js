@@ -77,7 +77,24 @@ const apiFetch = async (path, options = {}, retry = true) => {
   }
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    const message = await response.text();
+    const contentType = response.headers.get("content-type") || "";
+    let message = "";
+    if (contentType.includes("application/json")) {
+      try {
+        const data = await response.json();
+        if (typeof data?.detail === "string") {
+          message = data.detail;
+        } else if (data?.detail != null) {
+          message = JSON.stringify(data.detail);
+        } else {
+          message = JSON.stringify(data);
+        }
+      } catch (error) {
+        message = "Request failed";
+      }
+    } else {
+      message = await response.text();
+    }
     if (response.status === 401 && message.includes("Invalid admin key") && retry) {
       sessionStorage.removeItem("adminKey");
       try {

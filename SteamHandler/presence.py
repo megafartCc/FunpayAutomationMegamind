@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -8,165 +8,124 @@ import aiohttp
 from logger import logger
 
 
-_STEAMID64_BASE = 76561197960265728
+_DOTA2_APP_ID = "570"
 
 _MATCH_KEYWORDS = (
+    "playing",
     "in match",
-    "in a match",
-    "in-game: match",
+    "match",
+    "ranked",
+    "turbo",
+    "captains mode",
+    "captain's mode",
+    "all pick",
+    "ability draft",
+    "single draft",
+    "random draft",
+    "custom game",
+    "spectating",
+    "watching",
+    "играет",
     "в матче",
-    "идет матч",
-    "идёт матч",
+    "матч",
+    "ранг",
+    "рейтин",
+    "турбо",
+    "наблюдает",
+    "смотрит",
 )
 
-_NOT_MATCH_KEYWORDS = (
-    "in lobby",
-    "in menu",
+_MENU_KEYWORDS = (
+    "in main menu",
     "main menu",
-    "в лобби",
+    "menu",
+    "in lobby",
+    "lobby",
     "в меню",
     "главное меню",
+    "в лобби",
 )
 
 
-def _steamid64_to_accountid(steamid64: int) -> int | None:
-    if steamid64 < _STEAMID64_BASE:
+@dataclass(frozen=True)
+class DotaPresence:
+    in_dota: bool
+    in_match: bool
+    rich_presence: str
+
+
+async def _fetch_player_summary(*, steamid64: int, api_key: str) -> dict[str, Any] | None:
+    if not api_key:
         return None
-    return steamid64 - _STEAMID64_BASE
-
-
-async def _fetch_json(url: str) -> dict[str, Any] | None:
+    url = (
+        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/"
+        f"?key={api_key}&steamids={steamid64}"
+    )
     timeout = aiohttp.ClientTimeout(total=8)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
                     return None
-                data = await resp.json()
-                if isinstance(data, dict):
-                    return data
-                return None
+                payload: Any = await resp.json()
     except Exception as exc:
-        logger.warning(f"Steam presence check failed: {exc}")
+        logger.warning(f"Steam Web API presence check failed: {exc}")
+        return None
+
+    try:
+        players = (payload or {}).get("response", {}).get("players", [])
+        if not players:
+            return None
+        player = players[0]
+        return player if isinstance(player, dict) else None
+    except Exception:
         return None
 
 
-def _gather_text(obj: Any) -> str:
-    try:
-        return json.dumps(obj, ensure_ascii=False, default=str).lower()
-    except Exception:
-        return str(obj).lower()
-
-
-async def is_dota2_running(*, steamid: int, api_key: str) -> bool:
-    """
-    Best-effort "Dota 2 is running" check using Steam Web API.
-
-    Requires a Steam Web API key. Returns False if the status can't be fetched.
-    """
-    if not api_key:
+def _classify_dota_presence(game_info: str) -> bool:
+    info = (game_info or "").strip().lower()
+    if not info:
         return False
 
-    url = (
-        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
-        f"?key={api_key}&steamids={steamid}"
-    )
+    for kw in _MENU_KEYWORDS:
+        if kw in info:
+            return False
 
-    timeout = aiohttp.ClientTimeout(total=8)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return False
-                data: Any = await resp.json()
-    except Exception as exc:
-        logger.warning(f"Steam presence check failed: {exc}")
-        return False
+    for kw in _MATCH_KEYWORDS:
+        if kw in info:
+            return True
 
-    players = (data or {}).get("response", {}).get("players", [])
-    if not players:
-        return False
-
-    player = players[0] or {}
-    gameid = str(player.get("gameid") or "")
-    game_name = str(player.get("gameextrainfo") or "")
-
-    if gameid == "570":
-        return True
-    if "dota" in game_name.lower():
-        return True
     return False
 
 
-async def is_dota2_in_match(*, steamid: int, api_key: str) -> bool:
+async def get_dota_presence(*, steamid64: int, api_key: str) -> DotaPresence:
     """
-    Best-effort "player is in a Dota 2 match right now" check.
+    Method 2 (Steam Web API): GetPlayerSummaries + gameextrainfo keyword match.
 
-    Uses steamcommunity miniprofile first (rich presence), then optionally falls back
-    to GetPlayerSummaries (requires API key).
-
-    Note: Steam presence isn't perfectly consistent across games/modes. This function
-    is intentionally conservative: if Dota 2 is detected but match state can't be
-    determined, it returns True to avoid deauthorizing mid-match.
+    Important: This depends on Steam privacy settings ("Game details"). If those are
+    private, Steam may omit `gameid` and `gameextrainfo`, making detection impossible.
     """
-    accountid = _steamid64_to_accountid(int(steamid))
-    if accountid is not None:
-        url = f"https://steamcommunity.com/miniprofile/{accountid}/json"
-        data = await _fetch_json(url)
-        if data:
-            text = _gather_text(data)
+    player = await _fetch_player_summary(steamid64=steamid64, api_key=api_key)
+    if not player:
+        return DotaPresence(in_dota=False, in_match=False, rich_presence="")
 
-            if "570" not in text and "dota" not in text:
-                return False
-
-            for kw in _NOT_MATCH_KEYWORDS:
-                if kw in text:
-                    return False
-            for kw in _MATCH_KEYWORDS:
-                if kw in text:
-                    return True
-
-            gameserverip = str(data.get("gameserverip") or "").strip()
-            gameserversteamid = str(data.get("gameserversteamid") or "").strip()
-            if gameserverip or gameserversteamid:
-                return True
-
-            # Dota detected but no explicit match signal => be conservative.
-            return True
-
-    url = (
-        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
-        f"?key={api_key}&steamids={steamid}"
-    )
-
-    if not api_key:
-        return False
-
-    timeout = aiohttp.ClientTimeout(total=8)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return False
-                data: Any = await resp.json()
-    except Exception as exc:
-        logger.warning(f"Steam presence check failed: {exc}")
-        return False
-
-    players = (data or {}).get("response", {}).get("players", [])
-    if not players:
-        return False
-
-    player = players[0] or {}
     gameid = str(player.get("gameid") or "")
-    if gameid != "570":
-        return False
+    game_info = str(player.get("gameextrainfo") or "")
 
+    in_dota = gameid == _DOTA2_APP_ID
+    if not in_dota:
+        return DotaPresence(in_dota=False, in_match=False, rich_presence=game_info)
+
+    # Some accounts expose server fields; treat as match if present.
     gameserverip = str(player.get("gameserverip") or "").strip()
     gameserversteamid = str(player.get("gameserversteamid") or "").strip()
-    return bool(gameserverip or gameserversteamid)
+    if gameserverip or gameserversteamid:
+        return DotaPresence(in_dota=True, in_match=True, rich_presence=game_info)
+
+    return DotaPresence(in_dota=True, in_match=_classify_dota_presence(game_info), rich_presence=game_info)
 
 
-# Backwards-compatible alias (older name used by the bot previously).
-async def is_dota2_in_game(*, steamid: int, api_key: str) -> bool:
-    return await is_dota2_running(steamid=steamid, api_key=api_key)
+async def is_dota2_in_match(*, steamid: int, api_key: str) -> bool:
+    presence = await get_dota_presence(steamid64=int(steamid), api_key=api_key)
+    return presence.in_match
+
