@@ -172,17 +172,33 @@ async def logout_all_steam_sessions(
     logger.warning("Steam sessions logout form not found. Falling back to steamcommunity logoutall.")
     try:
         community_sessionid = await steam.sessionid("steamcommunity.com")
-        community_url = f"https://steamcommunity.com/my/logoutall/?sessionid={community_sessionid}"
-        resp = await steam.raw_request(
-            community_url,
-            method="GET",
-            headers={**headers, "Referer": "https://steamcommunity.com/"},
-            allow_redirects=True,
-        )
-        ok = int(getattr(resp, "status", 0)) in {200, 302}
-        if not ok:
-            logger.warning(f"Steam community logoutall failed: status={getattr(resp, 'status', None)}")
-        return ok
+        candidates = [
+            ("GET", f"https://steamcommunity.com/my/logoutall/?sessionid={community_sessionid}", None),
+            ("POST", "https://steamcommunity.com/my/logoutall/", {"sessionid": community_sessionid}),
+            ("POST", "https://steamcommunity.com/my/ajaxlogoutall/", {"sessionid": community_sessionid}),
+            ("POST", "https://steamcommunity.com/my/ajaxlogoutall", {"sessionid": community_sessionid}),
+        ]
+        for method, url, data in candidates:
+            try:
+                resp = await steam.raw_request(
+                    url,
+                    method=method,
+                    headers={
+                        **headers,
+                        "Referer": "https://steamcommunity.com/",
+                        "Origin": "https://steamcommunity.com",
+                        **({"Content-Type": "application/x-www-form-urlencoded"} if data else {}),
+                    },
+                    data=data,
+                    allow_redirects=True,
+                )
+                ok = int(getattr(resp, "status", 0)) in {200, 302}
+                if ok:
+                    return True
+            except Exception:
+                continue
+        logger.warning("Steam community logoutall candidates all failed.")
+        return False
     except Exception as exc:
         logger.warning(f"Steam sessions logout not found and fallback failed: {exc}")
         return False

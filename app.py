@@ -15,6 +15,7 @@ from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
+from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -236,13 +237,18 @@ async def steam_change_password(account_id: int, payload: SteamPasswordRequest) 
     if new_password == "":
         new_password = None
 
-    updated_password = await changeSteamPassword(
-        path_to_maFile=None,
-        password=account.get("password"),
-        mafile_json=mafile_json,
-        new_password=new_password,
-        steam_login=account.get("login") or account.get("account_name"),
-    )
+    try:
+        updated_password = await changeSteamPassword(
+            path_to_maFile=None,
+            password=account.get("password"),
+            mafile_json=mafile_json,
+            new_password=new_password,
+            steam_login=account.get("login") or account.get("account_name"),
+        )
+    except ErrorSteamPasswordChange as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Steam password change failed: {exc}") from exc
 
     login = account.get("login")
     if login:

@@ -1,12 +1,11 @@
 import asyncio
+import asyncio
 import base64
 from typing import Dict
 
 import pydantic
 import rsa
 from lxml.html import document_fromstring
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from steamlib.api.trade import SteamTrade
 from steamlib.api.trade.exceptions import NotFoundMobileConfirmationError
 from yarl import URL
@@ -55,7 +54,7 @@ class SteamPasswordChange:
 
     async def _login_info_enter_code(self, data: PasswordChangeParams):
 
-        response = await self._steam.raw_request(
+        await self._steam.raw_request(
             method="GET",
             url="https://help.steampowered.com/en/wizard/HelpWithLoginInfoEnterCode",
             params={
@@ -71,31 +70,10 @@ class SteamPasswordChange:
                 "User-Agent": self.BROWSER,
             },
         )
-
-        # Configure Chrome options
-        chrome_options = Options()
-
-        chrome_options.add_argument(
-            "--headless"
-        )  # Run Chrome in headless mode (no GUI)
-        chrome_options.add_argument(
-            "--disable-gpu"
-        )  # Disable GPU acceleration (optional)
-        chrome_options.add_argument(
-            "--no-sandbox"
-        )  # Bypass OS security model (optional)
-
-        # Initialize the WebDriver with the configured options
-        driver = webdriver.Chrome(options=chrome_options)
-
-        # Open a webpage
-        driver.get(f"{response.url}")
-
-        # Wait for 3 seconds
-        await asyncio.sleep(3)
-
-        # Close the browser
-        driver.quit()
+        # This step used to open a headless Chrome session via Selenium.
+        # That is not viable in most server environments (Railway/Docker) and is unnecessary:
+        # the server-side requests below complete the flow.
+        return None
 
     async def _send_account_recovery_code(self, data: PasswordChangeParams) -> bool:
         response = await self._steam.json_request(
@@ -321,8 +299,7 @@ class SteamPasswordChange:
             except NotFoundMobileConfirmationError:
                 await asyncio.sleep(2)
             except Exception as e:
-                print.error(e)
-                raise ErrorSteamPasswordChange("Error password change confirmation")
+                raise ErrorSteamPasswordChange("Error password change confirmation") from e
         else:
             raise NotFoundMobileConfirmationError("Not found mobile confirmation")
 
