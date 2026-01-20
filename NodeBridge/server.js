@@ -48,7 +48,11 @@ setInterval(() => {
 
 client.on("user", (sid, user) => {
   const id64 = sid.getSteamID64();
-  const rpRaw = user.rich_presence || {};
+  const previous = presence.get(id64);
+  let rpRaw = user.rich_presence || {};
+  if (Array.isArray(rpRaw) && rpRaw.length === 0 && previous) {
+    rpRaw = previous.rich_presence_raw || rpRaw;
+  }
   const rp = Array.isArray(rpRaw)
     ? Object.fromEntries(rpRaw.map((entry) => [entry.key, entry.value]))
     : rpRaw;
