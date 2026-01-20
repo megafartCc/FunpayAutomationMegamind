@@ -209,6 +209,7 @@ class SQLiteDB:
         cursor.close()
         self._ensure_mafile_column()
         self._ensure_lot_url_column()
+        self._ensure_users_table()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -230,6 +231,75 @@ class SQLiteDB:
                 cursor.execute("ALTER TABLE accounts ADD COLUMN mafile_json TEXT")
                 self.conn.commit()
         except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_users_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                # create if missing
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        username VARCHAR(255) NOT NULL UNIQUE,
+                        password_hash VARCHAR(255) NOT NULL,
+                        golden_key TEXT NOT NULL,
+                        session_token VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+                # ensure columns exist
+                cursor.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'users'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                cols = {row[0] for row in cursor.fetchall()}
+                needed = {
+                    "username": "ALTER TABLE users ADD COLUMN username VARCHAR(255) NOT NULL UNIQUE",
+                    "password_hash": "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL",
+                    "golden_key": "ALTER TABLE users ADD COLUMN golden_key TEXT NOT NULL",
+                    "session_token": "ALTER TABLE users ADD COLUMN session_token VARCHAR(255)",
+                    "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+                }
+                for col, stmt in needed.items():
+                    if col not in cols:
+                        cursor.execute(stmt)
+                self.conn.commit()
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        golden_key TEXT NOT NULL,
+                        session_token TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                cursor.execute("PRAGMA table_info(users)")
+                cols = {row[1] for row in cursor.fetchall()}
+                alter = {
+                    "username": "ALTER TABLE users ADD COLUMN username TEXT",
+                    "password_hash": "ALTER TABLE users ADD COLUMN password_hash TEXT",
+                    "golden_key": "ALTER TABLE users ADD COLUMN golden_key TEXT",
+                    "session_token": "ALTER TABLE users ADD COLUMN session_token TEXT",
+                    "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+                }
+                for col, stmt in alter.items():
+                    if col not in cols:
+                        cursor.execute(stmt)
+                self.conn.commit()
+        except Exception:
+            # best effort; ignore if cannot migrate
             pass
         finally:
             cursor.close()
