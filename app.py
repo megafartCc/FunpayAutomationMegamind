@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from threading import Thread
@@ -19,6 +20,7 @@ from config import (
     STEAM_PRESENCE_PASSWORD,
     STEAM_PRESENCE_REFRESH_TOKEN,
     STEAM_PRESENCE_SHARED_SECRET,
+    STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunpayHandler.funpay import get_account, startFunpay
@@ -27,6 +29,7 @@ from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
+from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
 
@@ -155,12 +158,21 @@ def notifications(limit: int = 50) -> dict:
 async def _presence_for_account(account: dict) -> dict:
     bot = get_presence_bot()
     if bot is None:
+        if STEAM_WEB_API_KEY:
+            steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
+            if steamid64 is None:
+                return {}
+            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
+            return web_presence or {}
         return {}
     steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
     if steamid64 is None:
         return {}
 
     if not bot.wait_ready(timeout=0.5):
+        if STEAM_WEB_API_KEY:
+            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
+            return web_presence or {}
         return {}
 
     snapshot = bot.get_cached(steamid64)
@@ -171,6 +183,9 @@ async def _presence_for_account(account: dict) -> dict:
             snapshot = None
 
     if snapshot is None:
+        if STEAM_WEB_API_KEY:
+            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
+            return web_presence or {}
         return {}
 
     steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
