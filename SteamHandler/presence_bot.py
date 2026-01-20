@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 import traceback
+from types import ExceptionGroup
 
 from logger import logger
 
@@ -165,10 +166,17 @@ class SteamPresenceBot:
                 self._client.run(**login_params)  # type: ignore[arg-type]
                 backoff = 5
             except Exception as exc:
-                # steam sometimes closes gateways; treat those as transient to avoid noisy stack traces
-                if (ConnectionClosed and isinstance(exc, ConnectionClosed)) or (
-                    WebSocketClosure and isinstance(exc, WebSocketClosure)
-                ):
+                def _is_gateway_close(e: BaseException) -> bool:
+                    if ConnectionClosed and isinstance(e, ConnectionClosed):
+                        return True
+                    if WebSocketClosure and isinstance(e, WebSocketClosure):
+                        return True
+                    if isinstance(e, ExceptionGroup):
+                        return any(_is_gateway_close(inner) for inner in e.exceptions)
+                    msg = str(e).lower()
+                    return "connection closed" in msg or "websocketclosure" in msg
+
+                if _is_gateway_close(exc):
                     logger.warning(f"Steam presence gateway closed. Will retry in {backoff}s.")
                 else:
                     logger.error(f"Steam presence bot crashed: {exc}\n{traceback.format_exc()}")
