@@ -56,7 +56,7 @@ def match_account_name(order_name: str, all_accounts: list[str]) -> str | None:
 
 
 def parse_lot_number(text: str) -> int | None:
-    match = re.search(r"№\s*(\d+)", text)
+    match = re.search(r"(?:№|#)\s*(\\d+)", text)
     if not match:
         return None
     try:
@@ -541,14 +541,19 @@ def startFunpay():
                         try:
                             available_lots = db.get_available_lot_accounts()
                             if available_lots:
-                                lines = ["????????? ????:"]
+                                lines = ["Доступные лоты:"]
                                 for account in available_lots:
-                                    lines.append(f"{account['account_name']} - ?{account['lot_number']}")
+                                    lot_label = f"№{account['lot_number']}"
+                                    lot_url = account.get("lot_url")
+                                    if lot_url:
+                                        lines.append(f"{account['account_name']} - {lot_label} - {lot_url}")
+                                    else:
+                                        lines.append(f"{account['account_name']} - {lot_label}")
                                 acc.send_message(chat.id, "\n".join(lines))
                             else:
                                 all_lots = db.get_all_lot_accounts()
                                 if not all_lots:
-                                    acc.send_message(chat.id, "??? ????????? ?????.")
+                                    acc.send_message(chat.id, "Лоты не настроены.")
                                 else:
                                     current_time = datetime.now(tz=moscow_tz)
                                     next_expiry = None
@@ -579,16 +584,17 @@ def startFunpay():
                                         minutes = int((remaining.total_seconds() % 3600) // 60)
                                         acc.send_message(
                                             chat.id,
-                                            f"??? ? ??????. ????????? ??? ??????????? ????? - {hours} ? {minutes} ??? (? {next_expiry.strftime('%H:%M:%S')} ???).",
+                                            "Все в аренде. Ближайший аккаунт освободится через "
+                                            f"{hours} ч {minutes} мин (в {next_expiry.strftime('%H:%M:%S')} МСК).",
                                         )
                                     else:
                                         acc.send_message(
                                             chat.id,
-                                            "??? ? ??????. ??? ?????? ? ????????? ????????????.",
+                                            "Все в аренде. Нет данных по ближайшему освобождению.",
                                         )
                         except Exception as e:
                             logger.error(f"Failed to load stock for {event.message.author}: {str(e)}")
-                            acc.send_message(chat.id, "?? ??????? ???????? ?????? ?? ???????.")
+                            acc.send_message(chat.id, "Не удалось получить список лотов.")
                     elif event.message.type == types.MessageTypes.NEW_FEEDBACK:
                         try:
                             conn, cursor = db.open_connection()
@@ -676,3 +682,5 @@ def get_account():
 
 # Ensure the function is available for import
 __all__ = ["send_message_by_owner", "get_account"]
+
+

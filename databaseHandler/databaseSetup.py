@@ -138,6 +138,7 @@ class SQLiteDB:
                 CREATE TABLE IF NOT EXISTS lots (
                     lot_number INT PRIMARY KEY,
                     account_id INT NOT NULL UNIQUE,
+                    lot_url TEXT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -172,6 +173,7 @@ class SQLiteDB:
                 CREATE TABLE IF NOT EXISTS lots (
                     lot_number INTEGER PRIMARY KEY,
                     account_id INTEGER NOT NULL UNIQUE,
+                    lot_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
                 )
@@ -180,6 +182,7 @@ class SQLiteDB:
         self.conn.commit()
         cursor.close()
         self._ensure_mafile_column()
+        self._ensure_lot_url_column()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -205,6 +208,29 @@ class SQLiteDB:
         finally:
             cursor.close()
 
+    def _ensure_lot_url_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'lots' AND column_name = 'lot_url'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE lots ADD COLUMN lot_url TEXT NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE lots ADD COLUMN lot_url TEXT")
+                self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
     def add_account(
         self,
         account_name,
@@ -435,7 +461,7 @@ class SQLiteDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT l.lot_number, l.account_id, a.account_name, a.owner
+            SELECT l.lot_number, l.account_id, l.lot_url, a.account_name, a.owner
             FROM lots l
             JOIN accounts a ON a.ID = l.account_id
             ORDER BY l.lot_number
@@ -448,13 +474,14 @@ class SQLiteDB:
             {
                 "lot_number": row[0],
                 "account_id": row[1],
-                "account_name": row[2],
-                "owner": row[3],
+                "lot_url": row[2],
+                "account_name": row[3],
+                "owner": row[4],
             }
             for row in rows
         ]
 
-    def set_lot_mapping(self, lot_number: int, account_id: int) -> bool:
+    def set_lot_mapping(self, lot_number: int, account_id: int, lot_url: str | None = None) -> bool:
         cursor = self._cursor()
         try:
             cursor.execute(
@@ -468,8 +495,8 @@ class SQLiteDB:
                 (lot_number, account_id),
             )
             cursor.execute(
-                "INSERT INTO lots (lot_number, account_id) VALUES (?, ?)",
-                (lot_number, account_id),
+                "INSERT INTO lots (lot_number, account_id, lot_url) VALUES (?, ?, ?)",
+                (lot_number, account_id, lot_url),
             )
             self.conn.commit()
             return True
@@ -514,7 +541,7 @@ class SQLiteDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number
+            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
             FROM lots l
             JOIN accounts a ON a.ID = l.account_id
             WHERE a.owner IS NULL
@@ -532,6 +559,7 @@ class SQLiteDB:
                 "rental_start": row[3],
                 "rental_duration": row[4],
                 "lot_number": row[5],
+                "lot_url": row[6],
             }
             for row in rows
         ]
@@ -540,7 +568,7 @@ class SQLiteDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number
+            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
             FROM lots l
             JOIN accounts a ON a.ID = l.account_id
             ORDER BY l.lot_number
@@ -557,6 +585,7 @@ class SQLiteDB:
                 "rental_start": row[3],
                 "rental_duration": row[4],
                 "lot_number": row[5],
+                "lot_url": row[6],
             }
             for row in rows
         ]

@@ -80,6 +80,7 @@ class ChatMessage(BaseModel):
 class LotMapping(BaseModel):
     lot_number: int = Field(ge=1)
     account_id: int = Field(ge=1)
+    lot_url: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -118,7 +119,7 @@ def lots() -> dict:
 
 @app.post("/api/lots", dependencies=[Depends(require_admin)])
 def create_lot_mapping(payload: LotMapping) -> dict:
-    success = db.set_lot_mapping(payload.lot_number, payload.account_id)
+    success = db.set_lot_mapping(payload.lot_number, payload.account_id, payload.lot_url)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True}

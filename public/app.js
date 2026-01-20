@@ -1,4 +1,4 @@
-const ui = {
+﻿const ui = {
   health: document.getElementById("healthStatus"),
   total: document.getElementById("statTotal"),
   active: document.getElementById("statActive"),
@@ -46,6 +46,7 @@ const ui = {
     form: document.getElementById("lotForm"),
     number: document.getElementById("lotNumber"),
     account: document.getElementById("lotAccount"),
+    url: document.getElementById("lotUrl"),
     table: document.getElementById("lotsTable"),
   },
 };
@@ -243,25 +244,27 @@ const renderLotSelect = (accounts) => {
 const renderLots = (lots) => {
   if (!ui.lots.table) return;
   if (!lots.length) {
-    ui.lots.table.innerHTML = "<tr><td colspan=\"4\">Лоты не настроены.</td></tr>";
+    ui.lots.table.innerHTML = "<tr><td colspan=\"5\">Лоты не настроены.</td></tr>";
     return;
   }
   ui.lots.table.innerHTML = lots
-    .map(
-      (lot) => `
+    .map((lot) => {
+      const url = lot.lot_url ? escapeHtml(lot.lot_url) : "";
+      const link = url ? `<a href="${url}" target="_blank" rel="noreferrer">${url}</a>` : "-";
+      return `
         <tr>
           <td>№${lot.lot_number}</td>
           <td>${escapeHtml(lot.account_name)} (ID ${lot.account_id})</td>
           <td>${escapeHtml(lot.owner || "-")}</td>
+          <td>${link}</td>
           <td>
             <button class="btn ghost" data-lot="${lot.lot_number}">Удалить</button>
           </td>
         </tr>
-      `
-    )
+      `;
+    })
     .join("");
 };
-
 const renderNotifications = (items) => {
   if (!items.length) {
     ui.notifications.innerHTML = "<div class=\"notice\"><h4>No notifications</h4><p>System events will appear here.</p></div>";
@@ -464,6 +467,7 @@ if (ui.lots.form) {
     event.preventDefault();
     const lotNumber = Number(ui.lots.number.value || 0);
     const accountId = Number(ui.lots.account.value || 0);
+    const lotUrl = ui.lots.url ? ui.lots.url.value.trim() : "";
     if (!lotNumber || !accountId) {
       toast("Укажите номер лота и аккаунт.", true);
       return;
@@ -471,7 +475,7 @@ if (ui.lots.form) {
     try {
       await apiFetch("/api/lots", {
         method: "POST",
-        body: JSON.stringify({ lot_number: lotNumber, account_id: accountId }),
+        body: JSON.stringify({ lot_number: lotNumber, account_id: accountId, lot_url: lotUrl || null }),
       });
       ui.lots.form.reset();
       toast("Лот сохранен.");
@@ -647,3 +651,8 @@ const init = async () => {
 };
 
 init();
+
+
+
+
+
