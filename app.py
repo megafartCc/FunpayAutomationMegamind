@@ -146,7 +146,7 @@ async def _presence_for_account(account: dict) -> dict:
     return web_presence
 
 
-@app.get("/api/accounts")
+@app.get("/api/accounts", dependencies=[Depends(require_admin)])
 async def accounts() -> dict:
     items = db.get_all_accounts()
     if not items:
