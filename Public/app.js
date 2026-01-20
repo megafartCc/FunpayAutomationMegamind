@@ -52,6 +52,16 @@
     url: document.getElementById("lotUrl"),
     table: document.getElementById("lotsTable"),
   },
+  auth: {
+    overlay: document.getElementById("authOverlay"),
+    registerForm: document.getElementById("registerForm"),
+    loginForm: document.getElementById("loginForm"),
+    regUsername: document.getElementById("regUsername"),
+    regPassword: document.getElementById("regPassword"),
+    regGoldenKey: document.getElementById("regGoldenKey"),
+    loginUsername: document.getElementById("loginUsername"),
+    loginPassword: document.getElementById("loginPassword"),
+  },
 };
 
 let accountsCache = [];
@@ -68,6 +78,29 @@ const toast = (message, isError = false) => {
 
 const getAdminKey = () => sessionStorage.getItem("adminKey") || "";
 
+const loadUsers = () => {
+  try {
+    return JSON.parse(localStorage.getItem("fps_users") || "[]");
+  } catch {
+    return [];
+  }
+};
+
+const saveUsers = (users) => {
+  localStorage.setItem("fps_users", JSON.stringify(users));
+};
+
+const showAuth = (message) => {
+  if (message) {
+    toast(message, true);
+  }
+  ui.auth.overlay.classList.remove("hidden");
+};
+
+const hideAuth = () => {
+  ui.auth.overlay.classList.add("hidden");
+};
+
 const apiFetch = async (path, options = {}, retry = true) => {
   const headers = options.headers ? { ...options.headers } : {};
   headers["Content-Type"] = "application/json";
@@ -77,6 +110,10 @@ const apiFetch = async (path, options = {}, retry = true) => {
   }
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
+    if (response.status === 401) {
+      sessionStorage.removeItem("adminKey");
+      showAuth("Please log in.");
+    }
     const contentType = response.headers.get("content-type") || "";
     let message = "";
     if (contentType.includes("application/json")) {
@@ -733,18 +770,49 @@ ui.manage.delete.addEventListener("click", async () => {
   }
 });
 
+// Auth forms
+ui.auth.registerForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const username = ui.auth.regUsername.value.trim();
+  const password = ui.auth.regPassword.value.trim();
+  const goldenKey = ui.auth.regGoldenKey.value.trim();
+  if (!username || !password || !goldenKey) {
+    toast("Fill all fields", true);
+    return;
+  }
+  const users = loadUsers();
+  if (users.some((u) => u.username === username)) {
+    toast("User already exists", true);
+    return;
+  }
+  users.push({ username, password, goldenKey });
+  saveUsers(users);
+  toast("Registered. You can log in now.");
+});
+
+ui.auth.loginForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const username = ui.auth.loginUsername.value.trim();
+  const password = ui.auth.loginPassword.value.trim();
+  const users = loadUsers();
+  const user = users.find((u) => u.username === username && u.password === password);
+  if (!user) {
+    toast("Invalid credentials", true);
+    return;
+  }
+  sessionStorage.setItem("adminKey", user.goldenKey);
+  sessionStorage.setItem("adminUser", user.username);
+  hideAuth();
+  loadAll();
+});
+
 const init = async () => {
   const savedKey = getAdminKey();
   if (!savedKey) {
-    try {
-      const data = await apiFetch("/api/admin-key");
-      if (data?.key) {
-        sessionStorage.setItem("adminKey", data.key);
-      }
-    } catch (error) {
-      // Ignore auto-key errors; other requests will surface auth failures.
-    }
+    showAuth();
+    return;
   }
+  hideAuth();
   loadAll();
 };
 

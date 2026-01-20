@@ -297,6 +297,33 @@
     </div>
 
     <div class="toast" id="toast"></div>
+
+    <div class="auth-overlay hidden" id="authOverlay">
+      <div class="auth-container">
+        <h2>FunpaySeller Access</h2>
+        <p class="auth-sub">Register with your golden key, then sign in to unlock the panel.</p>
+        <div class="auth-panels">
+          <form class="auth-card" id="registerForm">
+            <h3>Register</h3>
+            <label>Username</label>
+            <input id="regUsername" type="text" required />
+            <label>Password</label>
+            <input id="regPassword" type="password" required />
+            <label>FunPay Golden Key</label>
+            <input id="regGoldenKey" type="text" required />
+            <button type="submit" class="btn full">Register</button>
+          </form>
+          <form class="auth-card" id="loginForm">
+            <h3>Login</h3>
+            <label>Username</label>
+            <input id="loginUsername" type="text" required />
+            <label>Password</label>
+            <input id="loginPassword" type="password" required />
+            <button type="submit" class="btn full">Login</button>
+          </form>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
 
