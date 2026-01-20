@@ -7,7 +7,13 @@ import time
 from dataclasses import dataclass
 from typing import Any
 import traceback
-from types import ExceptionGroup
+try:  # py311+ has ExceptionGroup in builtins
+    from types import ExceptionGroup  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    try:
+        from exceptiongroup import ExceptionGroup  # type: ignore[assignment]
+    except Exception:  # pragma: no cover
+        ExceptionGroup = None  # type: ignore[assignment]
 
 from logger import logger
 
@@ -171,7 +177,7 @@ class SteamPresenceBot:
                         return True
                     if WebSocketClosure and isinstance(e, WebSocketClosure):
                         return True
-                    if isinstance(e, ExceptionGroup):
+                    if ExceptionGroup and isinstance(e, ExceptionGroup):
                         return any(_is_gateway_close(inner) for inner in e.exceptions)
                     msg = str(e).lower()
                     return "connection closed" in msg or "websocketclosure" in msg
