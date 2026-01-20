@@ -15,7 +15,6 @@ from config import (
     ADMIN_API_KEY,
     DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
     STEAM_BRIDGE_URL,
-    STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunPayAPI import Account as FPAccount
@@ -222,16 +221,13 @@ def notifications(limit: int = 50) -> dict:
 
 async def _presence_for_account(account: dict) -> dict:
     steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-    if steamid64 is None or not STEAM_WEB_API_KEY:
+    if steamid64 is None:
         return {"presence_state": "offline", "presence_display": ""}
     # Prefer node bridge if configured
     bridge_presence = _fetch_bridge_presence(steamid64) if STEAM_BRIDGE_URL else {}
     if bridge_presence:
         return bridge_presence
-    web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-    if not web_presence:
-        return {"presence_state": "offline", "presence_display": ""}
-    return web_presence
+    return {"presence_state": "offline", "presence_display": ""}
 
 
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
