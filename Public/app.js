@@ -245,9 +245,7 @@ const renderInventory = (items) => {
   const presenceLabel = (item) => {
     if (item.presence_state === "offline") return "Не в игре";
     if (item.presence_state === "dota") {
-      if (item.presence_match === "match" || item.presence_in_match) return "Dota 2: в матче";
-      if (item.presence_match === "menu") return "Dota 2: в меню";
-      return "Dota 2: статус матча неизвестен";
+      return "Dota 2: открыта";
     }
     if (item.presence_state === "in_game") {
       const name = item.presence_game || item.presence_display;
@@ -755,6 +753,5 @@ const init = async () => {
 };
 
 init();
-
 
 
