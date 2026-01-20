@@ -13,13 +13,11 @@ from pydantic import BaseModel, Field
 
 from config import (
     ADMIN_API_KEY,
-    FUNPAY_GOLDEN_KEY,
     DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
     STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunPayAPI import Account as FPAccount
-from FunpayHandler.funpay import startFunpay
 from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
@@ -40,12 +38,7 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 @app.on_event("startup")
 def start_background_services() -> None:
-    if not FUNPAY_GOLDEN_KEY:
-        logger.warning("FUNPAY_GOLDEN_KEY is empty. FunPay automation not started.")
-        return
-    thread = Thread(target=startFunpay, daemon=True)
-    thread.start()
-    logger.info("FunPay automation started in background thread.")
+    logger.info("Startup complete (no global FunPay session configured).")
 
 
 def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
@@ -154,7 +147,7 @@ class GoldenKeyUpdate(BaseModel):
 def health() -> dict:
     return {
         "status": "ok",
-        "funpay_enabled": bool(FUNPAY_GOLDEN_KEY),
+        "funpay_enabled": False,
         "funpay_ready": False,
     }
 
