@@ -9,7 +9,7 @@ FunpaySeller is a web-first rental service for Steam accounts with FunPay automa
 - Web frontend served from `/Public`.
 - JSON APIs for stats and notifications.
 
-## Code structure (backend)
+## Code structure (backend) 
 
 - `app.py` — FastAPI app (REST + static UI).
 - `main.py` — local runner (`uvicorn app:app`).
