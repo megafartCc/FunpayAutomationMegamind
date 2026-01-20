@@ -84,5 +84,5 @@ app.get('/presence/:steamid', (req, res) => {
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log([bridge] listening on ));
+app.listen(port, () => console.log(`[bridge] listening on ${port}`));
 
