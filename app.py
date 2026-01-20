@@ -18,7 +18,8 @@ from config import (
     STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
-from FunpayHandler.funpay import get_account, startFunpay
+from FunPayAPI import Account as FPAccount
+from FunpayHandler.funpay import startFunpay
 from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
@@ -82,11 +83,16 @@ def current_user_id(request: Request) -> int | None:
     return user.get("id") if user else None
 
 
-def require_funpay_account():
-    account = get_account()
-    if account is None:
+def require_funpay_account(request: Request):
+    user = getattr(request.state, "user", None)
+    token = (user or {}).get("golden_key") or FUNPAY_GOLDEN_KEY
+    if not token:
+        raise HTTPException(status_code=503, detail="FunPay golden key not configured")
+    try:
+        acc = FPAccount(token).get()
+    except Exception:
         raise HTTPException(status_code=503, detail="FunPay session not initialized")
-    return account
+    return acc
 
 
 class AccountCreate(BaseModel):
