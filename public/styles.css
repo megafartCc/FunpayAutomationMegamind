@@ -353,12 +353,14 @@ select:focus {
   display: grid;
   grid-template-columns: minmax(220px, 280px) 1fr;
   gap: 16px;
+  align-items: stretch;
 }
 
 .chat-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 440px;
 }
 
 .chat-list-head {
@@ -367,7 +369,8 @@ select:focus {
 }
 
 .chat-items {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   max-height: 420px;
   overflow-y: auto;
@@ -387,16 +390,24 @@ select:focus {
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  width: 100%;
+  align-items: center;
 }
 
 .chat-item h4 {
   font-size: 0.95rem;
+  line-height: 1.2;
 }
 
 .chat-item p {
   color: var(--muted);
   font-size: 0.8rem;
   margin-top: 6px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .chat-item .badge {
