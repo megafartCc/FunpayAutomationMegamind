@@ -77,6 +77,11 @@ class ChatMessage(BaseModel):
     text: str
 
 
+class LotMapping(BaseModel):
+    lot_number: int = Field(ge=1)
+    account_id: int = Field(ge=1)
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -104,6 +109,25 @@ def notifications(limit: int = 50) -> dict:
 @app.get("/api/accounts")
 def accounts() -> dict:
     return {"items": db.get_all_accounts()}
+
+
+@app.get("/api/lots")
+def lots() -> dict:
+    return {"items": db.list_lot_mappings()}
+
+
+@app.post("/api/lots", dependencies=[Depends(require_admin)])
+def create_lot_mapping(payload: LotMapping) -> dict:
+    success = db.set_lot_mapping(payload.lot_number, payload.account_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"success": True}
+
+
+@app.delete("/api/lots/{lot_number}", dependencies=[Depends(require_admin)])
+def delete_lot_mapping(lot_number: int) -> dict:
+    db.delete_lot_mapping(lot_number)
+    return {"success": True}
 
 
 @app.get("/api/accounts/{account_id}")

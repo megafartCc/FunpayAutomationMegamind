@@ -133,6 +133,16 @@ class SQLiteDB:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lots (
+                    lot_number INT PRIMARY KEY,
+                    account_id INT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         else:
             cursor.execute(
                 """
@@ -154,6 +164,16 @@ class SQLiteDB:
                 CREATE TABLE IF NOT EXISTS authorized_users (
                     user_id INTEGER PRIMARY KEY,
                     authorized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lots (
+                    lot_number INTEGER PRIMARY KEY,
+                    account_id INTEGER NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
                 )
                 """
             )
@@ -410,6 +430,136 @@ class SQLiteDB:
             for row in rows
         ]
         return accounts
+
+    def list_lot_mappings(self) -> list:
+        cursor = self._cursor()
+        cursor.execute(
+            """
+            SELECT l.lot_number, l.account_id, a.account_name, a.owner
+            FROM lots l
+            JOIN accounts a ON a.ID = l.account_id
+            ORDER BY l.lot_number
+            """
+        )
+        rows = cursor.fetchall()
+        if self.db_type == "mysql":
+            cursor.close()
+        return [
+            {
+                "lot_number": row[0],
+                "account_id": row[1],
+                "account_name": row[2],
+                "owner": row[3],
+            }
+            for row in rows
+        ]
+
+    def set_lot_mapping(self, lot_number: int, account_id: int) -> bool:
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                "SELECT ID FROM accounts WHERE ID = ?",
+                (account_id,),
+            )
+            if cursor.fetchone() is None:
+                return False
+            cursor.execute(
+                "DELETE FROM lots WHERE lot_number = ? OR account_id = ?",
+                (lot_number, account_id),
+            )
+            cursor.execute(
+                "INSERT INTO lots (lot_number, account_id) VALUES (?, ?)",
+                (lot_number, account_id),
+            )
+            self.conn.commit()
+            return True
+        finally:
+            if self.db_type == "mysql":
+                cursor.close()
+
+    def delete_lot_mapping(self, lot_number: int) -> None:
+        cursor = self._cursor()
+        cursor.execute("DELETE FROM lots WHERE lot_number = ?", (lot_number,))
+        if self.db_type == "mysql":
+            cursor.close()
+
+    def get_account_by_lot_number(self, lot_number: int):
+        cursor = self._cursor()
+        cursor.execute(
+            """
+            SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
+            FROM lots l
+            JOIN accounts a ON a.ID = l.account_id
+            WHERE l.lot_number = ?
+            """,
+            (lot_number,),
+        )
+        row = cursor.fetchone()
+        if self.db_type == "mysql":
+            cursor.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "account_name": row[1],
+            "login": row[2],
+            "password": row[3],
+            "rental_duration": row[4],
+            "owner": row[5],
+            "rental_start": row[6],
+            "mafile_json": row[7],
+        }
+
+    def get_available_lot_accounts(self) -> list:
+        cursor = self._cursor()
+        cursor.execute(
+            """
+            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number
+            FROM lots l
+            JOIN accounts a ON a.ID = l.account_id
+            WHERE a.owner IS NULL
+            ORDER BY l.lot_number
+            """
+        )
+        rows = cursor.fetchall()
+        if self.db_type == "mysql":
+            cursor.close()
+        return [
+            {
+                "id": row[0],
+                "account_name": row[1],
+                "owner": row[2],
+                "rental_start": row[3],
+                "rental_duration": row[4],
+                "lot_number": row[5],
+            }
+            for row in rows
+        ]
+
+    def get_all_lot_accounts(self) -> list:
+        cursor = self._cursor()
+        cursor.execute(
+            """
+            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number
+            FROM lots l
+            JOIN accounts a ON a.ID = l.account_id
+            ORDER BY l.lot_number
+            """
+        )
+        rows = cursor.fetchall()
+        if self.db_type == "mysql":
+            cursor.close()
+        return [
+            {
+                "id": row[0],
+                "account_name": row[1],
+                "owner": row[2],
+                "rental_start": row[3],
+                "rental_duration": row[4],
+                "lot_number": row[5],
+            }
+            for row in rows
+        ]
 
     def delete_account_by_id(self, account_id: int) -> bool:
         """

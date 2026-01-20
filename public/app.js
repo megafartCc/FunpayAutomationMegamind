@@ -42,6 +42,12 @@ const ui = {
   },
   addForm: document.getElementById("addAccountForm"),
   addStatus: document.getElementById("addStatus"),
+  lots: {
+    form: document.getElementById("lotForm"),
+    number: document.getElementById("lotNumber"),
+    account: document.getElementById("lotAccount"),
+    table: document.getElementById("lotsTable"),
+  },
 };
 
 let accountsCache = [];
@@ -223,6 +229,39 @@ const renderInventory = (items) => {
   });
 };
 
+const renderLotSelect = (accounts) => {
+  if (!ui.lots.account) return;
+  const options = accounts
+    .map(
+      (account) =>
+        `<option value="${account.id}">${escapeHtml(account.account_name)} (ID ${account.id})</option>`
+    )
+    .join("");
+  ui.lots.account.innerHTML = `<option value="">Выберите аккаунт</option>${options}`;
+};
+
+const renderLots = (lots) => {
+  if (!ui.lots.table) return;
+  if (!lots.length) {
+    ui.lots.table.innerHTML = "<tr><td colspan=\"4\">Лоты не настроены.</td></tr>";
+    return;
+  }
+  ui.lots.table.innerHTML = lots
+    .map(
+      (lot) => `
+        <tr>
+          <td>№${lot.lot_number}</td>
+          <td>${escapeHtml(lot.account_name)} (ID ${lot.account_id})</td>
+          <td>${escapeHtml(lot.owner || "-")}</td>
+          <td>
+            <button class="btn ghost" data-lot="${lot.lot_number}">Удалить</button>
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+};
+
 const renderNotifications = (items) => {
   if (!items.length) {
     ui.notifications.innerHTML = "<div class=\"notice\"><h4>No notifications</h4><p>System events will appear here.</p></div>";
@@ -332,18 +371,21 @@ const loadChatHistory = async () => {
 
 const loadAll = async () => {
   try {
-    const [health, stats, accounts, rentals, notices] = await Promise.all([
+    const [health, stats, accounts, rentals, notices, lots] = await Promise.all([
       apiFetch("/api/health"),
       apiFetch("/api/stats"),
       apiFetch("/api/accounts"),
       apiFetch("/api/rentals/active"),
       apiFetch("/api/notifications"),
+      apiFetch("/api/lots"),
     ]);
 
     renderHealth(health);
     renderStats(stats);
     accountsCache = accounts.items || [];
     renderInventory(accountsCache);
+    renderLotSelect(accountsCache);
+    renderLots(lots.items || []);
     renderActiveRentals(rentals.items || []);
     renderNotifications(notices.items || []);
 
@@ -416,6 +458,45 @@ ui.addForm.addEventListener("submit", async (event) => {
     toast(error.message || "Failed to add account", true);
   }
 });
+
+if (ui.lots.form) {
+  ui.lots.form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const lotNumber = Number(ui.lots.number.value || 0);
+    const accountId = Number(ui.lots.account.value || 0);
+    if (!lotNumber || !accountId) {
+      toast("Укажите номер лота и аккаунт.", true);
+      return;
+    }
+    try {
+      await apiFetch("/api/lots", {
+        method: "POST",
+        body: JSON.stringify({ lot_number: lotNumber, account_id: accountId }),
+      });
+      ui.lots.form.reset();
+      toast("Лот сохранен.");
+      loadAll();
+    } catch (error) {
+      toast(error.message || "Не удалось сохранить лот", true);
+    }
+  });
+}
+
+if (ui.lots.table) {
+  ui.lots.table.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-lot]");
+    if (!button) return;
+    const lotNumber = Number(button.dataset.lot || 0);
+    if (!lotNumber) return;
+    try {
+      await apiFetch(`/api/lots/${lotNumber}`, { method: "DELETE" });
+      toast("Лот удален.");
+      loadAll();
+    } catch (error) {
+      toast(error.message || "Не удалось удалить лот", true);
+    }
+  });
+}
 
 ui.manage.update.addEventListener("click", async () => {
   if (!selectedId) {

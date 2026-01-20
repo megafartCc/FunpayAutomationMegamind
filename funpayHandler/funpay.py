@@ -36,6 +36,35 @@ acc = None
 runner = None
 
 
+def match_account_name(order_name: str, all_accounts: list[str]) -> str | None:
+    cleaned_order_name = re.sub(r"[^\w\s]", " ", order_name)
+    cleaned_order_name = " ".join(cleaned_order_name.split())
+    matched_account = None
+    max_similarity = 0
+
+    for account in all_accounts:
+        cleaned_account = re.sub(r"[^\w\s]", " ", account)
+        cleaned_account = " ".join(cleaned_account.split())
+
+        if cleaned_account.lower() in cleaned_order_name.lower():
+            similarity = len(cleaned_account)
+            if similarity > max_similarity:
+                max_similarity = similarity
+                matched_account = account
+
+    return matched_account
+
+
+def parse_lot_number(text: str) -> int | None:
+    match = re.search(r"№\s*(\d+)", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def refresh_session():
     global acc, runner
     logger.info("Refreshing FunPay session...")
@@ -223,30 +252,31 @@ def startFunpay():
                 number_of_orders = event.order.amount
 
                 logger.info(f"Original order name: {order_name}")
-
-                cleaned_order_name = re.sub(r"[^\w\s]", " ", order_name)
-                cleaned_order_name = " ".join(cleaned_order_name.split())
-                logger.info(f"Cleaned order name: {cleaned_order_name}")
-
-                matched_account = None
-                max_similarity = 0
-
-                for account in all_accounts:
-                    cleaned_account = re.sub(r"[^\w\s]", " ", account)
-                    cleaned_account = " ".join(cleaned_account.split())
-
-                    if cleaned_account.lower() in cleaned_order_name.lower():
-                        similarity = len(cleaned_account)
-                        if similarity > max_similarity:
-                            max_similarity = similarity
-                            matched_account = account
-
-                if matched_account:
-                    order_name = matched_account
-                    logger.info(f"Matched order name: {order_name}")
+                lot_number = parse_lot_number(order_name)
+                if lot_number is not None:
+                    specific_account = db.get_account_by_lot_number(lot_number)
+                    if not specific_account:
+                        acc.send_message(
+                            chat.id,
+                            "Лот не привязан к аккаунту. Дождитесь ответа администратора.",
+                        )
+                        send_message_to_admin(
+                            "ЛОТ БЕЗ ПРИВЯЗКИ\n\n"
+                            f"Покупатель: {event.order.buyer_username}\n"
+                            f"Лот: №{lot_number}\n"
+                            f"Заказ: {event.order.id}"
+                        )
+                        continue
+                    order_name = specific_account["account_name"]
+                    logger.info(f"Matched lot number: {lot_number} -> {order_name}")
                 else:
-                    logger.warning(f"No matching account found for order: {order_name}")
-                    continue
+                    matched_account = match_account_name(order_name, all_accounts)
+                    if matched_account:
+                        order_name = matched_account
+                        logger.info(f"Matched order name: {order_name}")
+                    else:
+                        logger.warning(f"No matching account found for order: {order_name}")
+                        continue
 
                 if order_name in all_accounts:
                     logger.info(f"New order: {order_name}")
@@ -260,7 +290,8 @@ def startFunpay():
                         )
                         logger.info(f"User {event.order.buyer_username} ordered {number_of_orders} accounts but will receive only 1 for {number_of_orders} hours")
 
-                    specific_account = db.get_account_by_name(order_name)
+                    if lot_number is None:
+                        specific_account = db.get_account_by_name(order_name)
                     
                     if not specific_account:
                         logger.error(f"Account with name '{order_name}' not found in database")
@@ -269,17 +300,15 @@ def startFunpay():
                             f"Ошибка: аккаунт '{order_name}' не найден.\n"
                             f"Возврат оформлен. Напишите, поможем."
                         )
-                        acc.refund(event.order.id)
                         continue
                     
                     if specific_account['owner'] is not None:
                         logger.warning(f"Account '{order_name}' is already rented by {specific_account['owner']}")
                         acc.send_message(
                             chat.id,
-                            f"Аккаунт '{order_name}' сейчас занят.\n"
-                            f"Возврат оформлен. Напишите, подберём замену."
+                            "???? ??????? ?????? ?????.\n"
+                            "????????? ?????????????? ??? ????????, ????? ??????? ???????."
                         )
-                        acc.refund(event.order.id)
                         continue
                     
                     existing_rentals = db.get_user_accounts_by_name(event.order.buyer_username, order_name)
@@ -384,6 +413,32 @@ def startFunpay():
                 
                 logger.info(f"New order processed successfully.")
 
+            elif hasattr(events.EventTypes, "ORDER_PAID") and event.type is events.EventTypes.ORDER_PAID:
+                order_name = event.order.description
+                lot_number = parse_lot_number(order_name)
+                matched_account = None
+                if lot_number is not None:
+                    specific_account = db.get_account_by_lot_number(lot_number)
+                    if specific_account:
+                        matched_account = specific_account["account_name"]
+                if matched_account is None:
+                    all_accounts = db.get_all_account_names()
+                    matched_account = match_account_name(order_name, all_accounts)
+                if matched_account:
+                    logger.info(
+                        f"Order paid for rental lot. Buyer: {event.order.buyer_username}, Lot: {matched_account}, Order ID: {event.order.id}"
+                    )
+                    send_message_to_admin(
+                        "?????? ????????\n\n"
+                        f"??????????: {event.order.buyer_username}\n"
+                        f"???: {matched_account}\n"
+                        f"?????: {event.order.id}\n"
+                        f"?????: {event.order.price} ?"
+                    )
+                else:
+                    logger.info(
+                        f"Order paid for non-rental lot. Buyer: {event.order.buyer_username}, Order ID: {event.order.id}"
+                    )
             if event.type is events.EventTypes.NEW_MESSAGE:
                 logger.info("Processing new message event...")
 
@@ -484,35 +539,20 @@ def startFunpay():
 
                     elif message_text == "!stock":
                         try:
-                            accounts = db.get_all_accounts()
-                            if not accounts:
-                                acc.send_message(chat.id, "Нет аккаунтов в базе.")
+                            available_lots = db.get_available_lot_accounts()
+                            if available_lots:
+                                lines = ["????????? ????:"]
+                                for account in available_lots:
+                                    lines.append(f"{account['account_name']} - ?{account['lot_number']}")
+                                acc.send_message(chat.id, "\n".join(lines))
                             else:
-                                available = []
-                                for account in accounts:
-                                    if account.get("owner") is None:
-                                        available.append(account["account_name"])
-
-                                if available:
-                                    counts = {}
-                                    for name in available:
-                                        counts[name] = counts.get(name, 0) + 1
-                                    parts = []
-                                    for name in sorted(counts.keys()):
-                                        count = counts[name]
-                                        if count > 1:
-                                            parts.append(f"{name} (x{count})")
-                                        else:
-                                            parts.append(name)
-                                    acc.send_message(
-                                        chat.id,
-                                        "Свободные аккаунты: " + ", ".join(parts),
-                                    )
+                                all_lots = db.get_all_lot_accounts()
+                                if not all_lots:
+                                    acc.send_message(chat.id, "??? ????????? ?????.")
                                 else:
                                     current_time = datetime.now(tz=moscow_tz)
                                     next_expiry = None
-
-                                    for account in accounts:
+                                    for account in all_lots:
                                         if account.get("owner") is None:
                                             continue
                                         rental_start = account.get("rental_start")
@@ -523,9 +563,7 @@ def startFunpay():
                                             start_dt = rental_start
                                         else:
                                             try:
-                                                start_dt = datetime.strptime(
-                                                    rental_start, "%Y-%m-%d %H:%M:%S"
-                                                )
+                                                start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
                                             except ValueError:
                                                 continue
                                         if start_dt.tzinfo is None:
@@ -533,7 +571,6 @@ def startFunpay():
                                         expiry_time = start_dt + timedelta(hours=int(duration))
                                         if next_expiry is None or expiry_time < next_expiry:
                                             next_expiry = expiry_time
-
                                     if next_expiry:
                                         remaining = next_expiry - current_time
                                         if remaining.total_seconds() < 0:
@@ -542,19 +579,16 @@ def startFunpay():
                                         minutes = int((remaining.total_seconds() % 3600) // 60)
                                         acc.send_message(
                                             chat.id,
-                                            f"Все в аренде. Ближайший аккаунт освободится через {hours}ч {minutes}м (в {next_expiry.strftime('%H:%M:%S')} МСК).",
+                                            f"??? ? ??????. ????????? ??? ??????????? ????? - {hours} ? {minutes} ??? (? {next_expiry.strftime('%H:%M:%S')} ???).",
                                         )
                                     else:
                                         acc.send_message(
                                             chat.id,
-                                            "Все в аренде. Нет данных о ближайшем освобождении.",
+                                            "??? ? ??????. ??? ?????? ? ????????? ????????????.",
                                         )
                         except Exception as e:
-                            logger.error(
-                                f"Failed to load stock for {event.message.author}: {str(e)}"
-                            )
-                            acc.send_message(chat.id, "Не удалось получить данные по наличию.")
-
+                            logger.error(f"Failed to load stock for {event.message.author}: {str(e)}")
+                            acc.send_message(chat.id, "?? ??????? ???????? ?????? ?? ???????.")
                     elif event.message.type == types.MessageTypes.NEW_FEEDBACK:
                         try:
                             conn, cursor = db.open_connection()
