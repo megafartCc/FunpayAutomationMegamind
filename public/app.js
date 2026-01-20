@@ -7,8 +7,6 @@ const ui = {
   activeTable: document.getElementById("activeRentals"),
   inventoryTable: document.getElementById("inventoryTable"),
   notifications: document.getElementById("notificationsList"),
-  adminKey: document.getElementById("adminKey"),
-  saveKey: document.getElementById("saveKey"),
   refreshAll: document.getElementById("refreshAll"),
   search: document.getElementById("searchAccounts"),
   showPasswords: document.getElementById("showPasswords"),
@@ -87,6 +85,16 @@ const formatDate = (value) => {
   return parsed.toLocaleString();
 };
 
+const formatRentalEnd = (start, duration) => {
+  if (!start || !duration) return "-";
+  const parsed = new Date(start.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+  parsed.setHours(parsed.getHours() + Number(duration));
+  return parsed.toLocaleString();
+};
+
 const escapeHtml = (value) => {
   if (!value) return "";
   return value
@@ -139,7 +147,7 @@ const renderHealth = (status) => {
 
 const renderActiveRentals = (items) => {
   if (!items.length) {
-    ui.activeTable.innerHTML = "<tr><td colspan=\"6\">No active rentals.</td></tr>";
+    ui.activeTable.innerHTML = "<tr><td colspan=\"7\">No active rentals.</td></tr>";
     return;
   }
   ui.activeTable.innerHTML = items
@@ -151,6 +159,7 @@ const renderActiveRentals = (items) => {
           <td>${item.owner}</td>
           <td>${item.login}</td>
           <td>${formatDate(item.rental_start)}</td>
+          <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
           <td>${item.rental_duration}</td>
         </tr>
       `
@@ -284,10 +293,6 @@ const renderChatMessages = (items) => {
 };
 
 const loadChats = async () => {
-  if (!getAdminKey()) {
-    ui.chats.list.innerHTML = "<div class=\"notice\"><h4>Admin key needed</h4><p>Set the admin key to load chats.</p></div>";
-    return;
-  }
   try {
     const data = await apiFetch("/api/chats");
     chatsCache = data.items || [];
@@ -337,12 +342,6 @@ const loadAll = async () => {
     toast(error.message || "Failed to load data", true);
   }
 };
-
-ui.saveKey.addEventListener("click", () => {
-  sessionStorage.setItem("adminKey", ui.adminKey.value.trim());
-  toast("Admin key saved.");
-  loadChats();
-});
 
 ui.refreshAll.addEventListener("click", () => {
   loadAll();
@@ -536,10 +535,17 @@ ui.manage.delete.addEventListener("click", async () => {
   }
 });
 
-const init = () => {
+const init = async () => {
   const savedKey = getAdminKey();
-  if (savedKey) {
-    ui.adminKey.value = savedKey;
+  if (!savedKey) {
+    try {
+      const data = await apiFetch("/api/admin-key");
+      if (data?.key) {
+        sessionStorage.setItem("adminKey", data.key);
+      }
+    } catch (error) {
+      // Ignore auto-key errors; other requests will surface auth failures.
+    }
   }
   loadAll();
 };

@@ -86,6 +86,11 @@ def health() -> dict:
     }
 
 
+@app.get("/api/admin-key")
+def admin_key() -> dict:
+    return {"key": ADMIN_API_KEY}
+
+
 @app.get("/api/stats")
 def stats() -> dict:
     return db.get_rental_statistics()
