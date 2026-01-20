@@ -256,7 +256,7 @@ def create_lot_mapping(payload: LotMapping, request: Request) -> dict:
 @app.delete("/api/lots/{lot_number}", dependencies=[Depends(require_admin)])
 def delete_lot_mapping(lot_number: int, request: Request) -> dict:
     uid = current_user_id(request)
-    db.delete_lot_mapping(lot_number)
+    db.delete_lot_mapping(lot_number, uid)
     return {"success": True}
 
 
@@ -290,48 +290,54 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
 
 
 @app.patch("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
-def update_account(account_id: int, payload: AccountUpdate) -> dict:
-    success = db.update_account(account_id, payload.dict(exclude_none=True))
+def update_account(account_id: int, payload: AccountUpdate, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.update_account(account_id, payload.dict(exclude_none=True), uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update account")
     return {"status": "ok"}
 
 
 @app.delete("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
-def delete_account(account_id: int) -> dict:
-    success = db.delete_account_by_id(account_id)
+def delete_account(account_id: int, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.delete_account_by_id(account_id, uid)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"status": "ok"}
 
 
 @app.post("/api/accounts/{account_id}/assign", dependencies=[Depends(require_admin)])
-def assign_account(account_id: int, payload: AssignRequest) -> dict:
-    success = db.set_account_owner(account_id, payload.owner)
+def assign_account(account_id: int, payload: AssignRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.set_account_owner(account_id, payload.owner, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Account already assigned")
     return {"status": "ok"}
 
 
 @app.post("/api/accounts/{account_id}/release", dependencies=[Depends(require_admin)])
-def release_account(account_id: int) -> dict:
-    success = db.release_account(account_id)
+def release_account(account_id: int, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.release_account(account_id, uid)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"status": "ok"}
 
 
 @app.post("/api/accounts/{account_id}/extend", dependencies=[Depends(require_admin)])
-def extend_account(account_id: int, payload: ExtendRequest) -> dict:
-    success = db.extend_rental_duration(account_id, payload.hours)
+def extend_account(account_id: int, payload: ExtendRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.extend_rental_duration(account_id, payload.hours, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rental")
     return {"status": "ok"}
 
 
 @app.post("/api/accounts/{account_id}/steam/deauthorize", dependencies=[Depends(require_admin)])
-async def steam_deauthorize(account_id: int) -> dict:
-    account = db.get_account_by_id(account_id)
+async def steam_deauthorize(account_id: int, request: Request) -> dict:
+    uid = current_user_id(request)
+    account = db.get_account_by_id(account_id, uid)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     mafile_json = account.get("mafile_json")
@@ -367,8 +373,9 @@ async def steam_deauthorize(account_id: int) -> dict:
 
 
 @app.post("/api/accounts/{account_id}/steam/password", dependencies=[Depends(require_admin)])
-async def steam_change_password(account_id: int, payload: SteamPasswordRequest) -> dict:
-    account = db.get_account_by_id(account_id)
+async def steam_change_password(account_id: int, payload: SteamPasswordRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    account = db.get_account_by_id(account_id, uid)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     mafile_json = account.get("mafile_json")
@@ -431,8 +438,9 @@ def user_rentals(owner: str) -> dict:
 
 
 @app.post("/api/rentals/user/{owner}/extend", dependencies=[Depends(require_admin)])
-def extend_owner(owner: str, payload: ExtendRequest) -> dict:
-    success = db.add_time_to_owner_accounts(owner, payload.hours)
+def extend_owner(owner: str, payload: ExtendRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.add_time_to_owner_accounts(owner, payload.hours, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rentals")
     return {"status": "ok"}

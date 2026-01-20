@@ -386,7 +386,7 @@ class SQLiteDB:
         ]
         return accounts
 
-    def set_account_owner(self, account_id: int, owner_id: str) -> bool:
+    def set_account_owner(self, account_id: int, owner_id: str, user_id: int | None = None) -> bool:
         """
         Set the owner of an account and record the rental start time with a +3 hours offset.
         Also marks all accounts with the same login as 'OTHER_ACCOUNT'.
@@ -397,37 +397,67 @@ class SQLiteDB:
                 "%Y-%m-%d %H:%M:%S"
             )
             # Update owner and set rental start time
-            cursor.execute(
-                """
-                UPDATE accounts 
-                SET owner = ?, rental_start = ?
-                WHERE ID = ? AND owner IS NULL
-                """,
-                (owner_id, rental_start, account_id),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    UPDATE accounts 
+                    SET owner = ?, rental_start = ?
+                    WHERE ID = ? AND owner IS NULL
+                    """,
+                    (owner_id, rental_start, account_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE accounts 
+                    SET owner = ?, rental_start = ?
+                    WHERE ID = ? AND owner IS NULL AND user_id = ?
+                    """,
+                    (owner_id, rental_start, account_id, user_id),
+                )
             if cursor.rowcount == 0:
                 return False
             # Get the login of the updated account
-            cursor.execute(
-                """
-                SELECT login 
-                FROM accounts 
-                WHERE ID = ?
-                """,
-                (account_id,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT login 
+                    FROM accounts 
+                    WHERE ID = ?
+                    """,
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT login 
+                    FROM accounts 
+                    WHERE ID = ? AND user_id = ?
+                    """,
+                    (account_id, user_id),
+                )
             login_row = cursor.fetchone()
             if login_row:
                 login = login_row[0]
                 # Mark all accounts with the same login as 'OTHER_ACCOUNT'
-                cursor.execute(
-                    """
-                    UPDATE accounts 
-                    SET owner = 'OTHER_ACCOUNT'
-                    WHERE login = ? AND owner IS NULL
-                    """,
-                    (login,),
-                )
+                if user_id in (None, 0):
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = 'OTHER_ACCOUNT'
+                        WHERE login = ? AND owner IS NULL
+                        """,
+                        (login,),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = 'OTHER_ACCOUNT'
+                        WHERE login = ? AND owner IS NULL AND user_id = ?
+                        """,
+                        (login, user_id),
+                    )
             self.conn.commit()
             return True
         except Exception as e:
@@ -621,9 +651,12 @@ class SQLiteDB:
             if self.db_type == "mysql":
                 cursor.close()
 
-    def delete_lot_mapping(self, lot_number: int) -> None:
+    def delete_lot_mapping(self, lot_number: int, user_id: int | None = None) -> None:
         cursor = self._cursor()
-        cursor.execute("DELETE FROM lots WHERE lot_number = ?", (lot_number,))
+        if user_id in (None, 0):
+            cursor.execute("DELETE FROM lots WHERE lot_number = ?", (lot_number,))
+        else:
+            cursor.execute("DELETE FROM lots WHERE lot_number = ? AND user_id = ?", (lot_number, user_id))
         if self.db_type == "mysql":
             cursor.close()
 
@@ -753,32 +786,51 @@ class SQLiteDB:
             for row in rows
         ]
 
-    def delete_account_by_id(self, account_id: int) -> bool:
+    def delete_account_by_id(self, account_id: int, user_id: int | None = None) -> bool:
         """
         Delete all accounts that share the same login as the account with the given ID.
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT login
-                FROM accounts
-                WHERE ID = ?
-                """,
-                (account_id,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT login
+                    FROM accounts
+                    WHERE ID = ?
+                    """,
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT login
+                    FROM accounts
+                    WHERE ID = ? AND user_id = ?
+                    """,
+                    (account_id, user_id),
+                )
             result = cursor.fetchone()
             if not result:
                 logger.error(f"No account found with ID {account_id}.")
                 return False
             login = result[0]
-            cursor.execute(
-                """
-                DELETE FROM accounts
-                WHERE login = ?
-                """,
-                (login,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    DELETE FROM accounts
+                    WHERE login = ?
+                    """,
+                    (login,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    DELETE FROM accounts
+                    WHERE login = ? AND user_id = ?
+                    """,
+                    (login, user_id),
+                )
             success = cursor.rowcount > 0
             self.conn.commit()
             return success
@@ -788,18 +840,28 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def release_account(self, account_id: int) -> bool:
+    def release_account(self, account_id: int, user_id: int | None = None) -> bool:
         """Clear owner and rental start for an account."""
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                UPDATE accounts
-                SET owner = NULL, rental_start = NULL
-                WHERE ID = ?
-                """,
-                (account_id,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                    SET owner = NULL, rental_start = NULL
+                    WHERE ID = ?
+                    """,
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                    SET owner = NULL, rental_start = NULL
+                    WHERE ID = ? AND user_id = ?
+                    """,
+                    (account_id, user_id),
+                )
             success = cursor.rowcount > 0
             self.conn.commit()
             return success
@@ -810,7 +872,7 @@ class SQLiteDB:
             if cursor:
                 cursor.close()
 
-    def update_account(self, account_id: int, fields: dict) -> bool:
+    def update_account(self, account_id: int, fields: dict, user_id: int | None = None) -> bool:
         """Update editable fields for a single account."""
         allowed_fields = {
             "account_name",
@@ -829,11 +891,15 @@ class SQLiteDB:
             set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
             values = list(updates.values())
             values.append(account_id)
+            where_user = ""
+            if user_id not in (None, 0):
+                where_user = " AND user_id = ?"
+                values.append(user_id)
             cursor.execute(
                 f"""
                 UPDATE accounts
                 SET {set_clause}
-                WHERE ID = ?
+                WHERE ID = ?{where_user}
                 """,
                 values,
             )
@@ -1082,7 +1148,7 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def add_time_to_owner_accounts(self, owner: str, hours: int) -> bool:
+    def add_time_to_owner_accounts(self, owner: str, hours: int, user_id: int | None = None) -> bool:
         """
         Extract the rental_start timestamp, add the specified number of hours to it,
         and update the rental_start field for all accounts with the same owner.
@@ -1090,14 +1156,24 @@ class SQLiteDB:
         try:
             cursor = self._cursor()
             # Retrieve the current rental_start timestamps for the owner
-            cursor.execute(
-                """
-                SELECT ID, rental_start
-                FROM accounts
-                WHERE owner = ? AND rental_start IS NOT NULL
-                """,
-                (owner,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT ID, rental_start
+                    FROM accounts
+                    WHERE owner = ? AND rental_start IS NOT NULL
+                    """,
+                    (owner,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT ID, rental_start
+                    FROM accounts
+                    WHERE owner = ? AND rental_start IS NOT NULL AND user_id = ?
+                    """,
+                    (owner, user_id),
+                )
             accounts = cursor.fetchall()
 
             if not accounts:
@@ -1497,7 +1573,7 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def extend_rental_duration(self, account_id: int, additional_hours: int) -> bool:
+    def extend_rental_duration(self, account_id: int, additional_hours: int, user_id: int | None = None) -> bool:
         """
         Extend the rental duration for a specific account.
         
@@ -1510,14 +1586,24 @@ class SQLiteDB:
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                UPDATE accounts 
-                SET rental_duration = rental_duration + ?
-                WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT'
-                """,
-                (additional_hours, account_id),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    UPDATE accounts 
+                    SET rental_duration = rental_duration + ?
+                    WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT'
+                    """,
+                    (additional_hours, account_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE accounts 
+                    SET rental_duration = rental_duration + ?
+                    WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT' AND user_id = ?
+                    """,
+                    (additional_hours, account_id, user_id),
+                )
             success = cursor.rowcount > 0
             self.conn.commit()
             return success
