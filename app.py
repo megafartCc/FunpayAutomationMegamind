@@ -221,7 +221,7 @@ async def steam_deauthorize(account_id: int) -> dict:
     if not mafile_json:
         raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
 
-    if BLOCK_MANUAL_DEAUTHORIZE_WHILE_IN_MATCH and STEAM_WEB_API_KEY:
+    if BLOCK_MANUAL_DEAUTHORIZE_WHILE_IN_MATCH:
         try:
             data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
             steamid_value = (data or {}).get("Session", {}).get("SteamID")
@@ -238,7 +238,7 @@ async def steam_deauthorize(account_id: int) -> dict:
             if in_match:
                 raise HTTPException(
                     status_code=409,
-                    detail="Steam account is currently in a Dota 2 match. Try again after the match ends.",
+                    detail="Аккаунт сейчас в матче Dota 2. Попробуйте снова после окончания матча.",
                 )
 
     ok = await logout_all_steam_sessions(

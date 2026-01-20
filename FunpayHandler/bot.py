@@ -786,8 +786,6 @@ class FunpayBot:
     ) -> bool:
         if not EXPIRE_WAIT_DOTA_ON_EXPIRE:
             return False
-        if not STEAM_WEB_API_KEY:
-            return False
         if not mafile_json:
             return False
 
