@@ -15,6 +15,14 @@ from logger import logger
 import mysql.connector as mysql_connector
 
 
+class _NoopConnection:
+    def commit(self):
+        return None
+
+    def close(self):
+        return None
+
+
 class _CursorWrapper:
     def __init__(self, cursor, formatter, connection=None):
         self._cursor = cursor
