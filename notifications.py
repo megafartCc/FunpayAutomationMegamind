@@ -78,10 +78,13 @@ def send_message_to_admin(
         conn = _get_conn()
         _ensure_table(conn)
         cursor = conn.cursor()
+        placeholders = (
+            "%s, %s, %s, %s, %s" if DATABASE_ENGINE == "mysql" else "?, ?, ?, ?, ?"
+        )
         cursor.execute(
-            """
+            f"""
             INSERT INTO notifications (created_at, level, message, owner, account_id)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES ({placeholders})
             """,
             (datetime.utcnow().isoformat(), level, message, owner, account_id),
         )
@@ -97,12 +100,13 @@ def list_notifications(limit: int = 50) -> List[Dict]:
         conn = _get_conn()
         _ensure_table(conn)
         cursor = conn.cursor()
+        limit_placeholder = "%s" if DATABASE_ENGINE == "mysql" else "?"
         cursor.execute(
-            """
+            f"""
             SELECT id, created_at, level, message, owner, account_id
             FROM notifications
             ORDER BY created_at DESC
-            LIMIT ?
+            LIMIT {limit_placeholder}
             """,
             (limit,),
         )
