@@ -49,6 +49,9 @@ setInterval(() => {
 client.on("user", (sid, user) => {
   const id64 = sid.getSteamID64();
   const rp = user.rich_presence || {};
+  if (user.gameid === "570" || user.gameid === 570) {
+    console.log("[bridge] Dota RP", id64, rp);
+  }
   presence.set(id64, {
     steamid64: id64,
     persona_state: user.persona_state,
@@ -65,8 +68,24 @@ function isInDotaMatch(rp) {
   const hasLevel = rp.level !== undefined;
   const hasMatchId = rp.matchid !== undefined || rp.watchable_match_id !== undefined;
   const hasStateOrMode = rp.state !== undefined || rp.mode !== undefined;
-  const indicators = ["heroselection", "strategytime", "playing", "ranked", "turbo"];
-  return hasLevel || hasMatchId || hasStateOrMode || indicators.some((kw) => display.includes(kw));
+  const hasLobby = rp.lobby_id !== undefined || rp.lobbyid !== undefined;
+  const indicators = [
+    "heroselection",
+    "strategytime",
+    "playing",
+    "ranked",
+    "turbo",
+    "captains",
+    "draft",
+    "match",
+  ];
+  return (
+    hasLevel ||
+    hasMatchId ||
+    hasLobby ||
+    hasStateOrMode ||
+    indicators.some((kw) => display.includes(kw))
+  );
 }
 
 function logOn() {
