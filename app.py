@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from threading import Thread
 from typing import Optional
@@ -11,6 +12,13 @@ from pydantic import BaseModel, Field
 from config import (
     ADMIN_API_KEY,
     FUNPAY_GOLDEN_KEY,
+    DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
+    STEAM_PRESENCE_ENABLED,
+    STEAM_PRESENCE_IDENTITY_SECRET,
+    STEAM_PRESENCE_LOGIN,
+    STEAM_PRESENCE_PASSWORD,
+    STEAM_PRESENCE_REFRESH_TOKEN,
+    STEAM_PRESENCE_SHARED_SECRET,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunpayHandler.funpay import get_account, startFunpay
@@ -18,6 +26,7 @@ from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
+from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
 
@@ -32,12 +41,37 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 @app.on_event("startup")
 def start_background_services() -> None:
+    try:
+        init_presence_bot(
+            enabled=STEAM_PRESENCE_ENABLED,
+            login=STEAM_PRESENCE_LOGIN,
+            password=STEAM_PRESENCE_PASSWORD,
+            shared_secret=STEAM_PRESENCE_SHARED_SECRET or None,
+            identity_secret=STEAM_PRESENCE_IDENTITY_SECRET or None,
+            refresh_token=STEAM_PRESENCE_REFRESH_TOKEN or None,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to start Steam presence bot: {exc}")
+
     if not FUNPAY_GOLDEN_KEY:
         logger.warning("FUNPAY_GOLDEN_KEY is empty. FunPay automation not started.")
         return
     thread = Thread(target=startFunpay, daemon=True)
     thread.start()
     logger.info("FunPay automation started in background thread.")
+
+
+def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
+    try:
+        data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
+        value = (data or {}).get("Session", {}).get("SteamID")
+        if value is None:
+            value = (data or {}).get("steamid") or (data or {}).get("SteamID")
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
 def require_admin(request: Request) -> None:
@@ -216,6 +250,24 @@ async def steam_deauthorize(account_id: int) -> dict:
     mafile_json = account.get("mafile_json")
     if not mafile_json:
         raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
+
+    if DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE:
+        bot = get_presence_bot()
+        if bot is not None:
+            steamid64 = _steamid64_from_mafile(mafile_json)
+            if steamid64 is not None:
+                if not bot.wait_ready(timeout=0.5):
+                    raise HTTPException(status_code=503, detail="Steam presence bot is not ready yet. Try again.")
+                snapshot = bot.get_cached(steamid64)
+                if snapshot is None:
+                    snapshot = await bot.fetch_presence(steamid64)
+                if snapshot and snapshot.in_match:
+                    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
+                    extra = f" ({steam_display})" if steam_display else ""
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Аккаунт сейчас в матче Dota 2{extra}. Попробуйте снова после окончания матча.",
+                    )
 
     ok = await logout_all_steam_sessions(
         steam_login=account.get("login") or account.get("account_name"),
