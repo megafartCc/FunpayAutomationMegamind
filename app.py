@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Optional
 from urllib.parse import quote
+import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -59,11 +60,21 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
 
 
 def require_admin(request: Request) -> None:
-    if not ADMIN_API_KEY:
-        return
-    key = request.headers.get("x-admin-key")
-    if key != ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid admin key")
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(None, 1)[1].strip()
+        if token:
+            user = db.get_user_by_token(token)
+            if user:
+                request.state.user = user
+                return
+    # fallback to legacy admin key
+    if ADMIN_API_KEY:
+        key = request.headers.get("x-admin-key")
+        if key == ADMIN_API_KEY:
+            request.state.user = {"id": 0, "username": "admin"}
+            return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def require_funpay_account():
@@ -112,6 +123,21 @@ class SteamPasswordRequest(BaseModel):
     new_password: Optional[str] = None
 
 
+class AuthRegister(BaseModel):
+    username: str
+    password: str
+    golden_key: str
+
+
+class AuthLogin(BaseModel):
+    username: str
+    password: str
+
+
+class GoldenKeyUpdate(BaseModel):
+    golden_key: str
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -119,6 +145,50 @@ def health() -> dict:
         "funpay_enabled": bool(FUNPAY_GOLDEN_KEY),
         "funpay_ready": get_account() is not None,
     }
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: AuthRegister) -> dict:
+    token = db.create_user(payload.username, payload.password, payload.golden_key)
+    if not token:
+        raise HTTPException(status_code=400, detail="User already exists or invalid data")
+    return {"token": token, "username": payload.username}
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthLogin) -> dict:
+    user = db.verify_user_credentials(payload.username, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = secrets.token_urlsafe(32)
+    db.update_session_token(user["id"], token)
+    return {"token": token, "username": user["username"]}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request) -> dict:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(None, 1)[1].strip()
+        db.logout_token(token)
+    return {"success": True}
+
+
+@app.get("/api/auth/me", dependencies=[Depends(require_admin)])
+def auth_me(request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    return {"username": user.get("username"), "id": user.get("id")}
+
+
+@app.put("/api/auth/golden-key", dependencies=[Depends(require_admin)])
+def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    ok = db.update_golden_key(user["id"], payload.golden_key)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to update golden key")
+    return {"success": True}
 
 
 @app.get("/api/stats", dependencies=[Depends(require_admin)])

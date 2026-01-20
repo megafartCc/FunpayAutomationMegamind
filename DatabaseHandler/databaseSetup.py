@@ -1,4 +1,6 @@
 import sqlite3
+import secrets
+import bcrypt
 from datetime import datetime, timedelta
 
 from config import (
@@ -144,6 +146,18 @@ class SQLiteDB:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    username VARCHAR(255) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL,
+                    golden_key TEXT NOT NULL,
+                    session_token VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         else:
             cursor.execute(
                 """
@@ -176,6 +190,18 @@ class SQLiteDB:
                     lot_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    golden_key TEXT NOT NULL,
+                    session_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -1150,6 +1176,106 @@ class SQLiteDB:
     def close(self):
         """Close the persistent database connection."""
         self.conn.close()
+
+    # ---- User auth helpers ----
+
+    def _hash_password(self, password: str) -> str:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    def _verify_password(self, password: str, hashed: str) -> bool:
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        except Exception:
+            return False
+
+    def create_user(self, username: str, password: str, golden_key: str) -> str | None:
+        cursor = self._cursor()
+        token = secrets.token_urlsafe(32)
+        try:
+            cursor.execute(
+                """
+                INSERT INTO users (username, password_hash, golden_key, session_token)
+                VALUES (?, ?, ?, ?)
+                """,
+                (username, self._hash_password(password), golden_key, token),
+            )
+            self.conn.commit()
+            return token
+        except Exception as exc:
+            logger.error(f"Error creating user: {exc}")
+            return None
+        finally:
+            cursor.close()
+
+    def get_user_by_username(self, username: str):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                "SELECT id, username, password_hash, golden_key, session_token FROM users WHERE username = ?",
+                (username,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "username": row[1],
+                "password_hash": row[2],
+                "golden_key": row[3],
+                "session_token": row[4],
+            }
+        finally:
+            cursor.close()
+
+    def get_user_by_token(self, token: str):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                "SELECT id, username, golden_key FROM users WHERE session_token = ?",
+                (token,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {"id": row[0], "username": row[1], "golden_key": row[2], "session_token": token}
+        finally:
+            cursor.close()
+
+    def update_session_token(self, user_id: int, token: str) -> None:
+        cursor = self._cursor()
+        try:
+            cursor.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user_id))
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def update_golden_key(self, user_id: int, golden_key: str) -> bool:
+        cursor = self._cursor()
+        try:
+            cursor.execute("UPDATE users SET golden_key = ? WHERE id = ?", (golden_key, user_id))
+            self.conn.commit()
+            return True
+        except Exception as exc:
+            logger.error(f"Error updating golden key: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def logout_token(self, token: str) -> None:
+        cursor = self._cursor()
+        try:
+            cursor.execute("UPDATE users SET session_token = NULL WHERE session_token = ?", (token,))
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def verify_user_credentials(self, username: str, password: str):
+        user = self.get_user_by_username(username)
+        if not user:
+            return None
+        if not self._verify_password(password, user["password_hash"]):
+            return None
+        return user
 
     def add_authorized_user(self, user_id: int) -> bool:
         """Add a user to the authorized users list."""

@@ -76,54 +76,10 @@ const toast = (message, isError = false) => {
   setTimeout(() => ui.toast.classList.remove("show"), 2800);
 };
 
-const getAdminKey = () => sessionStorage.getItem("adminKey") || "";
+const getAdminKey = () => sessionStorage.getItem("adminToken") || "";
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-
-const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
-const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-
-const deriveKey = async (password, salt) => {
-  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(password), { name: "PBKDF2" }, false, [
-    "deriveKey",
-  ]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-};
-
-const encryptGoldenKey = async (password, goldenKey) => {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(password, salt);
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(goldenKey));
-  return { salt: toB64(salt), iv: toB64(iv), data: toB64(ciphertext) };
-};
-
-const decryptGoldenKey = async (password, record) => {
-  const salt = fromB64(record.salt);
-  const iv = fromB64(record.iv);
-  const key = await deriveKey(password, salt);
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, fromB64(record.data));
-  return dec.decode(plaintext);
-};
-
-const loadUsers = () => {
-  try {
-    return JSON.parse(localStorage.getItem("fps_users") || "[]");
-  } catch {
-    return [];
-  }
-};
-
-const saveUsers = (users) => {
-  localStorage.setItem("fps_users", JSON.stringify(users));
-};
+const loadUsers = () => [];
+const saveUsers = () => {};
 
 const showAuth = (message) => {
   if (message) {
@@ -141,7 +97,7 @@ const apiFetch = async (path, options = {}, retry = true) => {
   headers["Content-Type"] = "application/json";
   const adminKey = getAdminKey();
   if (adminKey) {
-    headers["X-Admin-Key"] = adminKey;
+    headers["Authorization"] = `Bearer ${adminKey}`;
   }
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
@@ -815,39 +771,36 @@ ui.auth.registerForm.addEventListener("submit", (e) => {
     toast("Fill all fields", true);
     return;
   }
-  const users = loadUsers();
-  if (users.some((u) => u.username === username)) {
-    toast("User already exists", true);
-    return;
-  }
-  encryptGoldenKey(password, goldenKey)
-    .then((record) => {
-      users.push({ username, ...record });
-      saveUsers(users);
-      toast("Registered. You can log in now.");
+  apiFetch("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password, golden_key: goldenKey }),
+  })
+    .then((data) => {
+      sessionStorage.setItem("adminToken", data.token);
+      sessionStorage.setItem("adminUser", data.username);
+      hideAuth();
+      loadAll();
+      toast("Registered and logged in.");
     })
-    .catch(() => toast("Failed to save credentials", true));
+    .catch((err) => toast(err.message || "Register failed", true));
 });
 
 ui.auth.loginForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const username = ui.auth.loginUsername.value.trim();
   const password = ui.auth.loginPassword.value.trim();
-  const users = loadUsers();
-  const user = users.find((u) => u.username === username);
-  if (!user) {
-    toast("Invalid credentials", true);
-    return;
-  }
-  decryptGoldenKey(password, user)
-    .then((goldenKey) => {
-      if (!goldenKey) throw new Error("Invalid key");
-      sessionStorage.setItem("adminKey", goldenKey);
-      sessionStorage.setItem("adminUser", user.username);
+  apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  })
+    .then((data) => {
+      sessionStorage.setItem("adminToken", data.token);
+      sessionStorage.setItem("adminUser", data.username);
       hideAuth();
       loadAll();
+      toast("Logged in.");
     })
-    .catch(() => toast("Invalid credentials", true));
+    .catch((err) => toast(err.message || "Login failed", true));
 });
 
 const init = async () => {
@@ -861,6 +814,36 @@ const init = async () => {
 };
 
 init();
+
+// Settings
+document.getElementById("settingsForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = document.getElementById("settingsGoldenKey").value.trim();
+  if (!key) {
+    toast("Enter a golden key.", true);
+    return;
+  }
+  try {
+    await apiFetch("/api/auth/golden-key", {
+      method: "PUT",
+      body: JSON.stringify({ golden_key: key }),
+    });
+    toast("Golden key updated.");
+  } catch (error) {
+    toast(error.message || "Failed to update key", true);
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" });
+  } catch (error) {
+    // ignore
+  }
+  sessionStorage.removeItem("adminToken");
+  sessionStorage.removeItem("adminUser");
+  showAuth();
+});
 
 
 
