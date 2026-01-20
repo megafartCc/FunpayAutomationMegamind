@@ -237,11 +237,17 @@ const renderInventory = (items) => {
   });
 
   if (!filtered.length) {
-    ui.inventoryTable.innerHTML = "<tr><td colspan=\"6\">No accounts found.</td></tr>";
+    ui.inventoryTable.innerHTML = "<tr><td colspan=\"7\">No accounts found.</td></tr>";
     return;
   }
 
   const showPasswords = ui.showPasswords.checked;
+  const presenceLabel = (item) => {
+    if (item.presence_in_match) return "В матче";
+    if (item.presence_display) return item.presence_display;
+    return "—";
+  };
+
   ui.inventoryTable.innerHTML = filtered
     .map(
       (item) => `
@@ -252,6 +258,7 @@ const renderInventory = (items) => {
           <td>${showPasswords ? item.password : "******"}</td>
           <td>${item.owner || "-"}</td>
           <td>${item.rental_duration}</td>
+          <td>${presenceLabel(item)}</td>
         </tr>
       `
     )

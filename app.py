@@ -152,9 +152,47 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
+async def _presence_for_account(account: dict) -> dict:
+    bot = get_presence_bot()
+    if bot is None:
+        return {}
+    steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
+    if steamid64 is None:
+        return {}
+
+    if not bot.wait_ready(timeout=0.5):
+        return {}
+
+    snapshot = bot.get_cached(steamid64)
+    if snapshot is None:
+        try:
+            snapshot = await bot.fetch_presence(steamid64, timeout=3.0)
+        except Exception:
+            snapshot = None
+
+    if snapshot is None:
+        return {}
+
+    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
+    return {
+        "presence_in_match": bool(snapshot.in_match),
+        "presence_display": steam_display or "",
+    }
+
+
 @app.get("/api/accounts")
-def accounts() -> dict:
-    return {"items": db.get_all_accounts()}
+async def accounts() -> dict:
+    items = db.get_all_accounts()
+    bot = get_presence_bot()
+    if bot is None or not items:
+        return {"items": items}
+
+    for acc in items:
+        try:
+            acc.update(await _presence_for_account(acc))
+        except Exception:
+            continue
+    return {"items": items}
 
 
 @app.get("/api/lots")
