@@ -157,10 +157,11 @@ class GoldenKeyUpdate(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
+    funpay_available = db.has_any_golden_key()
     return {
         "status": "ok",
-        "funpay_enabled": False,
-        "funpay_ready": False,
+        "funpay_enabled": funpay_available,
+        "funpay_ready": funpay_available,
     }
 
 

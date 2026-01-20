@@ -1600,6 +1600,15 @@ class SQLiteDB:
         finally:
             cursor.close()
 
+    def has_any_golden_key(self) -> bool:
+        cursor = self._cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM users WHERE golden_key IS NOT NULL AND golden_key <> ''")
+            row = cursor.fetchone()
+            return bool(row and row[0] > 0)
+        finally:
+            cursor.close()
+
     def logout_token(self, token: str) -> None:
         cursor = self._cursor()
         try:
