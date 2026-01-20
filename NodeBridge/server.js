@@ -48,9 +48,12 @@ setInterval(() => {
 
 client.on("user", (sid, user) => {
   const id64 = sid.getSteamID64();
-  const rp = user.rich_presence || {};
+  const rpRaw = user.rich_presence || {};
+  const rp = Array.isArray(rpRaw)
+    ? Object.fromEntries(rpRaw.map((entry) => [entry.key, entry.value]))
+    : rpRaw;
   if (user.gameid === "570" || user.gameid === 570) {
-    console.log("[bridge] Dota RP", id64, rp);
+    console.log("[bridge] Dota RP", id64, rpRaw);
   }
   presence.set(id64, {
     steamid64: id64,
@@ -58,17 +61,21 @@ client.on("user", (sid, user) => {
     appid: user.gameid || null,
     in_game: !!user.gameid,
     rich_presence: rp,
+    rich_presence_raw: rpRaw,
     last_updated: Date.now(),
   });
 });
 
 function isInDotaMatch(rp) {
   if (!rp || typeof rp !== "object") return false;
+  const status = String(rp.status || "").toLowerCase();
   const display = String(rp.steam_display || "").toLowerCase();
+  const lobby = String(rp.lobby || "").toLowerCase();
   const hasLevel = rp.level !== undefined;
   const hasMatchId = rp.matchid !== undefined || rp.watchable_match_id !== undefined;
   const hasStateOrMode = rp.state !== undefined || rp.mode !== undefined;
-  const hasLobby = rp.lobby_id !== undefined || rp.lobbyid !== undefined;
+  const hasLobbyId = rp.lobby_id !== undefined || rp.lobbyid !== undefined || lobby.length > 0;
+  const lobbyStates = ["run", "serversetup"];
   const indicators = [
     "heroselection",
     "strategytime",
@@ -78,13 +85,17 @@ function isInDotaMatch(rp) {
     "captains",
     "draft",
     "match",
+    "private_lobby",
+    "finding_match",
   ];
+  const lobbyStateHit = lobbyStates.some((kw) => lobby.includes(`lobby_state: ${kw}`));
   return (
     hasLevel ||
     hasMatchId ||
-    hasLobby ||
+    hasLobbyId ||
     hasStateOrMode ||
-    indicators.some((kw) => display.includes(kw))
+    lobbyStateHit ||
+    indicators.some((kw) => display.includes(kw) || status.includes(kw))
   );
 }
 
@@ -113,7 +124,13 @@ app.get("/presence/:steamid", (req, res) => {
   const sid = req.params.steamid;
   const data = presence.get(sid);
   if (!data) return res.status(404).json({ error: "not_found" });
-  const in_match = data.appid === 570 ? isInDotaMatch(data.rich_presence) : false;
+  const rp = data.rich_presence || {};
+  const in_match = data.appid === 570 ? isInDotaMatch(rp) : false;
+  const status =
+    rp.status ||
+    rp.steam_display ||
+    (rp.lobby ? "lobby" : "") ||
+    (data.in_game ? "in_game" : "offline");
   res.json({
     presence_state: data.in_game ? "in_game" : "not_in_game",
     presence_display: data.appid || "",
@@ -121,6 +138,8 @@ app.get("/presence/:steamid", (req, res) => {
     persona_state: data.persona_state,
     appid: data.appid,
     steamid64: data.steamid64,
+    presence_status: status,
+    lobby_info: rp.lobby || "",
   });
 });
 
