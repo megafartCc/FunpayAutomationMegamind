@@ -101,28 +101,12 @@ class SteamPresenceBot:
         self._identity_secret = identity_secret or None
         self._refresh_token = refresh_token or None
 
-        self._client = SteamClient()  # type: ignore[call-arg]
+        self._client: SteamClient | None = None  # type: ignore[assignment]
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
         self._lock = threading.Lock()
         self._presence: dict[int, PresenceSnapshot] = {}
-
-        @self._client.event  # type: ignore[attr-defined]
-        async def on_ready() -> None:
-            self._loop = asyncio.get_running_loop()
-            self._ready.set()
-            logger.info("Steam presence bot ready.")
-
-        @self._client.event  # type: ignore[attr-defined]
-        async def on_user_update(before: SteamUser, after: SteamUser) -> None:  # type: ignore[name-defined]
-            steamid64 = _get_steamid64(after)
-            if steamid64 is None:
-                return
-            rp = getattr(after, "rich_presence", None) or {}
-            snapshot = PresenceSnapshot(in_match=is_in_dota_match(after), ts=time.time(), rich_presence=dict(rp))
-            with self._lock:
-                self._presence[steamid64] = snapshot
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -133,13 +117,35 @@ class SteamPresenceBot:
     def wait_ready(self, timeout: float = 30.0) -> bool:
         return self._ready.wait(timeout=timeout)
 
+    def _build_client(self) -> SteamClient:
+        client = SteamClient()  # type: ignore[call-arg]
+
+        @client.event  # type: ignore[attr-defined]
+        async def on_ready() -> None:
+            self._loop = asyncio.get_running_loop()
+            self._ready.set()
+            logger.info("Steam presence bot ready.")
+
+        @client.event  # type: ignore[attr-defined]
+        async def on_user_update(before: SteamUser, after: SteamUser) -> None:  # type: ignore[name-defined]
+            steamid64 = _get_steamid64(after)
+            if steamid64 is None:
+                return
+            rp = getattr(after, "rich_presence", None) or {}
+            snapshot = PresenceSnapshot(in_match=is_in_dota_match(after), ts=time.time(), rich_presence=dict(rp))
+            with self._lock:
+                self._presence[steamid64] = snapshot
+
+        return client
+
     def _run(self) -> None:
         """
-        Keep the steam client running; if it crashes, log and retry with backoff.
+        Keep the steam client running; if it crashes, recreate client/loop and retry with backoff.
         """
         backoff = 5
         while True:
             try:
+                self._client = self._build_client()
                 login_params = {"username": self._login, "password": self._password}
                 try:
                     sig = inspect.signature(self._client.login)  # type: ignore[attr-defined]
@@ -158,6 +164,8 @@ class SteamPresenceBot:
             except Exception as exc:
                 logger.error(f"Steam presence bot crashed: {exc}\n{traceback.format_exc()}")
                 self._ready.clear()
+                # ensure loop reset
+                self._loop = None
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
