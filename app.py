@@ -73,6 +73,13 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 @app.on_event("startup")
 def start_background_services() -> None:
     bot_manager.start_all()
+    # One-shot presence check for debugging a specific SteamID
+    try:
+        test_sid = 76561198749779076
+        presence = _fetch_bridge_presence(test_sid)
+        logger.info(f"Test bridge presence for {test_sid}: {presence or 'no data'}")
+    except Exception as exc:
+        logger.warning(f"Test bridge presence check failed: {exc}")
     logger.info("Startup complete (per-user FunPay bots initialized if keys are present).")
 
 
