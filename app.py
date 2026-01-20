@@ -14,12 +14,6 @@ from config import (
     ADMIN_API_KEY,
     FUNPAY_GOLDEN_KEY,
     DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
-    STEAM_PRESENCE_ENABLED,
-    STEAM_PRESENCE_IDENTITY_SECRET,
-    STEAM_PRESENCE_LOGIN,
-    STEAM_PRESENCE_PASSWORD,
-    STEAM_PRESENCE_REFRESH_TOKEN,
-    STEAM_PRESENCE_SHARED_SECRET,
     STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
@@ -28,7 +22,6 @@ from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
@@ -44,18 +37,6 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 @app.on_event("startup")
 def start_background_services() -> None:
-    try:
-        init_presence_bot(
-            enabled=STEAM_PRESENCE_ENABLED,
-            login=STEAM_PRESENCE_LOGIN,
-            password=STEAM_PRESENCE_PASSWORD,
-            shared_secret=STEAM_PRESENCE_SHARED_SECRET or None,
-            identity_secret=STEAM_PRESENCE_IDENTITY_SECRET or None,
-            refresh_token=STEAM_PRESENCE_REFRESH_TOKEN or None,
-        )
-    except Exception as exc:
-        logger.error(f"Failed to start Steam presence bot: {exc}")
-
     if not FUNPAY_GOLDEN_KEY:
         logger.warning("FUNPAY_GOLDEN_KEY is empty. FunPay automation not started.")
         return
@@ -156,50 +137,19 @@ def notifications(limit: int = 50) -> dict:
 
 
 async def _presence_for_account(account: dict) -> dict:
-    bot = get_presence_bot()
-    if bot is None:
-        if STEAM_WEB_API_KEY:
-            steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-            if steamid64 is None:
-                return {}
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
     steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-    if steamid64 is None:
-        return {}
-
-    if not bot.wait_ready(timeout=0.5):
-        if STEAM_WEB_API_KEY:
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
-
-    snapshot = bot.get_cached(steamid64)
-    if snapshot is None:
-        try:
-            snapshot = await bot.fetch_presence(steamid64, timeout=3.0)
-        except Exception:
-            snapshot = None
-
-    if snapshot is None:
-        if STEAM_WEB_API_KEY:
-            web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
-            return web_presence or {}
-        return {}
-
-    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
-    return {
-        "presence_in_match": bool(snapshot.in_match),
-        "presence_display": steam_display or "",
-    }
+    if steamid64 is None or not STEAM_WEB_API_KEY:
+        return {"presence_state": "offline", "presence_display": ""}
+    web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
+    if not web_presence:
+        return {"presence_state": "offline", "presence_display": ""}
+    return web_presence
 
 
 @app.get("/api/accounts")
 async def accounts() -> dict:
     items = db.get_all_accounts()
-    bot = get_presence_bot()
-    if bot is None or not items:
+    if not items:
         return {"items": items}
 
     for acc in items:
