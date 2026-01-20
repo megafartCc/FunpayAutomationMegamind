@@ -474,7 +474,7 @@ def startFunpay():
                     )
                     send_message_to_admin(
                         "?????? ????????\n\n"
-                        f"??????????: {event.order.buyer_username}\n"
+                        f"???????????: {event.order.buyer_username}\n"
                         f"???: {matched_account}\n"
                         f"?????: {event.order.id}\n"
                         f"?????: {event.order.price} ?"
@@ -544,7 +544,7 @@ def startFunpay():
                             owner_data = db.get_owner_mafile(event.message.author)
 
                             if owner_data:
-                                lines = ["???? Steam Guard:"]
+                                lines = ["Коды Steam Guard:"]
                                 for account in owner_data:
                                     (
                                         account_id,
@@ -561,39 +561,37 @@ def startFunpay():
                                     lines.append(f"{account_name} ({login}): {guard_code}")
                                 acc.send_message(chat.id, "\n".join(lines))
                             else:
-                                acc.send_message(chat.id, "???????? ????? ???.")
+                                acc.send_message(chat.id, "Активных аренд нет.")
                         except Exception as e:
-                            acc.send_message(
-                                chat.id, f"?????? ??? ????????? ????: {str(e)}"
-                            )
+                            acc.send_message(chat.id, f"Ошибка при получении кода: {str(e)}")
                     elif message_text == "!acc":
                         try:
                             accounts = db.get_user_active_accounts(event.message.author)
 
                             if not accounts:
-                                acc.send_message(chat.id, "???????? ????? ???.")
+                                acc.send_message(chat.id, "Активных аренд нет.")
                             elif len(accounts) == 1:
                                 current_time = datetime.now(tz=moscow_tz)
                                 account = accounts[0]
                                 _, expiry_str, remaining_str = get_remaining_time(account, current_time)
                                 acc.send_message(
                                     chat.id,
-                                    "?????? ????????:\n"
+                                    "Данные аккаунта:\n"
                                     f"ID: {account['id']}\n"
-                                    f"???????: {account['account_name']}\n"
-                                    f"?????: {account['login']}\n"
-                                    f"??????: {account['password']}\n"
-                                    f"????????: {expiry_str} ??? | ????????: {remaining_str}",
+                                    f"Аккаунт: {account['account_name']}\n"
+                                    f"Логин: {account['login']}\n"
+                                    f"Пароль: {account['password']}\n"
+                                    f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
                                 )
                             else:
                                 current_time = datetime.now(tz=moscow_tz)
                                 lines = [
-                                    "?? ?????? ???????? ?? ?? ?????? ???????? ??????? ???????? ID ??? ?????:",
+                                    "От какого аккаунта вы бы хотели получить данные? Напишите ID или логин:",
                                 ]
                                 for account in accounts:
                                     _, _, remaining_str = get_remaining_time(account, current_time)
                                     lines.append(
-                                        f"{account['id']}) {account['account_name']} ({account['login']}) ? ???????? {remaining_str}"
+                                        f"{account['id']}) {account['account_name']} ({account['login']}) — осталось {remaining_str}"
                                     )
                                 pendingAccountChoice[event.message.author] = accounts
                                 acc.send_message(chat.id, "\n".join(lines))
@@ -601,9 +599,7 @@ def startFunpay():
                             logger.error(
                                 f"Failed to send account details to {event.message.author}: {str(e)}"
                             )
-                            acc.send_message(
-                                chat.id, "?? ??????? ???????? ?????? ????????."
-                            )
+                            acc.send_message(chat.id, "Не удалось получить данные аккаунта.")
                     elif message_text == "!bonus":
                         try:
                             owner = event.message.author
@@ -628,7 +624,7 @@ def startFunpay():
                                     acc.send_message(
                                         chat.id,
                                         f"????? ???????????. +{HOURS_FOR_REVIEW} ?.\n"
-                                        f"???????? ?????????: {extended}.",
+                                        f"???????? ??????????: {extended}.",
                                     )
                         except Exception as e:
                             logger.error(f"Failed to apply bonus for {event.message.author}: {str(e)}")
@@ -637,7 +633,7 @@ def startFunpay():
                         try:
                             parts = raw_text.split()
                             if len(parts) < 2 or not parts[1].isdigit():
-                                acc.send_message(chat.id, "???????????: !extend <????>")
+                                acc.send_message(chat.id, "????????????: !extend <????>")
                                 continue
                             hours = int(parts[1])
                             if hours <= 0:
@@ -664,8 +660,8 @@ def startFunpay():
                                         chat.id,
                                         f"???????? ?? {hours} ?.\n"
                                         f"ID: {choice['id']}\n"
-                                        f"???????: {choice['account_name']}\n"
-                                        f"????????: {expiry_str} ??? | ????????: {remaining_str}",
+                                        f"????????: {choice['account_name']}\n"
+                                        f"?????????: {expiry_str} ??? | ?????????: {remaining_str}",
                                     )
                                 else:
                                     acc.send_message(chat.id, "?? ??????? ???????? ??????.")
@@ -679,8 +675,8 @@ def startFunpay():
                                         chat.id,
                                         f"???????? ?? {hours} ?.\n"
                                         f"ID: {account['id']}\n"
-                                        f"???????: {account['account_name']}\n"
-                                        f"????????: {expiry_str} ??? | ????????: {remaining_str}",
+                                        f"????????: {account['account_name']}\n"
+                                        f"?????????: {expiry_str} ??? | ?????????: {remaining_str}",
                                     )
                                 else:
                                     acc.send_message(chat.id, "?? ??????? ???????? ??????.")
