@@ -373,6 +373,7 @@ select:focus {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+  scrollbar-width: none;
 }
 
 .chat-item {
@@ -433,6 +434,12 @@ select:focus {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+  scrollbar-width: none;
+}
+
+.chat-items::-webkit-scrollbar,
+.chat-messages::-webkit-scrollbar {
+  display: none;
 }
 
 .chat-message {
