@@ -63,8 +63,10 @@ function isInDotaMatch(rp) {
   if (!rp || typeof rp !== "object") return false;
   const display = String(rp.steam_display || "").toLowerCase();
   const hasLevel = rp.level !== undefined;
-  const indicators = ["heroselection", "strategytime"];
-  return hasLevel || indicators.some((kw) => display.includes(kw));
+  const hasMatchId = rp.matchid !== undefined || rp.watchable_match_id !== undefined;
+  const hasStateOrMode = rp.state !== undefined || rp.mode !== undefined;
+  const indicators = ["heroselection", "strategytime", "playing", "ranked", "turbo"];
+  return hasLevel || hasMatchId || hasStateOrMode || indicators.some((kw) => display.includes(kw));
 }
 
 function logOn() {
