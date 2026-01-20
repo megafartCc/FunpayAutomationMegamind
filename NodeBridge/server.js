@@ -156,22 +156,11 @@ app.get("/presence/:steamid", (req, res) => {
   );
   const in_match =
     appid === "570" ? isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit : false;
-  const status =
-    rp.status ||
-    rp.steam_display ||
-    lobbyRaw ||
-    (data.in_game ? "in_game" : "offline");
+  const in_game = !!(data.in_game || appid || lobbyRaw);
   res.json({
-    presence_state: data.in_game ? "in_game" : "not_in_game",
-    presence_display: appid || "",
-    presence_in_match: in_match,
-    in_game: data.in_game,
-    in_match: in_match,
-    persona_state: data.persona_state,
-    appid,
-    steamid64: data.steamid64,
-    presence_status: status,
-    lobby_info: lobbyRaw,
+    in_game,
+    in_match,
+    lobby_info: lobbyRaw || "",
   });
 });
 
