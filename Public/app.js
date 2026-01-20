@@ -175,7 +175,7 @@ const ensureActiveRentalsHeader = () => {
   if (!row) return;
 
   const headers = Array.from(row.querySelectorAll("th"));
-  if (headers.some((th) => th.dataset.key === "chat")) return;
+  if (headers.some((th) => th.dataset.key === "chat" || th.textContent?.trim() === "Чат")) return;
 
   const insertBefore = headers[3] || null;
   const th = document.createElement("th");
@@ -462,11 +462,9 @@ ui.addForm.addEventListener("submit", async (event) => {
   const formData = new FormData(ui.addForm);
   const payload = Object.fromEntries(formData.entries());
   delete payload.rental_duration;
+  delete payload.owner;
   if (!payload.mafile_json) {
     delete payload.mafile_json;
-  }
-  if (!payload.owner) {
-    delete payload.owner;
   }
   try {
     await apiFetch("/api/accounts", {
