@@ -510,6 +510,29 @@ class SQLiteDB:
         if self.db_type == "mysql":
             cursor.close()
 
+    def get_lot_mapping(self, lot_number: int):
+        cursor = self._cursor()
+        cursor.execute(
+            """
+            SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
+            FROM lots l
+            JOIN accounts a ON a.ID = l.account_id
+            WHERE l.lot_number = ?
+            """,
+            (lot_number,),
+        )
+        row = cursor.fetchone()
+        if self.db_type == "mysql":
+            cursor.close()
+        if not row:
+            return None
+        return {
+            "lot_number": row[0],
+            "account_id": row[1],
+            "lot_url": row[2],
+            "account_name": row[3],
+        }
+
     def get_account_by_lot_number(self, lot_number: int):
         cursor = self._cursor()
         cursor.execute(
@@ -1062,6 +1085,42 @@ class SQLiteDB:
         finally:
             cursor.close()
 
+    def get_user_active_lot_accounts(self, owner_id: str) -> list:
+        """
+        Get all active accounts of a specific user with lot mapping info (if configured).
+        """
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_start, l.lot_number, l.lot_url
+                FROM accounts a
+                LEFT JOIN lots l ON l.account_id = a.ID
+                WHERE a.owner = ?
+                ORDER BY a.rental_start DESC
+                """,
+                (owner_id,),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "account_name": row[1],
+                    "login": row[2],
+                    "password": row[3],
+                    "rental_duration": row[4],
+                    "rental_start": row[5],
+                    "lot_number": row[6],
+                    "lot_url": row[7],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error(f"Error getting user active lot accounts: {str(e)}")
+            return []
+        finally:
+            cursor.close()
+
     def close(self):
         """Close the persistent database connection."""
         self.conn.close()
@@ -1124,7 +1183,7 @@ class SQLiteDB:
                 """
                 UPDATE accounts 
                 SET rental_duration = rental_duration + ?
-                WHERE ID = ? AND owner IS NOT NULL
+                WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT'
                 """,
                 (additional_hours, account_id),
             )
@@ -1133,6 +1192,29 @@ class SQLiteDB:
             return success
         except Exception as e:
             logger.error(f"Error extending rental duration: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
+    def extend_rental_duration_for_owner(self, account_id: int, owner_id: str, additional_hours: int) -> bool:
+        """
+        Extend rental duration, but only if the account is currently owned by the given owner.
+        """
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET rental_duration = rental_duration + ?
+                WHERE ID = ? AND owner = ?
+                """,
+                (additional_hours, account_id, owner_id),
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as e:
+            logger.error(f"Error extending rental duration for owner: {str(e)}")
             return False
         finally:
             cursor.close()

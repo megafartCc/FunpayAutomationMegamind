@@ -8,14 +8,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import ADMIN_API_KEY, FUNPAY_GOLDEN_KEY
-from databaseHandler.databaseSetup import SQLiteDB
-from funpayHandler.funpay import get_account, startFunpay
+from DatabaseHandler.databaseSetup import SQLiteDB
+from FunpayHandler.funpay import get_account, startFunpay
 from logger import logger
 from notifications import list_notifications
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR / "public"
+PUBLIC_DIR = BASE_DIR / "Public"
 
 app = FastAPI(title="FunpaySeller")
 db = SQLiteDB()

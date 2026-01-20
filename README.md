@@ -6,8 +6,20 @@ FunpaySeller is a web-first rental service for Steam accounts with FunPay automa
 
 - FunPay automation for order fulfillment and rental lifecycle.
 - Steam password rotation for expired rentals.
-- Web frontend served from `/public`.
+- Web frontend served from `/Public`.
 - JSON APIs for stats and notifications.
+
+## Code structure (backend)
+
+- `app.py` — FastAPI app (REST + static UI).
+- `main.py` — local runner (`uvicorn app:app`).
+- `FunpayHandler/` — FunPay automation.
+  - `FunpayHandler/funpay.py` — compatibility wrapper (keeps old imports stable).
+  - `FunpayHandler/bot.py` — main bot implementation (events, commands, background jobs).
+  - `FunpayHandler/utils.py` — parsing + time formatting helpers.
+  - `FunpayHandler/messages.py` — user-facing message templates.
+- `DatabaseHandler/` — SQLite/MySQL access layer.
+- `SteamHandler/` — Steam Guard + password rotation helpers.
 
 ## Quick start (local)
 

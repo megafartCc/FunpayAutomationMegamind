@@ -1,0 +1,825 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from FunPayAPI import Account, Runner, events, types
+
+from config import FUNPAY_GOLDEN_KEY, HOURS_FOR_REVIEW, RENTAL_CHECK_INTERVAL
+from DatabaseHandler.databaseSetup import SQLiteDB
+from logger import logger
+from notifications import send_message_to_admin
+from SteamHandler.SteamGuard import get_steam_guard_code
+from SteamHandler.changePassword import changeSteamPassword
+
+from .messages import USER
+from .utils import (
+    MOSCOW_TZ,
+    get_remaining_time,
+    match_account_choice,
+    match_account_name,
+    parse_lot_number,
+)
+
+
+REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
+PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
+
+
+@dataclass(frozen=True)
+class PendingLotExtend:
+    hours: int
+    lot_number: int
+    created_ts: float
+
+
+class FunpayBot:
+    def __init__(self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None) -> None:
+        self._token = token
+        self._db = db or SQLiteDB()
+
+        self._acc: Account | None = None
+        self._runner: Runner | None = None
+
+        self._feedback_given: set[str] = set()
+        self._bonus_eligible: set[str] = set()
+        self._pending_account_choice: dict[str, list[dict]] = {}
+        self._pending_lot_extend: dict[str, PendingLotExtend] = {}
+        self._processed_order_ids: set[int] = set()
+
+        self._last_refresh_ts = 0.0
+
+    @property
+    def account(self) -> Account | None:
+        return self._acc
+
+    def refresh_session(self) -> None:
+        logger.info("Refreshing FunPay session...")
+        self._acc = Account(self._token).get()
+        self._runner = Runner(self._acc)
+        logger.info("FunPay session refreshed successfully.")
+
+    def start(self) -> None:
+        logger.info("Starting FunPay bot...")
+        if not self._token:
+            logger.error("FUNPAY_GOLDEN_KEY is missing. FunPay automation stopped.")
+            return
+
+        self.refresh_session()
+        self._last_refresh_ts = time.time()
+
+        thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
+        thread.start()
+        logger.info("Rental expiration checker started.")
+
+        if self._runner is None:
+            raise RuntimeError("Runner not initialized")
+
+        for event in self._runner.listen(requests_delay=8):
+            try:
+                self._tick_refresh_if_needed()
+
+                if event.type is events.EventTypes.NEW_ORDER:
+                    self._handle_new_order(event)
+                elif hasattr(events.EventTypes, "ORDER_PAID") and event.type is events.EventTypes.ORDER_PAID:
+                    self._handle_order_paid(event)
+
+                if event.type is events.EventTypes.NEW_MESSAGE:
+                    self._handle_new_message(event)
+
+                message = getattr(event, "message", None)
+                if message is not None and getattr(message, "type", None) == types.MessageTypes.NEW_FEEDBACK:
+                    self._handle_new_feedback(event)
+            except Exception as exc:
+                logger.error(f"An error occurred while processing event: {exc}")
+
+    def send_message_by_owner(self, owner: str, message: str) -> None:
+        if self._acc is None:
+            logger.error("FunPay session not initialized; cannot send message.")
+            return
+        chat = self._acc.get_chat_by_name(owner, True)
+        self._acc.send_message(chat.id, message)
+
+    def _tick_refresh_if_needed(self) -> None:
+        now = time.time()
+        if now - self._last_refresh_ts < REFRESH_INTERVAL_SECONDS:
+            return
+        logger.info("Refreshing session due to interval timeout...")
+        self.refresh_session()
+        self._last_refresh_ts = now
+
+    def _handle_new_order(self, event: Any) -> None:
+        self._process_order(event, source="NEW_ORDER")
+
+    def _handle_order_paid(self, event: Any) -> None:
+        self._process_order(event, source="ORDER_PAID")
+
+    def _process_order(self, event: Any, source: str) -> None:
+        if self._acc is None:
+            self.refresh_session()
+        acc = self._acc
+        if acc is None:
+            return
+
+        order = getattr(event, "order", None)
+        if order is None:
+            return
+
+        try:
+            order_id = int(order.id)
+        except Exception:
+            logger.warning(f"Skipping order with invalid id from {source}: {getattr(order, 'id', None)}")
+            return
+
+        if order_id in self._processed_order_ids:
+            return
+
+        buyer = str(order.buyer_username)
+        chat = acc.get_chat_by_name(buyer, True)
+
+        description = str(getattr(order, "description", "") or "")
+        amount = int(getattr(order, "amount", 1) or 1)
+
+        lot_number = parse_lot_number(description)
+        if lot_number is not None:
+            self._process_lot_order(acc, chat.id, event, buyer, lot_number, amount)
+            return
+
+        self._process_named_order(acc, chat.id, event, buyer, description, amount)
+
+    def _process_lot_order(
+        self,
+        acc: Account,
+        chat_id: int,
+        event: Any,
+        buyer: str,
+        lot_number: int,
+        amount: int,
+    ) -> None:
+        mapping = self._db.get_lot_mapping(lot_number)
+        if not mapping:
+            acc.send_message(chat_id, "Лот не привязан к аккаунту. Дождитесь ответа администратора.")
+            send_message_to_admin(
+                "ЛОТ БЕЗ ПРИВЯЗКИ\n\n"
+                f"Покупатель: {buyer}\n"
+                f"Лот: №{lot_number}\n"
+                f"Заказ: {event.order.id}"
+            )
+            return
+
+        account = self._db.get_account_by_lot_number(lot_number)
+        if not account:
+            acc.send_message(chat_id, "Ошибка: лот привязан к аккаунту, но аккаунт не найден. Напишите администратору.")
+            send_message_to_admin(
+                "ОШИБКА ПРИ ВЫДАЧЕ\n\n"
+                f"Покупатель: {buyer}\n"
+                f"Лот: №{lot_number}\n"
+                f"Заказ: {event.order.id}\n"
+                "Причина: аккаунт по лоту не найден в БД"
+            )
+            return
+
+        pending = self._pending_lot_extend.get(buyer)
+        if pending is not None and (time.time() - pending.created_ts) > PENDING_EXTEND_TTL_SECONDS:
+            self._pending_lot_extend.pop(buyer, None)
+            pending = None
+
+        is_requested_extend = pending is not None and pending.lot_number == lot_number
+        if is_requested_extend:
+            self._pending_lot_extend.pop(buyer, None)
+
+        if account.get("owner") is None:
+            self._issue_new_account(acc, chat_id, event, account, amount)
+            self._processed_order_ids.add(int(event.order.id))
+            return
+
+        if account.get("owner") == buyer:
+            success = self._db.extend_rental_duration_for_owner(account["id"], buyer, amount)
+            if not success:
+                acc.send_message(chat_id, USER.extend_failed)
+                return
+
+            refreshed = self._db.get_account_by_id(account["id"])
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            _, expiry_str, remaining_str = get_remaining_time(refreshed, current_time)
+
+            note = ""
+            if is_requested_extend and pending and pending.hours != amount:
+                note = f"\n\nПримечание: вы запросили {pending.hours} ч, но оплатили {amount} шт (будет продлено на {amount} ч)."
+
+            acc.send_message(
+                chat_id,
+                f"Продлено на {amount} ч.\n"
+                f"Лот: №{lot_number}\n"
+                f"ID: {account['id']}\n"
+                f"Аккаунт: {account['account_name']}\n"
+                f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}{note}",
+            )
+            acc.confirm(event.order.id)
+            self._processed_order_ids.add(int(event.order.id))
+            return
+
+        acc.send_message(
+            chat_id,
+            "Этот лот сейчас уже арендован.\n"
+            "Пожалуйста, выберите другой лот или напишите в чат — поможем.",
+        )
+        send_message_to_admin(
+            "КОНФЛИКТ ПО ЛОТУ\n\n"
+            f"Покупатель: {buyer}\n"
+            f"Лот: №{lot_number}\n"
+            f"Заказ: {event.order.id}\n"
+            f"Текущий владелец: {account.get('owner')}"
+        )
+
+    def _process_named_order(
+        self,
+        acc: Account,
+        chat_id: int,
+        event: Any,
+        buyer: str,
+        order_name: str,
+        amount: int,
+    ) -> None:
+        all_accounts = self._db.get_all_account_names()
+        matched_account = match_account_name(order_name, all_accounts)
+        if matched_account is None:
+            logger.warning(f"No matching account found for order: {order_name}")
+            return
+
+        account_name = matched_account
+        if account_name not in all_accounts:
+            logger.info(f"Item '{account_name}' not found in rentals; skipping.")
+            return
+
+        if amount > 1:
+            acc.send_message(
+                chat_id,
+                f"Вы оплатили {amount} шт. '{account_name}'.\n"
+                f"Система выдаёт 1 аккаунт на {amount} часов (1 шт = 1 час).\n\n"
+                "Если нужен другой вариант — напишите в чат.",
+            )
+
+        specific_account = self._db.get_account_by_name(account_name)
+        if not specific_account:
+            logger.error(f"Account with name '{account_name}' not found in database")
+            acc.send_message(
+                chat_id,
+                f"Ошибка: аккаунт '{account_name}' не найден.\n"
+                "Возврат оформлен. Напишите, поможем.",
+            )
+            return
+
+        if specific_account.get("owner") is not None:
+            logger.warning(f"Account '{account_name}' is already rented by {specific_account['owner']}")
+            acc.send_message(
+                chat_id,
+                "Этот аккаунт сейчас уже арендован.\n"
+                "Пожалуйста, выберите другой лот или напишите в чат — поможем.",
+            )
+            return
+
+        existing_rentals = self._db.get_user_accounts_by_name(buyer, account_name)
+        if existing_rentals:
+            self._extend_existing_rental(acc, chat_id, event, existing_rentals[0], account_name, amount)
+            self._processed_order_ids.add(int(event.order.id))
+            return
+
+        self._issue_new_account(acc, chat_id, event, specific_account, amount)
+        self._processed_order_ids.add(int(event.order.id))
+
+    def _extend_existing_rental(
+        self,
+        acc: Account,
+        chat_id: int,
+        event: Any,
+        rental: dict,
+        order_name: str,
+        hours: int,
+    ) -> None:
+        logger.info(
+            f"User {event.order.buyer_username} already has active rental for {order_name}, extending by {hours} hours..."
+        )
+        self._db.extend_rental_duration(rental["id"], hours)
+
+        acc.send_message(
+            chat_id,
+            "Аренда продлена!\n\n"
+            f"Тип аккаунта: {order_name}\n"
+            f"Продление: +{hours} ч\n"
+            f"ID: {rental['id']}\n\n"
+            "Данные аккаунта ниже.",
+        )
+
+        account = self._db.get_account_by_id(rental["id"])
+        if account:
+            rental_start = account["rental_start"]
+            if isinstance(rental_start, datetime):
+                start_dt = rental_start
+            else:
+                start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
+            expiry_time = start_dt + timedelta(hours=int(account["rental_duration"]))
+            acc.send_message(
+                chat_id,
+                f"ID: {rental['id']}\n"
+                f"Логин: {rental['login']}\n"
+                f"Пароль: {rental['password']}\n"
+                f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
+                "Команды: !acc, !code",
+            )
+
+        send_message_to_admin(
+            "RENTAL EXTENDED\n\n"
+            f"User: {event.order.buyer_username}\n"
+            f"Account type: {order_name}\n"
+            f"Extension: +{hours} hours\n"
+            f"Price: {event.order.price} RUB\n"
+            f"Account ID: {rental['id']}\n"
+            "Note: user already had an active rental",
+        )
+
+        acc.confirm(event.order.id)
+
+    def _issue_new_account(self, acc: Account, chat_id: int, event: Any, account: dict, hours: int) -> None:
+        logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
+        self._db.set_account_owner(account["id"], event.order.buyer_username)
+
+        conn, cursor = self._db.open_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET rental_duration = ?
+                WHERE ID = ?
+                """,
+                (hours, account["id"]),
+            )
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+
+        send_message_to_admin(
+            "NEW ACCOUNT ISSUED\n\n"
+            f"Buyer: {event.order.buyer_username}\n"
+            f"ID: {account['id']}\n"
+            f"Account name: {account['account_name']}\n"
+            f"Login: {account['login']}\n"
+            f"Password: {account['password']}\n"
+            f"Price: {event.order.price} RUB\n"
+            f"Ordered: {hours} pcs.\n"
+            f"Rental time: {hours} hours\n"
+            f"Note: specific account '{account['account_name']}' issued for {hours} hours",
+        )
+
+        acc.send_message(
+            chat_id,
+            "Ваш аккаунт:\n"
+            f"ID: {account['id']}\n"
+            f"Название: {account['account_name']}\n"
+            f"Логин: {account['login']}\n"
+            f"Пароль: {account['password']}\n"
+            f"Аренда: {hours} ч\n\n"
+            "Команды:\n"
+            "!acc — данные аккаунта\n"
+            "!code — код Steam Guard\n"
+            "!stock — наличие\n\n"
+            "Если нужна помощь — напишите в чат.",
+        )
+
+        acc.confirm(event.order.id)
+
+    def _handle_new_message(self, event: Any) -> None:
+        if self._acc is None:
+            return
+        acc = self._acc
+        chat = acc.get_chat_by_name(event.message.author, True)
+
+        if event.message.author_id == acc.id:
+            return
+
+        logger.info(f"{event.message.author} : {event.message.text}")
+        raw_text = event.message.text.strip()
+        message_text = raw_text.lower()
+
+        if message_text and not message_text.startswith("!"):
+            if self._try_handle_pending_choice(acc, chat.id, event.message.author, raw_text):
+                return
+
+        if message_text == "!code":
+            self._handle_code(acc, chat.id, event.message.author)
+            return
+
+        if message_text == "!acc":
+            self._handle_acc(acc, chat.id, event.message.author)
+            return
+
+        if message_text == "!bonus":
+            self._handle_bonus(acc, chat.id, event.message.author)
+            return
+
+        if message_text.startswith("!extend"):
+            self._handle_extend(acc, chat.id, event.message.author, raw_text)
+            return
+
+        if message_text == "!stock":
+            self._handle_stock(acc, chat.id)
+            return
+
+    def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
+        if owner in self._pending_account_choice:
+            accounts = self._pending_account_choice[owner]
+            choice = match_account_choice(raw_text, accounts)
+            if choice:
+                current_time = datetime.now(tz=MOSCOW_TZ)
+                _, expiry_str, remaining_str = get_remaining_time(choice, current_time)
+                acc.send_message(
+                    chat_id,
+                    USER.account_details_header
+                    + f"ID: {choice['id']}\n"
+                    + f"Аккаунт: {choice['account_name']}\n"
+                    + f"Логин: {choice['login']}\n"
+                    + f"Пароль: {choice['password']}\n"
+                    + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
+                )
+                self._pending_account_choice.pop(owner, None)
+            else:
+                acc.send_message(chat_id, USER.choice_not_understood)
+            return True
+
+        return False
+
+    def _handle_code(self, acc: Account, chat_id: int, owner: str) -> None:
+        try:
+            owner_data = self._db.get_owner_mafile(owner)
+            if owner_data:
+                lines = ["Коды Steam Guard:"]
+                for account in owner_data:
+                    (
+                        _account_id,
+                        account_name,
+                        mafile_path,
+                        mafile_json,
+                        login,
+                        _rental_duration,
+                    ) = account
+                    guard_code = get_steam_guard_code(
+                        mafile_path=mafile_path,
+                        mafile_json=mafile_json,
+                    )
+                    lines.append(f"{account_name} ({login}): {guard_code}")
+                acc.send_message(chat_id, "\n".join(lines))
+            else:
+                acc.send_message(chat_id, USER.active_rentals_empty)
+        except Exception as exc:
+            acc.send_message(chat_id, f"Ошибка при получении кода: {exc}")
+
+    def _handle_acc(self, acc: Account, chat_id: int, owner: str) -> None:
+        try:
+            accounts = self._db.get_user_active_accounts(owner)
+            if not accounts:
+                acc.send_message(chat_id, USER.active_rentals_empty)
+                return
+
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            if len(accounts) == 1:
+                account = accounts[0]
+                _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+                acc.send_message(
+                    chat_id,
+                    USER.account_details_header
+                    + f"ID: {account['id']}\n"
+                    + f"Аккаунт: {account['account_name']}\n"
+                    + f"Логин: {account['login']}\n"
+                    + f"Пароль: {account['password']}\n"
+                    + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
+                )
+                return
+
+            lines = [USER.choose_account_prompt]
+            for account in accounts:
+                _, _, remaining_str = get_remaining_time(account, current_time)
+                lines.append(f"{account['id']}) {account['account_name']} ({account['login']}) — осталось {remaining_str}")
+            self._pending_account_choice[owner] = accounts
+            acc.send_message(chat_id, "\n".join(lines))
+        except Exception as exc:
+            logger.error(f"Failed to send account details to {owner}: {exc}")
+            acc.send_message(chat_id, USER.acc_failed)
+
+    def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
+        try:
+            if owner in self._feedback_given:
+                acc.send_message(chat_id, USER.bonus_already_given)
+                return
+            if owner not in self._bonus_eligible:
+                acc.send_message(chat_id, USER.bonus_unavailable)
+                return
+
+            accounts = self._db.get_user_active_accounts(owner)
+            if not accounts:
+                acc.send_message(chat_id, USER.active_rentals_empty)
+                return
+
+            extended = 0
+            for account in accounts:
+                if self._db.extend_rental_duration(account["id"], HOURS_FOR_REVIEW):
+                    extended += 1
+            self._feedback_given.add(owner)
+            self._bonus_eligible.discard(owner)
+            acc.send_message(chat_id, f"Бонус начислен. +{HOURS_FOR_REVIEW} ч.\nПродлено аренд: {extended}.")
+        except Exception as exc:
+            logger.error(f"Failed to apply bonus for {owner}: {exc}")
+            acc.send_message(chat_id, USER.bonus_failed)
+
+    def _handle_extend(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
+        try:
+            parts = raw_text.split()
+            if len(parts) == 1:
+                accounts = self._db.get_user_active_lot_accounts(owner)
+                if not accounts:
+                    acc.send_message(chat_id, USER.active_rentals_empty)
+                    return
+
+                current_time = datetime.now(tz=MOSCOW_TZ)
+                lines = [
+                    "Чтобы продлить аренду, оплатите нужный лот и укажите количество часов.",
+                    "Команда: !extend <часы> <номер_лота>",
+                    "",
+                    "Ваши активные аренды:",
+                ]
+                for account in accounts:
+                    _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+                    lot_number = account.get("lot_number")
+                    lot_url = account.get("lot_url")
+                    if lot_number:
+                        line = f"Лот №{lot_number}: {account['account_name']} — истекает {expiry_str} МСК (осталось {remaining_str})"
+                        if lot_url:
+                            line += f" — {lot_url}"
+                        lines.append(line)
+                    else:
+                        lines.append(
+                            f"ID {account['id']}: {account['account_name']} — лот не настроен (напишите администратору)."
+                        )
+                acc.send_message(chat_id, "\n".join(lines))
+                return
+
+            if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
+                acc.send_message(chat_id, "Использование: !extend <часы> <номер_лота>")
+                return
+
+            hours = int(parts[1])
+            lot_number = int(parts[2])
+            if hours <= 0:
+                acc.send_message(chat_id, USER.extend_hours_positive)
+                return
+            if lot_number <= 0:
+                acc.send_message(chat_id, "Номер лота должен быть больше 0.")
+                return
+
+            mapping = self._db.get_lot_mapping(lot_number)
+            if not mapping:
+                acc.send_message(chat_id, f"Лот №{lot_number} не привязан к аккаунту. Напишите администратору.")
+                return
+
+            lot_url = mapping.get("lot_url")
+            link_line = f"\nСсылка: {lot_url}" if lot_url else ""
+            acc.send_message(
+                chat_id,
+                f"Оплатите лот №{lot_number} в количестве {hours} шт, чтобы продлить аренду на {hours} ч."
+                f"{link_line}\n\nПосле оплаты бот автоматически продлит аренду.",
+            )
+            self._pending_lot_extend[owner] = PendingLotExtend(
+                hours=hours, lot_number=lot_number, created_ts=time.time()
+            )
+        except Exception as exc:
+            logger.error(f"Failed to extend rental for {owner}: {exc}")
+            acc.send_message(chat_id, USER.extend_failed)
+
+    def _handle_stock(self, acc: Account, chat_id: int) -> None:
+        try:
+            available_lots = self._db.get_available_lot_accounts()
+            if available_lots:
+                lines = [USER.stock_title]
+                for account in available_lots:
+                    lot_label = f"№{account['lot_number']}"
+                    lot_url = account.get("lot_url")
+                    if lot_url:
+                        lines.append(f"{account['account_name']} - {lot_label} - {lot_url}")
+                    else:
+                        lines.append(f"{account['account_name']} - {lot_label}")
+                acc.send_message(chat_id, "\n".join(lines))
+                return
+
+            all_lots = self._db.get_all_lot_accounts()
+            if not all_lots:
+                acc.send_message(chat_id, USER.stock_no_lots_configured)
+                return
+
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            next_expiry = self._find_next_expiry(all_lots)
+            if not next_expiry:
+                acc.send_message(chat_id, "Свободных лотов нет. Не удалось определить время освобождения.")
+                return
+
+            remaining = next_expiry - current_time
+            if remaining.total_seconds() < 0:
+                remaining = timedelta(0)
+            hours = int(remaining.total_seconds() // 3600)
+            minutes = int((remaining.total_seconds() % 3600) // 60)
+            acc.send_message(
+                chat_id,
+                "Свободных лотов нет. Ближайший освободится через "
+                f"{hours} ч {minutes} мин (в {next_expiry.strftime('%H:%M:%S')} МСК).",
+            )
+        except Exception as exc:
+            logger.error(f"Failed to load stock: {exc}")
+            acc.send_message(chat_id, USER.stock_failed)
+
+    def _find_next_expiry(self, all_lots: list[dict]) -> datetime | None:
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        next_expiry = None
+        for account in all_lots:
+            if account.get("owner") is None:
+                continue
+            rental_start = account.get("rental_start")
+            duration = account.get("rental_duration")
+            if not rental_start or not duration:
+                continue
+
+            if isinstance(rental_start, datetime):
+                start_dt = rental_start
+            else:
+                try:
+                    start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+
+            if start_dt.tzinfo is None:
+                start_dt = MOSCOW_TZ.localize(start_dt)
+
+            expiry_time = start_dt + timedelta(hours=int(duration))
+            if next_expiry is None or expiry_time < next_expiry:
+                next_expiry = expiry_time
+
+        if next_expiry and next_expiry < current_time:
+            return current_time
+        return next_expiry
+
+    def _handle_new_feedback(self, event: Any) -> None:
+        try:
+            owner = event.message.author
+            if owner and owner not in self._feedback_given:
+                self._bonus_eligible.add(owner)
+                if self._acc is None:
+                    return
+                chat = self._acc.get_chat_by_name(owner, True)
+                self._acc.send_message(
+                    chat.id,
+                    f"Спасибо за отзыв! Напишите !bonus, чтобы получить +{HOURS_FOR_REVIEW} ч.",
+                )
+        except Exception as exc:
+            logger.error(f"Error handling NEW_FEEDBACK event: {exc}")
+
+    def _check_rental_expiration_loop(self) -> None:
+        logger.info("Starting rental expiration checker...")
+        invalid_accs: list[int] = []
+        while True:
+            try:
+                self._check_rental_expiration_once(invalid_accs)
+            except Exception as exc:
+                logger.error(f"Error in rental expiration checker: {exc}")
+            time.sleep(RENTAL_CHECK_INTERVAL)
+
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
+        conn, cursor = self._db.open_connection()
+        try:
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            cursor.execute(
+                """
+                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.mafile_json, a.password
+                FROM accounts a
+                WHERE a.owner IS NOT NULL
+                AND a.rental_start IS NOT NULL
+                """
+            )
+            accounts_data = cursor.fetchall()
+
+            for row in accounts_data:
+                account_id, owner, start_time, duration, mafile_path, mafile_json, password = row
+                if not owner:
+                    continue
+
+                if isinstance(start_time, datetime):
+                    start_datetime = start_time
+                else:
+                    start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                start_datetime = MOSCOW_TZ.localize(start_datetime)
+                expiry_time = start_datetime + timedelta(hours=int(duration))
+
+                time_remaining = expiry_time - current_time
+                hours_remaining = time_remaining.total_seconds() / 3600
+
+                if 0.1 <= hours_remaining <= 0.2:
+                    self._send_expiration_warning(owner, account_id, hours_remaining, expiry_time)
+
+                if current_time >= expiry_time and account_id not in invalid_accs:
+                    self._expire_rental(
+                        cursor=cursor,
+                        conn=conn,
+                        invalid_accs=invalid_accs,
+                        owner=owner,
+                        account_id=account_id,
+                        mafile_path=mafile_path,
+                        mafile_json=mafile_json,
+                        password=password,
+                        expiry_time=expiry_time,
+                    )
+
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+
+    def _send_expiration_warning(self, owner: str, account_id: int, hours_remaining: float, expiry_time: datetime) -> None:
+        try:
+            send_message_to_admin(
+                "EXPIRATION WARNING!\n\n"
+                f"Account ID: {account_id}\n"
+                f"Owner: {owner}\n"
+                f"Time left: {hours_remaining:.1f} hours (~{int(hours_remaining * 60)} minutes)\n"
+                "Tip: user will lose access soon!",
+            )
+            self.send_message_by_owner(
+                owner,
+                "Внимание! Ваша аренда скоро закончится (~10 минут).\n\n"
+                f"ID аккаунта: {account_id}\n"
+                f"Осталось: ~{int(hours_remaining * 60)} мин\n"
+                "Если нужно продление — напишите в чат на FunPay.\n\n"
+                "Команды:\n"
+                "!acc — данные аккаунта\n"
+                "!code — код Steam Guard\n\n"
+                f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
+            )
+        except Exception as exc:
+            logger.error(f"Failed to send warning notification: {exc}")
+
+    def _expire_rental(
+        self,
+        cursor: Any,
+        conn: Any,
+        invalid_accs: list[int],
+        owner: str,
+        account_id: int,
+        mafile_path: str,
+        mafile_json: str,
+        password: str,
+        expiry_time: datetime,
+    ) -> None:
+        logger.info(f"Account {account_id} rental expired.")
+        try:
+            new_password = asyncio.run(
+                changeSteamPassword(
+                    path_to_maFile=mafile_path,
+                    password=password,
+                    mafile_json=mafile_json,
+                )
+            )
+            send_message_to_admin(
+                "RENTAL EXPIRED\n\n"
+                f"Account ID: {account_id}\n"
+                f"Owner: {owner}\n"
+                f"New password: {new_password}\n"
+                f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            )
+
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1
+                WHERE login = (
+                    SELECT login
+                    FROM accounts
+                    WHERE ID = ?
+                )
+                """,
+                (new_password, account_id),
+            )
+            conn.commit()
+
+            try:
+                self.send_message_by_owner(
+                    owner,
+                    "Срок аренды истёк.\n\n"
+                    f"ID аккаунта: {account_id}\n"
+                    "Доступ закрыт, пароль изменён.\n"
+                    "Если нужна помощь или продление — напишите в чат.",
+                )
+            except Exception as exc:
+                logger.error(f"Failed to send expiration notification: {exc}")
+        except Exception as exc:
+            logger.error(f"Failed to change password for account {account_id}: {exc}")
+            invalid_accs.append(account_id)
