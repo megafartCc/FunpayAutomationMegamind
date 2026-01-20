@@ -172,13 +172,23 @@ class SteamPresenceBot:
                 self._client.run(**login_params)  # type: ignore[arg-type]
                 backoff = 5
             except Exception as exc:
-                def _is_gateway_close(e: BaseException) -> bool:
+                def _is_gateway_close(e: BaseException, depth: int = 0) -> bool:
+                    if depth > 5:  # safety against deep recursion
+                        return False
                     if ConnectionClosed and isinstance(e, ConnectionClosed):
                         return True
                     if WebSocketClosure and isinstance(e, WebSocketClosure):
                         return True
                     if ExceptionGroup and isinstance(e, ExceptionGroup):
-                        return any(_is_gateway_close(inner) for inner in e.exceptions)
+                        return any(_is_gateway_close(inner, depth + 1) for inner in e.exceptions)
+                    if hasattr(e, "exceptions"):  # duck-type fallback for TaskGroup errors
+                        try:
+                            return any(_is_gateway_close(inner, depth + 1) for inner in e.exceptions)  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+                    if cause and _is_gateway_close(cause, depth + 1):
+                        return True
                     msg = str(e).lower()
                     return "connection closed" in msg or "websocketclosure" in msg
 
