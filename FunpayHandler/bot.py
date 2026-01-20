@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import asyncio
 import threading
 import time
@@ -9,12 +10,22 @@ from typing import Any
 
 from FunPayAPI import Account, Runner, events, types
 
-from config import FUNPAY_GOLDEN_KEY, HOURS_FOR_REVIEW, RENTAL_CHECK_INTERVAL
+from config import (
+    AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
+    EXPIRE_INGAME_GRACE_MINUTES,
+    EXPIRE_WAIT_DOTA_ON_EXPIRE,
+    FUNPAY_GOLDEN_KEY,
+    HOURS_FOR_REVIEW,
+    RENTAL_CHECK_INTERVAL,
+    STEAM_WEB_API_KEY,
+)
 from DatabaseHandler.databaseSetup import SQLiteDB
 from logger import logger
 from notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
+from SteamHandler.deauthorize import logout_all_steam_sessions
+from SteamHandler.presence import is_dota2_in_game
 
 from .messages import USER
 from .utils import (
@@ -52,6 +63,8 @@ class FunpayBot:
         self._processed_order_ids: set[int] = set()
 
         self._last_refresh_ts = 0.0
+        self._expired_wait_since: dict[int, datetime] = {}
+        self._expired_wait_notified: set[int] = set()
 
     @property
     def account(self) -> Account | None:
@@ -700,7 +713,7 @@ class FunpayBot:
             current_time = datetime.now(tz=MOSCOW_TZ)
             cursor.execute(
                 """
-                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.mafile_json, a.password
+                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
@@ -709,7 +722,7 @@ class FunpayBot:
             accounts_data = cursor.fetchall()
 
             for row in accounts_data:
-                account_id, owner, start_time, duration, mafile_path, mafile_json, password = row
+                account_id, owner, start_time, duration, mafile_path, mafile_json, password, login, account_name = row
                 if not owner:
                     continue
 
@@ -727,6 +740,14 @@ class FunpayBot:
                     self._send_expiration_warning(owner, account_id, hours_remaining, expiry_time)
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
+                    steam_login = login or account_name
+                    if self._should_delay_expiration_for_dota(
+                        account_id=account_id,
+                        owner=owner,
+                        current_time=current_time,
+                        mafile_json=mafile_json,
+                    ):
+                        continue
                     self._expire_rental(
                         cursor=cursor,
                         conn=conn,
@@ -736,6 +757,7 @@ class FunpayBot:
                         mafile_path=mafile_path,
                         mafile_json=mafile_json,
                         password=password,
+                        steam_login=steam_login,
                         expiry_time=expiry_time,
                     )
 
@@ -743,6 +765,78 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
+
+    def _extract_steamid_from_mafile(self, mafile_json: str) -> int | None:
+        try:
+            data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
+            steamid_value = (data or {}).get("Session", {}).get("SteamID")
+            if steamid_value is None:
+                return None
+            return int(steamid_value)
+        except Exception:
+            return None
+
+    def _should_delay_expiration_for_dota(
+        self,
+        *,
+        account_id: int,
+        owner: str,
+        current_time: datetime,
+        mafile_json: str,
+    ) -> bool:
+        if not EXPIRE_WAIT_DOTA_ON_EXPIRE:
+            return False
+        if not STEAM_WEB_API_KEY:
+            return False
+        if not mafile_json:
+            return False
+
+        steamid = self._extract_steamid_from_mafile(mafile_json)
+        if steamid is None:
+            return False
+
+        try:
+            in_game = asyncio.run(is_dota2_in_game(steamid=steamid, api_key=STEAM_WEB_API_KEY))
+        except Exception:
+            in_game = False
+
+        if not in_game:
+            self._expired_wait_since.pop(account_id, None)
+            self._expired_wait_notified.discard(account_id)
+            return False
+
+        since = self._expired_wait_since.get(account_id)
+        if since is None:
+            self._expired_wait_since[account_id] = current_time
+            since = current_time
+
+        if current_time - since >= timedelta(minutes=EXPIRE_INGAME_GRACE_MINUTES):
+            self._expired_wait_since.pop(account_id, None)
+            self._expired_wait_notified.discard(account_id)
+            return False
+
+        if account_id not in self._expired_wait_notified:
+            try:
+                self.send_message_by_owner(
+                    owner,
+                    "Ваша аренда уже закончилась, но аккаунт сейчас в игре Dota 2.\n"
+                    "Я подожду, пока матч закончится, и затем автоматически закрою доступ.\n",
+                )
+            except Exception:
+                pass
+            try:
+                send_message_to_admin(
+                    "EXPIRE DELAYED (IN-GAME)\n\n"
+                    f"Account ID: {account_id}\n"
+                    f"Owner: {owner}\n"
+                    f"Reason: detected in Dota 2\n"
+                    f"Grace: {EXPIRE_INGAME_GRACE_MINUTES} minutes\n",
+                )
+            except Exception:
+                pass
+            self._expired_wait_notified.add(account_id)
+
+        return True
 
     def _send_expiration_warning(self, owner: str, account_id: int, hours_remaining: float, expiry_time: datetime) -> None:
         try:
@@ -777,10 +871,24 @@ class FunpayBot:
         mafile_path: str,
         mafile_json: str,
         password: str,
+        steam_login: str,
         expiry_time: datetime,
     ) -> None:
         logger.info(f"Account {account_id} rental expired.")
         try:
+            deauth_ok = False
+            if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
+                try:
+                    deauth_ok = asyncio.run(
+                        logout_all_steam_sessions(
+                            steam_login=steam_login,
+                            steam_password=password,
+                            mafile_json=mafile_json,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
+
             new_password = asyncio.run(
                 changeSteamPassword(
                     path_to_maFile=mafile_path,
@@ -792,6 +900,7 @@ class FunpayBot:
                 "RENTAL EXPIRED\n\n"
                 f"Account ID: {account_id}\n"
                 f"Owner: {owner}\n"
+                f"Deauthorize: {'ok' if deauth_ok else 'failed'}\n"
                 f"New password: {new_password}\n"
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
@@ -800,11 +909,7 @@ class FunpayBot:
                 """
                 UPDATE accounts
                 SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1
-                WHERE login = (
-                    SELECT login
-                    FROM accounts
-                    WHERE ID = ?
-                )
+                WHERE ID = ?
                 """,
                 (new_password, account_id),
             )
@@ -821,5 +926,28 @@ class FunpayBot:
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
         except Exception as exc:
-            logger.error(f"Failed to change password for account {account_id}: {exc}")
-            invalid_accs.append(account_id)
+            logger.error(f"Failed to expire account {account_id}: {exc}")
+            try:
+                send_message_to_admin(
+                    "RENTAL EXPIRED (PARTIAL)\n\n"
+                    f"Account ID: {account_id}\n"
+                    f"Owner: {owner}\n"
+                    "Result: password rotation failed; owner cleared anyway\n"
+                    f"Error: {exc}\n",
+                )
+            except Exception:
+                pass
+
+            try:
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                    SET owner = NULL, rental_start = NULL, rental_duration = 1
+                    WHERE ID = ?
+                    """,
+                    (account_id,),
+                )
+                conn.commit()
+            except Exception as exc2:
+                logger.error(f"Failed to clear expired rental state for account {account_id}: {exc2}")
+                invalid_accs.append(account_id)
