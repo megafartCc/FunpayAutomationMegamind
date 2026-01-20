@@ -791,7 +791,7 @@ class SQLiteDB:
             cursor.execute(
                 """
                 SELECT ID, account_name, path_to_maFile, login, password, 
-                       rental_duration, owner, rental_start
+                       rental_duration, owner, rental_start, mafile_json
                 FROM accounts 
                 WHERE ID = ?
                 """,
@@ -808,6 +808,7 @@ class SQLiteDB:
                     "rental_duration": row[5],
                     "owner": row[6],
                     "rental_start": row[7],
+                    "mafile_json": row[8],
                 }
             return None
         except Exception as e:
