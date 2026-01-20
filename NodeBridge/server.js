@@ -140,7 +140,6 @@ app.get("/presence/:steamid", (req, res) => {
   if (!data) return res.status(404).json({ error: "not_found" });
   const rp = data.rich_presence || {};
   const rpRaw = data.rich_presence_raw || [];
-  const appid = data.appid ? String(data.appid) : null;
   const lobbyRaw =
     rp.lobby ||
     (Array.isArray(rpRaw)
@@ -154,9 +153,8 @@ app.get("/presence/:steamid", (req, res) => {
   const statusHit = statusKeywords.some(
     (kw) => statusLower.includes(kw) || displayLower.includes(kw)
   );
-  const in_match =
-    appid === "570" ? isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit : false;
-  const in_game = !!(data.in_game || appid || lobbyRaw);
+  const in_match = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
+  const in_game = !!(data.in_game || data.appid || lobbyRaw || statusHit);
   res.json({
     in_game,
     in_match,
