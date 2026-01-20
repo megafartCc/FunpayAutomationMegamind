@@ -200,6 +200,7 @@ class SQLiteDB:
         self._ensure_mafile_column()
         self._ensure_lot_url_column()
         self._ensure_users_table()
+        self._ensure_user_owner_columns()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -326,6 +327,7 @@ class SQLiteDB:
         duration,
         owner=None,
         mafile_json=None,
+        user_id: int | None = None,
     ):
         """Add an account to the database."""
         cursor = None
@@ -343,11 +345,11 @@ class SQLiteDB:
             cursor.execute(
                 """
                 INSERT INTO accounts (
-                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, owner
+                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, owner, user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (account_name, path_to_maFile, mafile_json, login, password, duration, owner),
+                (account_name, path_to_maFile, mafile_json, login, password, duration, owner, user_id),
             )
             self.conn.commit()
             logger.info(f"Account '{account_name}' added successfully")
@@ -517,15 +519,25 @@ class SQLiteDB:
         cursor.close()
         return owners_data
 
-    def get_all_accounts(self):
+    def get_all_accounts(self, user_id: int | None = None):
         """Retrieve all accounts from the database."""
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start
-            FROM accounts
-            """
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id
+                FROM accounts
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id
+                FROM accounts
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         cursor.close()
         accounts = [
@@ -538,21 +550,34 @@ class SQLiteDB:
                 "rental_duration": row[5],
                 "owner": row[6],
                 "rental_start": row[7],
+                "user_id": row[8] if len(row) > 8 else None,
             }
             for row in rows
         ]
         return accounts
 
-    def list_lot_mappings(self) -> list:
+    def list_lot_mappings(self, user_id: int | None = None) -> list:
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT l.lot_number, l.account_id, l.lot_url, a.account_name, a.owner
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            ORDER BY l.lot_number
-            """
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name, a.owner
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                ORDER BY l.lot_number
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name, a.owner
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.user_id = ?
+                ORDER BY l.lot_number
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
             cursor.close()
@@ -567,22 +592,28 @@ class SQLiteDB:
             for row in rows
         ]
 
-    def set_lot_mapping(self, lot_number: int, account_id: int, lot_url: str | None = None) -> bool:
+    def set_lot_mapping(self, lot_number: int, account_id: int, lot_url: str | None = None, user_id: int | None = None) -> bool:
         cursor = self._cursor()
         try:
-            cursor.execute(
-                "SELECT ID FROM accounts WHERE ID = ?",
-                (account_id,),
-            )
+            if user_id is None:
+                cursor.execute(
+                    "SELECT ID FROM accounts WHERE ID = ?",
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT ID FROM accounts WHERE ID = ? AND user_id = ?",
+                    (account_id, user_id),
+                )
             if cursor.fetchone() is None:
                 return False
             cursor.execute(
-                "DELETE FROM lots WHERE lot_number = ? OR account_id = ?",
-                (lot_number, account_id),
+                "DELETE FROM lots WHERE (lot_number = ? OR account_id = ?) " + ("AND user_id = ?" if user_id else ""),
+                (lot_number, account_id) + ((user_id,) if user_id else ()),
             )
             cursor.execute(
-                "INSERT INTO lots (lot_number, account_id, lot_url) VALUES (?, ?, ?)",
-                (lot_number, account_id, lot_url),
+                "INSERT INTO lots (lot_number, account_id, lot_url, user_id) VALUES (?, ?, ?, ?)",
+                (lot_number, account_id, lot_url, user_id),
             )
             self.conn.commit()
             return True
@@ -619,17 +650,28 @@ class SQLiteDB:
             "account_name": row[3],
         }
 
-    def get_account_by_lot_number(self, lot_number: int):
+    def get_account_by_lot_number(self, lot_number: int, user_id: int | None = None):
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            WHERE l.lot_number = ?
-            """,
-            (lot_number,),
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ?
+                """,
+                (lot_number,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ? AND l.user_id = ?
+                """,
+                (lot_number, user_id),
+            )
         row = cursor.fetchone()
         if self.db_type == "mysql":
             cursor.close()
@@ -646,17 +688,29 @@ class SQLiteDB:
             "mafile_json": row[7],
         }
 
-    def get_available_lot_accounts(self) -> list:
+    def get_available_lot_accounts(self, user_id: int | None = None) -> list:
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            WHERE a.owner IS NULL
-            ORDER BY l.lot_number
-            """
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE a.owner IS NULL
+                ORDER BY l.lot_number
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE a.owner IS NULL AND a.user_id = ?
+                ORDER BY l.lot_number
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
             cursor.close()
@@ -862,7 +916,7 @@ class SQLiteDB:
             logger.error(f"Error getting account by name: {str(e)}")
             return None
 
-    def get_account_by_id(self, account_id: int) -> dict:
+    def get_account_by_id(self, account_id: int, user_id: int | None = None) -> dict:
         """
         Get account details by ID.
         
@@ -874,15 +928,26 @@ class SQLiteDB:
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT ID, account_name, path_to_maFile, login, password, 
-                       rental_duration, owner, rental_start, mafile_json
-                FROM accounts 
-                WHERE ID = ?
-                """,
-                (account_id,),
-            )
+            if user_id is None:
+                cursor.execute(
+                    """
+                    SELECT ID, account_name, path_to_maFile, login, password, 
+                           rental_duration, owner, rental_start, mafile_json
+                    FROM accounts 
+                    WHERE ID = ?
+                    """,
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT ID, account_name, path_to_maFile, login, password, 
+                           rental_duration, owner, rental_start, mafile_json
+                    FROM accounts 
+                    WHERE ID = ? AND user_id = ?
+                    """,
+                    (account_id, user_id),
+                )
             row = cursor.fetchone()
             if row:
                 return {
@@ -903,7 +968,7 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def get_rental_statistics(self) -> dict:
+    def get_rental_statistics(self, user_id: int | None = None) -> dict:
         """
         Get rental statistics for the system.
         
@@ -914,31 +979,56 @@ class SQLiteDB:
             cursor = self._cursor()
             
             # Total accounts
-            cursor.execute("SELECT COUNT(*) FROM accounts")
+            if user_id is None:
+                cursor.execute("SELECT COUNT(*) FROM accounts")
+            else:
+                cursor.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", (user_id,))
             total_accounts = cursor.fetchone()[0]
             
             # Active rentals
-            cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NOT NULL")
+            if user_id is None:
+                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NOT NULL")
+            else:
+                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NOT NULL AND user_id = ?", (user_id,))
             active_rentals = cursor.fetchone()[0]
             
             # Available accounts
-            cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NULL")
+            if user_id is None:
+                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NULL")
+            else:
+                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NULL AND user_id = ?", (user_id,))
             available_accounts = cursor.fetchone()[0]
             
             # Total rental hours
-            cursor.execute("SELECT SUM(rental_duration) FROM accounts WHERE owner IS NOT NULL")
+            if user_id is None:
+                cursor.execute("SELECT SUM(rental_duration) FROM accounts WHERE owner IS NOT NULL")
+            else:
+                cursor.execute(
+                    "SELECT SUM(rental_duration) FROM accounts WHERE owner IS NOT NULL AND user_id = ?", (user_id,)
+                )
             total_hours = cursor.fetchone()[0] or 0
             
             # Recent rentals (last 24 hours)
             since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM accounts 
-                WHERE owner IS NOT NULL 
-                AND rental_start >= ?
-                """,
-                (since,),
-            )
+            if user_id is None:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM accounts 
+                    WHERE owner IS NOT NULL 
+                    AND rental_start >= ?
+                    """,
+                    (since,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM accounts 
+                    WHERE owner IS NOT NULL 
+                    AND rental_start >= ?
+                    AND user_id = ?
+                    """,
+                    (since, user_id),
+                )
             recent_rentals = cursor.fetchone()[0]
             
             return {
@@ -1169,6 +1259,35 @@ class SQLiteDB:
         except Exception as e:
             logger.error(f"Error getting user active accounts: {str(e)}")
             return []
+        finally:
+            cursor.close()
+
+    def _ensure_user_owner_columns(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    ALTER TABLE accounts ADD COLUMN user_id INT NULL
+                    """
+                )
+            else:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN user_id INTEGER")
+            self.conn.commit()
+        except Exception:
+            pass
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    ALTER TABLE lots ADD COLUMN user_id INT NULL
+                    """
+                )
+            else:
+                cursor.execute("ALTER TABLE lots ADD COLUMN user_id INTEGER")
+            self.conn.commit()
+        except Exception:
+            pass
         finally:
             cursor.close()
 

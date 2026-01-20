@@ -77,6 +77,11 @@ def require_admin(request: Request) -> None:
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def current_user_id(request: Request) -> int | None:
+    user = getattr(request.state, "user", None)
+    return user.get("id") if user else None
+
+
 def require_funpay_account():
     account = get_account()
     if account is None:
@@ -192,8 +197,9 @@ def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
 
 
 @app.get("/api/stats", dependencies=[Depends(require_admin)])
-def stats() -> dict:
-    return db.get_rental_statistics()
+def stats(request: Request) -> dict:
+    uid = current_user_id(request)
+    return db.get_rental_statistics(uid)
 
 
 @app.get("/api/notifications", dependencies=[Depends(require_admin)])
@@ -212,8 +218,9 @@ async def _presence_for_account(account: dict) -> dict:
 
 
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
-async def accounts() -> dict:
-    items = db.get_all_accounts()
+async def accounts(request: Request) -> dict:
+    uid = current_user_id(request)
+    items = db.get_all_accounts(uid)
     if not items:
         return {"items": items}
 
@@ -226,36 +233,41 @@ async def accounts() -> dict:
 
 
 @app.get("/api/lots", dependencies=[Depends(require_admin)])
-def lots() -> dict:
-    return {"items": db.list_lot_mappings()}
+def lots(request: Request) -> dict:
+    uid = current_user_id(request)
+    return {"items": db.list_lot_mappings(uid)}
 
 
 @app.post("/api/lots", dependencies=[Depends(require_admin)])
-def create_lot_mapping(payload: LotMapping) -> dict:
-    success = db.set_lot_mapping(payload.lot_number, payload.account_id, payload.lot_url)
+def create_lot_mapping(payload: LotMapping, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.set_lot_mapping(payload.lot_number, payload.account_id, payload.lot_url, uid)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True}
 
 
 @app.delete("/api/lots/{lot_number}", dependencies=[Depends(require_admin)])
-def delete_lot_mapping(lot_number: int) -> dict:
+def delete_lot_mapping(lot_number: int, request: Request) -> dict:
+    uid = current_user_id(request)
     db.delete_lot_mapping(lot_number)
     return {"success": True}
 
 
 @app.get("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
-def account_detail(account_id: int) -> dict:
-    account = db.get_account_by_id(account_id)
+def account_detail(account_id: int, request: Request) -> dict:
+    uid = current_user_id(request)
+    account = db.get_account_by_id(account_id, uid)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
 
 
 @app.post("/api/accounts", dependencies=[Depends(require_admin)])
-def create_account(payload: AccountCreate) -> dict:
+def create_account(payload: AccountCreate, request: Request) -> dict:
     if not payload.mafile_json.strip():
         raise HTTPException(status_code=400, detail="mafile_json is required")
+    uid = current_user_id(request)
     success = db.add_account(
         payload.account_name,
         "",
@@ -264,6 +276,7 @@ def create_account(payload: AccountCreate) -> dict:
         payload.rental_duration,
         payload.owner,
         mafile_json=payload.mafile_json,
+        user_id=uid,
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to create account")
