@@ -25,6 +25,7 @@ from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.web_presence import fetch_web_presence
+from SteamHandler.presence_bot import get_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
 
