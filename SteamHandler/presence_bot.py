@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
 from dataclasses import dataclass
@@ -133,13 +134,20 @@ class SteamPresenceBot:
 
     def _run(self) -> None:
         try:
-            self._client.run(
-                self._login,
-                self._password,
-                shared_secret=self._shared_secret,
-                identity_secret=self._identity_secret,
-                refresh_token=self._refresh_token,
-            )
+            login_params = {"username": self._login, "password": self._password}
+            try:
+                sig = inspect.signature(self._client.login)  # type: ignore[attr-defined]
+                if "shared_secret" in sig.parameters and self._shared_secret:
+                    login_params["shared_secret"] = self._shared_secret
+                if "identity_secret" in sig.parameters and self._identity_secret:
+                    login_params["identity_secret"] = self._identity_secret
+                if "refresh_token" in sig.parameters and self._refresh_token:
+                    login_params["refresh_token"] = self._refresh_token
+            except Exception:
+                if self._shared_secret:
+                    login_params["shared_secret"] = self._shared_secret
+
+            self._client.run(**login_params)  # type: ignore[arg-type]
         except Exception as exc:
             logger.error(f"Steam presence bot crashed: {exc}")
 
@@ -206,4 +214,3 @@ def init_presence_bot(
     bot.start()
     _bot_singleton = bot
     return bot
-
