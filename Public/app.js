@@ -461,8 +461,7 @@ ui.addForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(ui.addForm);
   const payload = Object.fromEntries(formData.entries());
-  const duration = Number(payload.rental_duration);
-  payload.rental_duration = Number.isFinite(duration) && duration > 0 ? duration : 1;
+  delete payload.rental_duration;
   if (!payload.mafile_json) {
     delete payload.mafile_json;
   }
