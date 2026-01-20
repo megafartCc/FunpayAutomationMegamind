@@ -350,8 +350,8 @@ def startFunpay():
                         logger.warning(f"Account '{order_name}' is already rented by {specific_account['owner']}")
                         acc.send_message(
                             chat.id,
-                            "???? ??????? ?????? ?????.\n"
-                            "????????? ?????????????? ??? ????????, ????? ??????? ???????."
+                            "Этот аккаунт сейчас уже арендован.\n"
+                            "Пожалуйста, выберите другой лот или напишите в чат — поможем."
                         )
                         continue
                     
@@ -473,11 +473,11 @@ def startFunpay():
                         f"Order paid for rental lot. Buyer: {event.order.buyer_username}, Lot: {matched_account}, Order ID: {event.order.id}"
                     )
                     send_message_to_admin(
-                        "?????? ????????\n\n"
-                        f"???????????: {event.order.buyer_username}\n"
-                        f"???: {matched_account}\n"
-                        f"?????: {event.order.id}\n"
-                        f"?????: {event.order.price} ?"
+                        "Новый оплаченный заказ (аренда)\n\n"
+                        f"Покупатель: {event.order.buyer_username}\n"
+                        f"Лот: {matched_account}\n"
+                        f"Заказ: {event.order.id}\n"
+                        f"Сумма: {event.order.price} ₽"
                     )
                 else:
                     logger.info(
@@ -578,20 +578,20 @@ def startFunpay():
                                     chat.id,
                                     "Данные аккаунта:\n"
                                     f"ID: {account['id']}\n"
-                                    f"Осталось: {account['account_name']}\n"
+                                    f"Аккаунт: {account['account_name']}\n"
                                     f"Логин: {account['login']}\n"
-                                    f"?Логин: {account['password']}\n"
-                                    f"?Осталось: {expiry_str} МСК | ?Осталось: {remaining_str}",
+                                    f"Пароль: {account['password']}\n"
+                                    f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
                                 )
                             else:
                                 current_time = datetime.now(tz=moscow_tz)
                                 lines = [
-                                    "?? МСКМСК МСКМСК?? ?? ?? МСКМСК МСКМСК?? МСКМСК? МСКМСК?? ID МСК МСК??:",
+                                    "У вас несколько активных аренд. Напишите ID или логин аккаунта:",
                                 ]
                                 for account in accounts:
                                     _, _, remaining_str = get_remaining_time(account, current_time)
                                     lines.append(
-                                        f"{account['id']}) {account['account_name']} ({account['login']}) ? МСКМСК?? {remaining_str}"
+                                        f"{account['id']}) {account['account_name']} ({account['login']}) — осталось {remaining_str}"
                                     )
                                 pendingAccountChoice[event.message.author] = accounts
                                 acc.send_message(chat.id, "\n".join(lines))
@@ -599,16 +599,16 @@ def startFunpay():
                             logger.error(
                                 f"Failed to send account details to {event.message.author}: {str(e)}"
                             )
-                            acc.send_message(chat.id, "?? МСКМСК? МСКМСК?? МСКМСК МСКМСК??.")
+                            acc.send_message(chat.id, "Не удалось получить данные аккаунта. Попробуйте позже.")
                     elif message_text == "!bonus":
                         try:
                             owner = event.message.author
                             if owner in feedbackGiven:
-                                acc.send_message(chat.id, "МСК?? МСК МСК МСКМСКМСК??.")
+                                acc.send_message(chat.id, "Бонус уже был начислен.")
                             elif owner not in bonusEligible:
                                 acc.send_message(
                                     chat.id,
-                                    "МСК?? ?? МСКМСК. МСКМСК?? МСК?? ? МСКМСК?? !bonus.",
+                                    "Бонус недоступен. Оставьте отзыв и напишите !bonus.",
                                 )
                             else:
                                 accounts = db.get_user_active_accounts(owner)
@@ -623,21 +623,21 @@ def startFunpay():
                                     bonusEligible.discard(owner)
                                     acc.send_message(
                                         chat.id,
-                                        f"МСК?? МСКМСКМСК??. +{HOURS_FOR_REVIEW} ?.\n"
-                                        f"МСКМСК?? ??Осталось: {extended}.",
+                                        f"Бонус начислен. +{HOURS_FOR_REVIEW} ч.\n"
+                                        f"Продлено аренд: {extended}.",
                                     )
                         except Exception as e:
                             logger.error(f"Failed to apply bonus for {event.message.author}: {str(e)}")
-                            acc.send_message(chat.id, "?? МСКМСК? МСКМСКМСК МСК??.")
+                            acc.send_message(chat.id, "Не удалось начислить бонус. Попробуйте позже.")
                     elif message_text.startswith("!extend"):
                         try:
                             parts = raw_text.split()
                             if len(parts) < 2 or not parts[1].isdigit():
-                                acc.send_message(chat.id, "МСК?Осталось: !extend <МСК?>")
+                                acc.send_message(chat.id, "Использование: !extend <часы> [id|логин|название]")
                                 continue
                             hours = int(parts[1])
                             if hours <= 0:
-                                acc.send_message(chat.id, "МСКМСКМСК? МСК?? МСКМСК МСК? МСКМСК 0.")
+                                acc.send_message(chat.id, "Количество часов должно быть больше 0.")
                                 continue
 
                             accounts = db.get_user_active_accounts(event.message.author)
@@ -658,13 +658,13 @@ def startFunpay():
                                     _, expiry_str, remaining_str = get_remaining_time(account, current_time)
                                     acc.send_message(
                                         chat.id,
-                                        f"МСКМСК?? ?? {hours} ?.\n"
+                                        f"Продлено на {hours} ч.\n"
                                         f"ID: {choice['id']}\n"
-                                        f"Осталось: {choice['account_name']}\n"
-                                        f"?Осталось: {expiry_str} МСК | ?Осталось: {remaining_str}",
+                                        f"Аккаунт: {choice['account_name']}\n"
+                                        f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
                                     )
                                 else:
-                                    acc.send_message(chat.id, "?? МСКМСК? МСКМСК?? МСКМСК.")
+                                    acc.send_message(chat.id, "Не удалось продлить аренду. Попробуйте позже.")
                             elif len(accounts) == 1:
                                 account = accounts[0]
                                 success = db.extend_rental_duration(account["id"], hours)
@@ -673,22 +673,22 @@ def startFunpay():
                                     _, expiry_str, remaining_str = get_remaining_time(account, current_time)
                                     acc.send_message(
                                         chat.id,
-                                        f"МСКМСК?? ?? {hours} ?.\n"
+                                        f"Продлено на {hours} ч.\n"
                                         f"ID: {account['id']}\n"
-                                        f"Осталось: {account['account_name']}\n"
-                                        f"?Осталось: {expiry_str} МСК | ?Осталось: {remaining_str}",
+                                        f"Аккаунт: {account['account_name']}\n"
+                                        f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
                                     )
                                 else:
-                                    acc.send_message(chat.id, "?? МСКМСК? МСКМСК?? МСКМСК.")
+                                    acc.send_message(chat.id, "Не удалось продлить аренду. Попробуйте позже.")
                             else:
                                 current_time = datetime.now(tz=moscow_tz)
                                 lines = [
-                                    "МСК?? МСКМСК? МСКМСКМСК МСКМСК?? ID МСК МСК??:",
+                                    "У вас несколько активных аренд. Напишите ID или логин аккаунта:",
                                 ]
                                 for account in accounts:
                                     _, _, remaining_str = get_remaining_time(account, current_time)
                                     lines.append(
-                                        f"{account['id']}) {account['account_name']} ({account['login']}) ? МСКМСК?? {remaining_str}"
+                                        f"{account['id']}) {account['account_name']} ({account['login']}) — осталось {remaining_str}"
                                     )
                                 pendingExtendChoice[event.message.author] = {
                                     "hours": hours,
@@ -697,14 +697,14 @@ def startFunpay():
                                 acc.send_message(chat.id, "\n".join(lines))
                         except Exception as e:
                             logger.error(f"Failed to extend rental for {event.message.author}: {str(e)}")
-                            acc.send_message(chat.id, "?? МСКМСК? МСКМСК?? МСКМСК.")
+                            acc.send_message(chat.id, "Не удалось продлить аренду. Попробуйте позже.")
                     elif message_text == "!stock":
                         try:
                             available_lots = db.get_available_lot_accounts()
                             if available_lots:
-                                lines = ["МСКМСКМСК МСК?:"]
+                                lines = ["Свободные лоты:"]
                                 for account in available_lots:
-                                    lot_label = f"?{account['lot_number']}"
+                                    lot_label = f"№{account['lot_number']}"
                                     lot_url = account.get("lot_url")
                                     if lot_url:
                                         lines.append(f"{account['account_name']} - {lot_label} - {lot_url}")
@@ -714,7 +714,7 @@ def startFunpay():
                             else:
                                 all_lots = db.get_all_lot_accounts()
                                 if not all_lots:
-                                    acc.send_message(chat.id, "МСК? ?? МСКМСКМСК.")
+                                    acc.send_message(chat.id, "Лоты не добавлены.")
                                 else:
                                     current_time = datetime.now(tz=moscow_tz)
                                     next_expiry = None
@@ -745,17 +745,17 @@ def startFunpay():
                                         minutes = int((remaining.total_seconds() % 3600) // 60)
                                         acc.send_message(
                                             chat.id,
-                                            "МСК ? МСКМСК. МСКМСКМСК МСКМСК? МСКМСКМСК?? МСК?? "
-                                            f"{hours} ? {minutes} МСК (? {next_expiry.strftime('%H:%M:%S')} МСК).",
+                                            "Свободных лотов нет. Ближайший освободится через "
+                                            f"{hours} ч {minutes} мин (в {next_expiry.strftime('%H:%M:%S')} МСК).",
                                         )
                                     else:
                                         acc.send_message(
                                             chat.id,
-                                            "МСК ? МСКМСК. МСК МСКМСК ?? МСКМСКМСК? МСКМСКМСКМСК.",
+                                            "Свободных лотов нет. Не удалось определить время освобождения.",
                                         )
                         except Exception as e:
                             logger.error(f"Failed to load stock for {event.message.author}: {str(e)}")
-                            acc.send_message(chat.id, "?? МСКМСК? МСКМСК?? МСКМСК МСК??.")
+                            acc.send_message(chat.id, "Не удалось получить наличие. Попробуйте позже.")
                     elif event.message.type == types.MessageTypes.NEW_FEEDBACK:
                         try:
                             owner = event.message.author

@@ -210,7 +210,7 @@ const renderInventory = (items) => {
           <td>${item.id}</td>
           <td>${item.account_name}</td>
           <td>${item.login}</td>
-          <td>${showPasswords ? item.password : "??????"}</td>
+          <td>${showPasswords ? item.password : "******"}</td>
           <td>${item.owner || "-"}</td>
           <td>${item.rental_duration}</td>
         </tr>
