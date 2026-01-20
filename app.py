@@ -189,9 +189,11 @@ async def _presence_for_account(account: dict) -> dict:
         return {}
 
     steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
+    state = "match" if snapshot.in_match else ("menu" if snapshot.playing_dota else "offline")
     return {
         "presence_in_match": bool(snapshot.in_match),
         "presence_display": steam_display or "",
+        "presence_state": state,
     }
 
 

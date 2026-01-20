@@ -27,9 +27,11 @@ def fetch_web_presence(steamid64: int, api_key: str, timeout: float = 6.0) -> Op
         gameid = str(player.get("gameid") or "")
         display = player.get("gameextrainfo") or ""
         in_match = gameid == _DOTA2_APP_ID
+        state = "match" if in_match else ("menu" if gameid == _DOTA2_APP_ID else "offline")
         return {
             "presence_in_match": in_match,
             "presence_display": display,
+            "presence_state": state,
         }
     except Exception:
         return None

@@ -243,7 +243,9 @@ const renderInventory = (items) => {
 
   const showPasswords = ui.showPasswords.checked;
   const presenceLabel = (item) => {
-    if (item.presence_in_match) return "В матче";
+    if (item.presence_state === "match" || item.presence_in_match) return "В матче";
+    if (item.presence_state === "menu") return "В меню";
+    if (item.presence_state === "offline") return "Не в игре";
     if (item.presence_display) return item.presence_display;
     return "—";
   };

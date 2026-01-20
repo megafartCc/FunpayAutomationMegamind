@@ -35,12 +35,7 @@ _DOTA2_APP_ID = 570
 
 
 def is_in_dota_match(user: Any) -> bool:
-    game = getattr(user, "game", None)
-    if game is not None and getattr(game, "id", None) != _DOTA2_APP_ID:
-        return False
-
-    app = getattr(user, "app", None)
-    if app is None or getattr(app, "id", None) != _DOTA2_APP_ID:
+    if not _is_playing_dota(user):
         return False
 
     rich_presence = getattr(user, "rich_presence", None) or {}
@@ -64,6 +59,16 @@ def is_in_dota_match(user: Any) -> bool:
     return False
 
 
+def _is_playing_dota(user: Any) -> bool:
+    game = getattr(user, "game", None)
+    if game is not None and getattr(game, "id", None) == _DOTA2_APP_ID:
+        return True
+    app = getattr(user, "app", None)
+    if app is not None and getattr(app, "id", None) == _DOTA2_APP_ID:
+        return True
+    return False
+
+
 def _get_steamid64(user: Any) -> int | None:
     steam_id = getattr(user, "steam_id", None)
     as_64 = getattr(steam_id, "as_64", None)
@@ -83,6 +88,7 @@ def _get_steamid64(user: Any) -> int | None:
 
 @dataclass(frozen=True)
 class PresenceSnapshot:
+    playing_dota: bool
     in_match: bool
     ts: float
     rich_presence: dict[str, str]
@@ -142,7 +148,12 @@ class SteamPresenceBot:
             if steamid64 is None:
                 return
             rp = getattr(after, "rich_presence", None) or {}
-            snapshot = PresenceSnapshot(in_match=is_in_dota_match(after), ts=time.time(), rich_presence=dict(rp))
+            snapshot = PresenceSnapshot(
+                playing_dota=_is_playing_dota(after),
+                in_match=is_in_dota_match(after),
+                ts=time.time(),
+                rich_presence=dict(rp),
+            )
             with self._lock:
                 self._presence[steamid64] = snapshot
 
@@ -219,7 +230,12 @@ class SteamPresenceBot:
             except Exception:
                 return None
             rp = getattr(user, "rich_presence", None) or {}
-            snapshot = PresenceSnapshot(in_match=is_in_dota_match(user), ts=time.time(), rich_presence=dict(rp))
+            snapshot = PresenceSnapshot(
+                playing_dota=_is_playing_dota(user),
+                in_match=is_in_dota_match(user),
+                ts=time.time(),
+                rich_presence=dict(rp),
+            )
             with self._lock:
                 self._presence[int(steamid64)] = snapshot
             return snapshot
