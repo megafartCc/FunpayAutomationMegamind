@@ -1213,7 +1213,7 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def get_active_users(self):
+    def get_active_users(self, user_id: int | None = None):
         """
         Retrieve all active users from the database along with their account details.
         An active user is one who has a non-null owner and rental_start time.
@@ -1223,23 +1223,44 @@ class SQLiteDB:
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT 
-                    ID,
-                    account_name,
-                    owner,
-                    rental_start,
-                    rental_duration,
-                    path_to_maFile,
-                    login
-                FROM accounts 
-                WHERE owner IS NOT NULL 
-                AND owner != 'OTHER_ACCOUNT'
-                AND rental_start IS NOT NULL
-                ORDER BY rental_start DESC
-                """
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT 
+                        ID,
+                        account_name,
+                        owner,
+                        rental_start,
+                        rental_duration,
+                        path_to_maFile,
+                        login
+                    FROM accounts 
+                    WHERE owner IS NOT NULL 
+                    AND owner != 'OTHER_ACCOUNT'
+                    AND rental_start IS NOT NULL
+                    ORDER BY rental_start DESC
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT 
+                        ID,
+                        account_name,
+                        owner,
+                        rental_start,
+                        rental_duration,
+                        path_to_maFile,
+                        login
+                    FROM accounts 
+                    WHERE owner IS NOT NULL 
+                    AND owner != 'OTHER_ACCOUNT'
+                    AND rental_start IS NOT NULL
+                    AND user_id = ?
+                    ORDER BY rental_start DESC
+                    """,
+                    (user_id,),
+                )
             rows = cursor.fetchall()
             active_users = [
                 {
@@ -1299,7 +1320,7 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def get_user_active_accounts(self, owner_id: str) -> list:
+    def get_user_active_accounts(self, owner_id: str, user_id: int | None = None) -> list:
         """
         Get all active accounts of a specific user.
         
@@ -1311,15 +1332,26 @@ class SQLiteDB:
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT ID, account_name, login, password, rental_duration, rental_start
-                FROM accounts 
-                WHERE owner = ?
-                ORDER BY rental_start DESC
-                """,
-                (owner_id,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT ID, account_name, login, password, rental_duration, rental_start
+                    FROM accounts 
+                    WHERE owner = ?
+                    ORDER BY rental_start DESC
+                    """,
+                    (owner_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT ID, account_name, login, password, rental_duration, rental_start
+                    FROM accounts 
+                    WHERE owner = ? AND user_id = ?
+                    ORDER BY rental_start DESC
+                    """,
+                    (owner_id, user_id),
+                )
             rows = cursor.fetchall()
             return [
                 {

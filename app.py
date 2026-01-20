@@ -154,7 +154,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "funpay_enabled": bool(FUNPAY_GOLDEN_KEY),
-        "funpay_ready": get_account() is not None,
+        "funpay_ready": False,
     }
 
 
@@ -408,11 +408,13 @@ async def steam_change_password(account_id: int, payload: SteamPasswordRequest, 
     return {"success": True, "new_password": updated_password}
 
 
-@app.get("/api/rentals/active")
-def active_rentals() -> dict:
-    items = db.get_active_users()
-    account = get_account()
-    if account is None:
+@app.get("/api/rentals/active", dependencies=[Depends(require_admin)])
+def active_rentals(request: Request) -> dict:
+    uid = current_user_id(request)
+    items = db.get_active_users(uid)
+    try:
+        account = require_funpay_account(request)
+    except HTTPException:
         return {"items": items}
 
     for item in items:
@@ -432,9 +434,10 @@ def active_rentals() -> dict:
     return {"items": items}
 
 
-@app.get("/api/rentals/user/{owner}")
-def user_rentals(owner: str) -> dict:
-    return {"items": db.get_user_active_accounts(owner)}
+@app.get("/api/rentals/user/{owner}", dependencies=[Depends(require_admin)])
+def user_rentals(owner: str, request: Request) -> dict:
+    uid = current_user_id(request)
+    return {"items": db.get_user_active_accounts(owner, uid)}
 
 
 @app.post("/api/rentals/user/{owner}/extend", dependencies=[Depends(require_admin)])
