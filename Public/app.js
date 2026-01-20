@@ -197,7 +197,7 @@ const renderActiveRentals = (items) => {
           <td>${item.id}</td>
           <td>${item.account_name}</td>
           <td>${item.owner}</td>
-          <td>${item.chat_url ? `<a href="${item.chat_url}" target="_blank" rel="noreferrer">Чат</a>` : "-"}</td>
+          <td>${item.chat_url ? `<a href="${item.chat_url}" target="_blank" rel="noreferrer">${escapeHtml(item.chat_url)}</a>` : "-"}</td>
           <td>${item.login}</td>
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
