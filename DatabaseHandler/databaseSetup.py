@@ -1420,10 +1420,10 @@ class SQLiteDB:
             # Ensure primary key is (lot_number, user_id)
             cursor.execute(
                 """
-                SELECT column_name, sequence_in_index
+                SELECT column_name, SEQ_IN_INDEX
                 FROM information_schema.statistics
                 WHERE table_schema = %s AND table_name = 'lots' AND index_name = 'PRIMARY'
-                ORDER BY sequence_in_index
+                ORDER BY SEQ_IN_INDEX
                 """,
                 (MYSQLDATABASE,),
             )
