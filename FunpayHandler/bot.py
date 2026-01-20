@@ -25,7 +25,7 @@ from notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.presence import is_dota2_in_game
+from SteamHandler.presence import is_dota2_in_match
 
 from .messages import USER
 from .utils import (
@@ -796,7 +796,7 @@ class FunpayBot:
             return False
 
         try:
-            in_game = asyncio.run(is_dota2_in_game(steamid=steamid, api_key=STEAM_WEB_API_KEY))
+            in_game = asyncio.run(is_dota2_in_match(steamid=steamid, api_key=STEAM_WEB_API_KEY))
         except Exception:
             in_game = False
 
@@ -819,7 +819,7 @@ class FunpayBot:
             try:
                 self.send_message_by_owner(
                     owner,
-                    "Ваша аренда уже закончилась, но аккаунт сейчас в игре Dota 2.\n"
+                    "Ваша аренда уже закончилась, но вы сейчас в матче Dota 2.\n"
                     "Я подожду, пока матч закончится, и затем автоматически закрою доступ.\n",
                 )
             except Exception:
@@ -829,7 +829,7 @@ class FunpayBot:
                     "EXPIRE DELAYED (IN-GAME)\n\n"
                     f"Account ID: {account_id}\n"
                     f"Owner: {owner}\n"
-                    f"Reason: detected in Dota 2\n"
+                    f"Reason: detected in Dota 2 match\n"
                     f"Grace: {EXPIRE_INGAME_GRACE_MINUTES} minutes\n",
                 )
             except Exception:
