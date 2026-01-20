@@ -58,6 +58,6 @@ Create a `.env` file (see `.env.example`):
 1. Push this repo to GitHub.
 2. Create a Railway project from the repo.
 3. Add the environment variables from `.env.example`.
-4. Ensure Python 3.10 is used (via `runtime.txt` or set `NIXPACKS_PYTHON_VERSION=3.10` in Railway).
+4. Ensure Python 3.11 is used (via `runtime.txt` or set `NIXPACKS_PYTHON_VERSION=3.11` in Railway).
 
 Railway runs `uvicorn app:app` via `railway.json`.
