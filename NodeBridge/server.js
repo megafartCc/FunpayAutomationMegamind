@@ -37,6 +37,15 @@ client.on("friendsList", () => {
   }
 });
 
+// Periodically refresh personas so presence stays current
+setInterval(() => {
+  if (!loggedOn) return;
+  const ids = Object.keys(client.myFriends || {});
+  if (ids.length) {
+    client.getPersonas(ids);
+  }
+}, 30000);
+
 client.on("user", (sid, user) => {
   const id64 = sid.getSteamID64();
   const rp = user.rich_presence || {};
