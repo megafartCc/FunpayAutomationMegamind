@@ -30,6 +30,7 @@ pyasn1==0.6.1
 pydantic==1.10.13
 pyreadline3==3.5.4
 pysteamlib==1.0.1
+pysteamauth @ file:///app/pysteamauth
 python-dotenv==1.0.1
 pytz==2025.1
 requests==2.31.0
