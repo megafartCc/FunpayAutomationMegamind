@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from threading import Thread
 from typing import Optional
@@ -8,13 +9,19 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from config import ADMIN_API_KEY, FUNPAY_GOLDEN_KEY
+from config import (
+    ADMIN_API_KEY,
+    BLOCK_MANUAL_DEAUTHORIZE_WHILE_IN_MATCH,
+    FUNPAY_GOLDEN_KEY,
+    STEAM_WEB_API_KEY,
+)
 from DatabaseHandler.databaseSetup import SQLiteDB
 from FunpayHandler.funpay import get_account, startFunpay
 from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
+from SteamHandler.presence import is_dota2_in_match
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 
 
@@ -213,6 +220,26 @@ async def steam_deauthorize(account_id: int) -> dict:
     mafile_json = account.get("mafile_json")
     if not mafile_json:
         raise HTTPException(status_code=400, detail="mafile_json is required for Steam actions")
+
+    if BLOCK_MANUAL_DEAUTHORIZE_WHILE_IN_MATCH and STEAM_WEB_API_KEY:
+        try:
+            data = json.loads(mafile_json) if isinstance(mafile_json, str) else mafile_json
+            steamid_value = (data or {}).get("Session", {}).get("SteamID")
+            steamid = int(steamid_value) if steamid_value is not None else None
+        except Exception:
+            steamid = None
+
+        if steamid is not None:
+            try:
+                in_match = await is_dota2_in_match(steamid=steamid, api_key=STEAM_WEB_API_KEY)
+            except Exception:
+                in_match = False
+
+            if in_match:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Steam account is currently in a Dota 2 match. Try again after the match ends.",
+                )
 
     ok = await logout_all_steam_sessions(
         steam_login=account.get("login") or account.get("account_name"),
