@@ -22,6 +22,43 @@ def _parse_mafile(mafile_json: str | dict) -> dict[str, Any]:
     return json.loads(mafile_json)
 
 
+def _find_logout_form(page) -> Any | None:
+    for form in page.cssselect("form"):
+        action = (form.get("action") or "").lower()
+        if "logout" in action:
+            return form
+
+        for el in form.cssselect("input,button"):
+            name = (el.get("name") or "").lower()
+            value = (el.get("value") or "").lower()
+            text = (el.text_content() or "").strip().lower()
+            if "logout" in name or "logout" in value or "logout" in text:
+                return form
+            if "выйти" in text or "разлогин" in text:
+                return form
+    return None
+
+
+def _build_form_payload(form, sessionid: str | None) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for inp in form.cssselect("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        payload[name] = inp.get("value") or ""
+    if sessionid and "sessionid" not in payload:
+        payload["sessionid"] = sessionid
+    return payload
+
+
+def _find_logout_action_url(current_url: str, page) -> str | None:
+    for a in page.cssselect("a[href]"):
+        href = a.get("href") or ""
+        if "logout" in href.lower():
+            return str(URL(current_url).join(URL(href)))
+    return None
+
+
 async def logout_all_steam_sessions(
     *,
     steam_login: str,
@@ -80,54 +117,72 @@ async def logout_all_steam_sessions(
     sessions_html = await sessions_resp.text()
     sessions_page = document_fromstring(sessions_html)
 
-    target_form = None
-    for form in sessions_page.cssselect("form"):
-        inputs = form.cssselect("input")
-        for inp in inputs:
-            value = (inp.get("value") or "").lower()
-            name = (inp.get("name") or "").lower()
-            if "logout" in value or "logout" in name:
-                target_form = form
-                break
-        if target_form is not None:
-            break
+    store_sessionid = None
+    try:
+        store_sessionid = await steam.sessionid("store.steampowered.com")
+    except Exception:
+        store_sessionid = None
 
-    if target_form is None:
-        logger.warning("Steam sessions logout form not found.")
-        return False
+    target_form = _find_logout_form(sessions_page)
+    if target_form is not None:
+        action = target_form.get("action") or sessions_url
+        action_url = str(URL(str(sessions_resp.url)).join(URL(action)))
+        method = (target_form.get("method") or "post").upper()
+        payload = _build_form_payload(target_form, store_sessionid)
 
-    action = target_form.get("action") or sessions_url
-    action_url = str(URL(str(sessions_resp.url)).join(URL(action)))
-    method = (target_form.get("method") or "post").upper()
+        final_resp = await steam.raw_request(
+            action_url,
+            method=method,
+            headers={
+                **headers,
+                "Origin": "https://store.steampowered.com",
+                "Referer": sessions_url,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data=payload,
+            allow_redirects=True,
+        )
 
-    payload: dict[str, str] = {}
-    for inp in target_form.cssselect("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        payload[name] = inp.get("value") or ""
+        ok = int(getattr(final_resp, "status", 0)) in {200, 302}
+        if not ok:
+            logger.warning(f"Steam sessions logout failed: status={getattr(final_resp, 'status', None)}")
+        return ok
 
-    if "sessionid" not in payload:
+    action_url = _find_logout_action_url(str(sessions_resp.url), sessions_page)
+    if action_url and store_sessionid:
         try:
-            payload["sessionid"] = await steam.sessionid("store.steampowered.com")
+            final_resp = await steam.raw_request(
+                action_url,
+                method="POST",
+                headers={
+                    **headers,
+                    "Origin": "https://store.steampowered.com",
+                    "Referer": sessions_url,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={"sessionid": store_sessionid},
+                allow_redirects=True,
+            )
+            ok = int(getattr(final_resp, "status", 0)) in {200, 302}
+            if ok:
+                return True
         except Exception:
             pass
 
-    final_resp = await steam.raw_request(
-        action_url,
-        method=method,
-        headers={
-            **headers,
-            "Origin": "https://store.steampowered.com",
-            "Referer": sessions_url,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data=payload,
-        allow_redirects=True,
-    )
-
-    ok = int(getattr(final_resp, "status", 0)) in {200, 302}
-    if not ok:
-        logger.warning(f"Steam sessions logout failed: status={getattr(final_resp, 'status', None)}")
-    return ok
-
+    logger.warning("Steam sessions logout form not found. Falling back to steamcommunity logoutall.")
+    try:
+        community_sessionid = await steam.sessionid("steamcommunity.com")
+        community_url = f"https://steamcommunity.com/my/logoutall/?sessionid={community_sessionid}"
+        resp = await steam.raw_request(
+            community_url,
+            method="GET",
+            headers={**headers, "Referer": "https://steamcommunity.com/"},
+            allow_redirects=True,
+        )
+        ok = int(getattr(resp, "status", 0)) in {200, 302}
+        if not ok:
+            logger.warning(f"Steam community logoutall failed: status={getattr(resp, 'status', None)}")
+        return ok
+    except Exception as exc:
+        logger.warning(f"Steam sessions logout not found and fallback failed: {exc}")
+        return False
