@@ -1,5 +1,6 @@
 import express from 'express';
 import SteamUser from 'steam-user';
+import SteamTotp from 'steam-totp';
 
 const {
   STEAM_BRIDGE_USERNAME,
@@ -58,7 +59,7 @@ function logOn() {
     password: STEAM_BRIDGE_PASSWORD,
   };
   if (STEAM_BRIDGE_SHARED_SECRET) {
-    details.twoFactorCode = SteamUser.generateAuthCode(STEAM_BRIDGE_SHARED_SECRET);
+    details.twoFactorCode = SteamTotp.getAuthCode(STEAM_BRIDGE_SHARED_SECRET);
   }
   client.logOn(details);
 }
