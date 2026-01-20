@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FunpaySeller Control Panel</title>
+    <title>Панель управления FunpaySeller</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -18,31 +18,31 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <h1>Control panel</h1>
-            <p>Manage inventory, rentals, and automated fulfillment without Telegram.</p>
+            <h1>Панель управления</h1>
+            <p>Управляйте инвентарем, арендой и авто-выдачей без Telegram.</p>
           </div>
         </header>
 
         <section class="section" id="overview">
           <div class="section-head">
-            <h2>Overview</h2>
-            <p>Live snapshot of accounts and rentals.</p>
+            <h2>Обзор</h2>
+            <p>Сводка аккаунтов и аренды в реальном времени.</p>
           </div>
           <div class="stats">
             <div class="card">
-              <p>Total accounts</p>
+              <p>Всего аккаунтов</p>
               <h3 id="statTotal">0</h3>
             </div>
             <div class="card">
-              <p>Active rentals</p>
+              <p>Активные аренды</p>
               <h3 id="statActive">0</h3>
             </div>
             <div class="card">
-              <p>Available accounts</p>
+              <p>Доступные аккаунты</p>
               <h3 id="statAvailable">0</h3>
             </div>
             <div class="card">
-              <p>Recent rentals (24h)</p>
+              <p>Аренды за 24ч</p>
               <h3 id="statRecent">0</h3>
             </div>
           </div>
@@ -50,20 +50,20 @@
 
         <section class="section" id="rentals">
           <div class="section-head">
-            <h2>Active rentals</h2>
-            <p>Accounts currently assigned to buyers.</p>
+            <h2>Активные аренды</h2>
+            <p>Аккаунты, выданные покупателям.</p>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Account</th>
-                  <th>Owner</th>
-                  <th>Login</th>
-                  <th>Rental start</th>
-                  <th>Rental end</th>
-                  <th>Duration (h)</th>
+                  <th>Аккаунт</th>
+                  <th>Владелец</th>
+                  <th>Логин</th>
+                  <th>Начало аренды</th>
+                  <th>Конец аренды</th>
+                  <th>Длительность (ч)</th>
                 </tr>
               </thead>
               <tbody id="activeRentals"></tbody>
@@ -73,26 +73,26 @@
 
         <section class="section" id="inventory">
           <div class="section-head">
-            <h2>Inventory</h2>
-            <p>All accounts in the database. Click a row to manage.</p>
+            <h2>Инвентарь</h2>
+            <p>Все аккаунты в базе. Нажмите строку для управления.</p>
           </div>
           <div class="table-actions">
             <label class="toggle">
               <input type="checkbox" id="showPasswords" />
-              <span>Show passwords</span>
+              <span>Показать пароли</span>
             </label>
-            <input type="search" id="searchAccounts" placeholder="Filter by name or owner" />
+            <input type="search" id="searchAccounts" placeholder="Фильтр по названию или владельцу" />
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Account</th>
-                  <th>Login</th>
-                  <th>Password</th>
-                  <th>Owner</th>
-                  <th>Duration (h)</th>
+                  <th>Аккаунт</th>
+                  <th>Логин</th>
+                  <th>Пароль</th>
+                  <th>Владелец</th>
+                  <th>Длительность (ч)</th>
                 </tr>
               </thead>
               <tbody id="inventoryTable"></tbody>
@@ -102,29 +102,29 @@
 
         <section class="section" id="chats">
           <div class="section-head">
-            <h2>FunPay chats</h2>
-            <p>Review and reply to buyers from the dashboard.</p>
+            <h2>Чаты FunPay</h2>
+            <p>Просматривайте и отвечайте покупателям из панели.</p>
           </div>
           <div class="panel chat-layout">
             <div class="chat-list">
               <div class="chat-list-head">
-                <input id="chatSearch" type="search" placeholder="Search chats" />
-                <button class="btn ghost" id="refreshChats">Refresh</button>
+                <input id="chatSearch" type="search" placeholder="Поиск чатов" />
+                <button class="btn ghost" id="refreshChats">Обновить</button>
               </div>
               <div id="chatList" class="chat-items"></div>
             </div>
             <div class="chat-window">
               <div class="chat-window-head">
                 <div>
-                  <h3 id="chatTitle">Select a chat</h3>
-                  <span class="helper" id="chatSubtitle">Messages will appear here.</span>
+                  <h3 id="chatTitle">Выберите чат</h3>
+                  <span class="helper" id="chatSubtitle">Сообщения появятся здесь.</span>
                 </div>
-                <button class="btn ghost" id="loadHistory">Load history</button>
+                <button class="btn ghost" id="loadHistory">Загрузить историю</button>
               </div>
               <div id="chatMessages" class="chat-messages"></div>
               <form id="chatSendForm" class="chat-send">
-                <textarea id="chatMessageInput" rows="2" placeholder="Write a reply..."></textarea>
-                <button class="btn" type="submit">Send</button>
+                <textarea id="chatMessageInput" rows="2" placeholder="Написать ответ..."></textarea>
+                <button class="btn" type="submit">Отправить</button>
               </form>
             </div>
           </div>
@@ -132,8 +132,8 @@
 
         <section class="section" id="manage">
           <div class="section-head">
-            <h2>Manage account</h2>
-            <p>Edit or assign the selected account.</p>
+            <h2>Управление аккаунтом</h2>
+            <p>Редактируйте или назначайте выбранный аккаунт.</p>
           </div>
           <div class="panel" id="managePanel">
             <div class="panel-grid">
@@ -142,85 +142,85 @@
                 <input id="manageId" type="text" disabled />
               </div>
               <div class="field">
-                <label>Account name</label>
+                <label>Название аккаунта</label>
                 <input id="manageName" type="text" />
               </div>
               <div class="field">
-                <label>Login</label>
+                <label>Логин</label>
                 <input id="manageLogin" type="text" />
               </div>
               <div class="field">
-                <label>Password</label>
+                <label>Пароль</label>
                 <input id="managePassword" type="text" />
               </div>
               <div class="field">
-                <label>maFile JSON</label>
-                <textarea id="manageMaFileJson" rows="3" placeholder="Paste .maFile JSON here"></textarea>
+                <label>JSON maFile</label>
+                <textarea id="manageMaFileJson" rows="3" placeholder="Вставьте JSON .maFile здесь"></textarea>
               </div>
               <div class="field">
-                <label>Duration (hours)</label>
+                <label>Длительность (часы)</label>
                 <input id="manageDuration" type="number" min="1" />
               </div>
               <div class="field">
-                <label>Owner</label>
-                <input id="manageOwner" type="text" placeholder="Buyer username" />
+                <label>Владелец</label>
+                <input id="manageOwner" type="text" placeholder="Ник покупателя" />
               </div>
               <div class="field">
-                <label>Rental start</label>
+                <label>Начало аренды</label>
                 <input id="manageStart" type="text" disabled />
               </div>
             </div>
             <div class="panel-actions">
-              <button class="btn" id="updateAccount">Update</button>
-              <button class="btn" id="assignAccount">Assign owner</button>
+              <button class="btn" id="updateAccount">Обновить</button>
+              <button class="btn" id="assignAccount">Назначить владельца</button>
               <div class="inline">
-                <input id="extendOwnerHours" type="number" min="1" placeholder="+hours for owner" />
-                <button class="btn ghost" id="extendOwner">Extend owner rentals</button>
+                <input id="extendOwnerHours" type="number" min="1" placeholder="+часы владельцу" />
+                <button class="btn ghost" id="extendOwner">Продлить аренды владельца</button>
               </div>
-              <button class="btn ghost" id="releaseAccount">Release</button>
+              <button class="btn ghost" id="releaseAccount">Освободить</button>
               <div class="inline">
-                <input id="extendHours" type="number" min="1" placeholder="+hours" />
-                <button class="btn" id="extendAccount">Extend</button>
+                <input id="extendHours" type="number" min="1" placeholder="+часы" />
+                <button class="btn" id="extendAccount">Продлить</button>
               </div>
-              <button class="btn danger" id="deleteAccount">Delete</button>
+              <button class="btn danger" id="deleteAccount">Удалить</button>
             </div>
           </div>
         </section>
 
         <section class="section" id="add">
           <div class="section-head">
-            <h2>Add account</h2>
-            <p>Register a new account in inventory.</p>
+            <h2>Добавить аккаунт</h2>
+            <p>Добавьте новый аккаунт в инвентарь.</p>
           </div>
           <form class="panel" id="addAccountForm">
             <div class="panel-grid">
               <div class="field">
-                <label>Account name</label>
+                <label>Название аккаунта</label>
                 <input name="account_name" type="text" required />
               </div>
               <div class="field">
-                <label>Login</label>
+                <label>Логин</label>
                 <input name="login" type="text" required />
               </div>
               <div class="field">
-                <label>Password</label>
+                <label>Пароль</label>
                 <input name="password" type="text" required />
               </div>
               <div class="field">
-                <label>maFile JSON</label>
-                <textarea name="mafile_json" rows="3" placeholder="Paste .maFile JSON here" required></textarea>
+                <label>JSON maFile</label>
+                <textarea name="mafile_json" rows="3" placeholder="Вставьте JSON .maFile здесь" required></textarea>
               </div>
               <div class="field">
-                <label>Duration (hours)</label>
+                <label>Длительность (часы)</label>
                 <input name="rental_duration" type="number" min="1" required />
               </div>
               <div class="field">
-                <label>Owner (optional)</label>
+                <label>Владелец (необязательно)</label>
                 <input name="owner" type="text" />
               </div>
             </div>
             <div class="panel-actions">
-              <button class="btn" type="submit">Add account</button>
+              <button class="btn" type="submit">Добавить аккаунт</button>
               <span class="helper" id="addStatus"></span>
             </div>
           </form>
@@ -228,8 +228,8 @@
 
         <section class="section" id="notifications">
           <div class="section-head">
-            <h2>Notifications</h2>
-            <p>System events and admin alerts.</p>
+            <h2>Уведомления</h2>
+            <p>Системные события и админ-алерты.</p>
           </div>
           <div class="panel">
             <div class="notifications" id="notificationsList"></div>

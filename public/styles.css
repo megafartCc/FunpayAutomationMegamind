@@ -254,12 +254,16 @@ select {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
+  height: 42px;
   width: 100%;
 }
 
 #manageMaFileJson,
 textarea[name="mafile_json"] {
-  height: 42px;
+  resize: none;
+}
+
+textarea {
   resize: none;
 }
 
