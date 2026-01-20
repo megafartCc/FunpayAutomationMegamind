@@ -36,6 +36,7 @@ pytz==2025.1
 requests==2.31.0
 requests-toolbelt==1.0.0
 selenium==4.18.1
+playwright==1.49.0
 rsa==4.7
 soupsieve==2.6
 typing_extensions==4.12.2

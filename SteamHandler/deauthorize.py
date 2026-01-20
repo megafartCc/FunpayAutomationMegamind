@@ -9,6 +9,14 @@ from yarl import URL
 from SteamHandler.steampassword.steam import CustomSteam
 from logger import logger
 
+try:  # Optional dependency (more reliable than parsing HTML).
+    from playwright.async_api import async_playwright
+
+    _PLAYWRIGHT_AVAILABLE = True
+except Exception:  # pragma: no cover
+    async_playwright = None
+    _PLAYWRIGHT_AVAILABLE = False
+
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -59,6 +67,80 @@ def _find_logout_action_url(current_url: str, page) -> str | None:
     return None
 
 
+async def _logout_all_steam_sessions_playwright(steam: CustomSteam) -> bool:
+    """
+    Replicates the Playwright click-flow from steamautorentbot, but reuses already
+    authenticated cookies from pysteamauth to avoid interactive login in browser.
+    """
+    if not _PLAYWRIGHT_AVAILABLE or async_playwright is None:
+        return False
+
+    store_cookies = await steam.cookies("store.steampowered.com")
+    community_cookies = await steam.cookies("steamcommunity.com")
+    help_cookies = await steam.cookies("help.steampowered.com")
+
+    def build(url: str, cookies: dict[str, str]) -> list[dict[str, str]]:
+        return [{"name": k, "value": v, "url": url} for k, v in cookies.items()]
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        context = await browser.new_context(user_agent=_BROWSER_UA, locale="ru-RU", timezone_id="Europe/Moscow")
+        await context.add_cookies(
+            build("https://store.steampowered.com/", dict(store_cookies))
+            + build("https://steamcommunity.com/", dict(community_cookies))
+            + build("https://help.steampowered.com/", dict(help_cookies))
+        )
+        page = await context.new_page()
+        try:
+            await page.goto("https://store.steampowered.com/account/sessions/", wait_until="networkidle", timeout=60000)
+            selectors = [
+                "#logoutAll",
+                "input[value*='logout' i]",
+                "input[value*='sign out' i]",
+                "button:has-text('Sign out')",
+                "button:has-text('Выйти')",
+                "a:has-text('Sign out')",
+                "a:has-text('Выйти')",
+            ]
+
+            clicked = False
+            for selector in selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        await element.click()
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not clicked:
+                logger.warning("Playwright: logout element not found on sessions page.")
+                return False
+
+            # Some flows show a confirm modal.
+            confirm_selectors = [
+                "button:has-text('Sign out')",
+                "button:has-text('Выйти')",
+                "input[value*='logout' i]",
+                "input[value*='sign out' i]",
+            ]
+            for selector in confirm_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        await element.click()
+                        break
+                except Exception:
+                    continue
+
+            await page.wait_for_timeout(1500)
+            return True
+        finally:
+            await context.close()
+            await browser.close()
+
+
 async def logout_all_steam_sessions(
     *,
     steam_login: str,
@@ -86,6 +168,13 @@ async def logout_all_steam_sessions(
     )
 
     await steam.login_to_steam()
+
+    # Prefer Playwright flow (closest to steamautorentbot).
+    try:
+        if await _logout_all_steam_sessions_playwright(steam):
+            return True
+    except Exception as exc:
+        logger.warning(f"Playwright logout attempt failed: {exc}")
 
     headers = {"User-Agent": _BROWSER_UA, "Accept": "text/html,*/*"}
 
@@ -192,9 +281,18 @@ async def logout_all_steam_sessions(
                     data=data,
                     allow_redirects=True,
                 )
-                ok = int(getattr(resp, "status", 0)) in {200, 302}
-                if ok:
-                    return True
+                status = int(getattr(resp, "status", 0))
+                if status not in {200, 302}:
+                    continue
+                content_type = (resp.headers.get("content-type") or "").lower()
+                body = await resp.text()
+                if "application/json" in content_type or "ajaxlogoutall" in url:
+                    if "\"success\":1" in body or "\"success\":true" in body:
+                        return True
+                    continue
+                if "login" in str(resp.url) or "signin" in body.lower():
+                    continue
+                return True
             except Exception:
                 continue
         logger.warning("Steam community logoutall candidates all failed.")
