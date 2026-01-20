@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from config import (
     ADMIN_API_KEY,
     DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
+    STEAM_BRIDGE_URL,
     STEAM_WEB_API_KEY,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
@@ -25,6 +26,7 @@ from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.presence_bot import get_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
+import requests
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,6 +54,17 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
         return int(value)
     except Exception:
         return None
+
+
+def _fetch_bridge_presence(steamid64: int) -> dict:
+    if not STEAM_BRIDGE_URL:
+        return {}
+    try:
+        resp = requests.get(f"{STEAM_BRIDGE_URL}/presence/{steamid64}", timeout=5)
+        resp.raise_for_status()
+        return resp.json() or {}
+    except Exception:
+        return {}
 
 
 def require_admin(request: Request) -> None:
@@ -211,6 +224,10 @@ async def _presence_for_account(account: dict) -> dict:
     steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
     if steamid64 is None or not STEAM_WEB_API_KEY:
         return {"presence_state": "offline", "presence_display": ""}
+    # Prefer node bridge if configured
+    bridge_presence = _fetch_bridge_presence(steamid64) if STEAM_BRIDGE_URL else {}
+    if bridge_presence:
+        return bridge_presence
     web_presence = await asyncio.to_thread(fetch_web_presence, steamid64, STEAM_WEB_API_KEY)
     if not web_presence:
         return {"presence_state": "offline", "presence_display": ""}
