@@ -167,9 +167,27 @@ const renderHealth = (status) => {
   }
 };
 
+const ensureActiveRentalsHeader = () => {
+  const tbody = ui.activeTable;
+  if (!tbody) return;
+  const table = tbody.closest("table");
+  const row = table?.querySelector("thead tr");
+  if (!row) return;
+
+  const headers = Array.from(row.querySelectorAll("th"));
+  if (headers.some((th) => th.dataset.key === "chat")) return;
+
+  const insertBefore = headers[3] || null;
+  const th = document.createElement("th");
+  th.textContent = "Чат";
+  th.dataset.key = "chat";
+  row.insertBefore(th, insertBefore);
+};
+
 const renderActiveRentals = (items) => {
+  ensureActiveRentalsHeader();
   if (!items.length) {
-    ui.activeTable.innerHTML = "<tr><td colspan=\"7\">No active rentals.</td></tr>";
+    ui.activeTable.innerHTML = "<tr><td colspan=\"8\">No active rentals.</td></tr>";
     return;
   }
   ui.activeTable.innerHTML = items
@@ -179,6 +197,7 @@ const renderActiveRentals = (items) => {
           <td>${item.id}</td>
           <td>${item.account_name}</td>
           <td>${item.owner}</td>
+          <td>${item.chat_url ? `<a href="${item.chat_url}" target="_blank" rel="noreferrer">Чат</a>` : "-"}</td>
           <td>${item.login}</td>
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
@@ -442,7 +461,8 @@ ui.addForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(ui.addForm);
   const payload = Object.fromEntries(formData.entries());
-  payload.rental_duration = Number(payload.rental_duration || 0);
+  const duration = Number(payload.rental_duration);
+  payload.rental_duration = Number.isFinite(duration) && duration > 0 ? duration : 1;
   if (!payload.mafile_json) {
     delete payload.mafile_json;
   }
@@ -507,13 +527,16 @@ ui.manage.update.addEventListener("click", async () => {
     toast("Select an account first.", true);
     return;
   }
+  const duration = Number(ui.manage.duration.value);
   const payload = {
     account_name: ui.manage.name.value.trim(),
     login: ui.manage.login.value.trim(),
     password: ui.manage.password.value.trim(),
     mafile_json: ui.manage.maFileJson.value.trim(),
-    rental_duration: Number(ui.manage.duration.value || 0),
   };
+  if (Number.isFinite(duration) && duration > 0) {
+    payload.rental_duration = duration;
+  }
   if (!payload.mafile_json) {
     delete payload.mafile_json;
   }

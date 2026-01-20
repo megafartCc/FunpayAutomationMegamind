@@ -1,6 +1,7 @@
 from pathlib import Path
 from threading import Thread
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -53,7 +54,7 @@ class AccountCreate(BaseModel):
     mafile_json: str
     login: str
     password: str
-    rental_duration: int = Field(ge=1)
+    rental_duration: int = Field(default=1, ge=1)
     owner: Optional[str] = None
 
 
@@ -199,7 +200,26 @@ def extend_account(account_id: int, payload: ExtendRequest) -> dict:
 
 @app.get("/api/rentals/active")
 def active_rentals() -> dict:
-    return {"items": db.get_active_users()}
+    items = db.get_active_users()
+    account = get_account()
+    if account is None:
+        return {"items": items}
+
+    for item in items:
+        owner = item.get("owner")
+        if not owner:
+            item["chat_url"] = None
+            continue
+        try:
+            chat = account.get_chat_by_name(owner, True)
+            if chat:
+                item["chat_url"] = f"https://funpay.com/chat/?node={quote(str(chat.id))}"
+            else:
+                item["chat_url"] = None
+        except Exception:
+            item["chat_url"] = None
+
+    return {"items": items}
 
 
 @app.get("/api/rentals/user/{owner}")
