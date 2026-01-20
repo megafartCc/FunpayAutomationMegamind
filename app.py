@@ -121,17 +121,12 @@ def health() -> dict:
     }
 
 
-@app.get("/api/admin-key")
-def admin_key() -> dict:
-    return {"key": ADMIN_API_KEY}
-
-
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=[Depends(require_admin)])
 def stats() -> dict:
     return db.get_rental_statistics()
 
 
-@app.get("/api/notifications")
+@app.get("/api/notifications", dependencies=[Depends(require_admin)])
 def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
@@ -160,7 +155,7 @@ async def accounts() -> dict:
     return {"items": items}
 
 
-@app.get("/api/lots")
+@app.get("/api/lots", dependencies=[Depends(require_admin)])
 def lots() -> dict:
     return {"items": db.list_lot_mappings()}
 
@@ -179,7 +174,7 @@ def delete_lot_mapping(lot_number: int) -> dict:
     return {"success": True}
 
 
-@app.get("/api/accounts/{account_id}")
+@app.get("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
 def account_detail(account_id: int) -> dict:
     account = db.get_account_by_id(account_id)
     if not account:
