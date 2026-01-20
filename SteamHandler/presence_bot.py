@@ -13,11 +13,14 @@ from logger import logger
 try:
     from steam import Client as SteamClient
     from steam import User as SteamUser
+    from steam.gateway import ConnectionClosed, WebSocketClosure  # type: ignore
 
     _STEAMIO_AVAILABLE = True
 except Exception:  # pragma: no cover
     SteamClient = None  # type: ignore[assignment]
     SteamUser = None  # type: ignore[assignment]
+    ConnectionClosed = None  # type: ignore[assignment]
+    WebSocketClosure = None  # type: ignore[assignment]
     _STEAMIO_AVAILABLE = False
 
 
@@ -162,7 +165,13 @@ class SteamPresenceBot:
                 self._client.run(**login_params)  # type: ignore[arg-type]
                 backoff = 5
             except Exception as exc:
-                logger.error(f"Steam presence bot crashed: {exc}\n{traceback.format_exc()}")
+                # steam sometimes closes gateways; treat those as transient to avoid noisy stack traces
+                if (ConnectionClosed and isinstance(exc, ConnectionClosed)) or (
+                    WebSocketClosure and isinstance(exc, WebSocketClosure)
+                ):
+                    logger.warning(f"Steam presence gateway closed. Will retry in {backoff}s.")
+                else:
+                    logger.error(f"Steam presence bot crashed: {exc}\n{traceback.format_exc()}")
                 self._ready.clear()
                 # ensure loop reset
                 self._loop = None
