@@ -98,8 +98,13 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
 def _fetch_bridge_presence(steamid64: int) -> dict:
     if not STEAM_BRIDGE_URL:
         return {}
+    base = STEAM_BRIDGE_URL.rstrip("/")
+    if base.endswith("/presence"):
+        url = f"{base}/{steamid64}"
+    else:
+        url = f"{base}/presence/{steamid64}"
     try:
-        resp = requests.get(f"{STEAM_BRIDGE_URL}/presence/{steamid64}", timeout=5)
+        resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         return resp.json() or {}
     except Exception:
