@@ -505,6 +505,21 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
+def _format_match_time(seconds: int | float | None) -> str | None:
+    if seconds is None:
+        return None
+    try:
+        total = max(0, int(seconds))
+    except Exception:
+        return None
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    secs = total % 60
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
 def _presence_for_steamid(steamid64: int | None) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
         return {
@@ -513,7 +528,10 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
             "lobby_info": "",
             "hero_name": None,
             "hero_token": None,
-            "presence_label": "Оффлайн",
+            "presence_label": "???????",
+            "hero_level": None,
+            "match_seconds": None,
+            "match_time": None,
         }
     bridge_presence = _fetch_bridge_presence(steamid64)
     if not bridge_presence:
@@ -523,19 +541,37 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
             "lobby_info": "",
             "hero_name": None,
             "hero_token": None,
-            "presence_label": "Оффлайн",
+            "presence_label": "???????",
+            "hero_level": None,
+            "match_seconds": None,
+            "match_time": None,
         }
     in_match = bool(bridge_presence.get("in_match"))
     in_game = bool(bridge_presence.get("in_game"))
     hero_name = bridge_presence.get("hero_name") or None
+    hero_level = bridge_presence.get("hero_level")
+    match_seconds = bridge_presence.get("match_seconds")
+    match_time = bridge_presence.get("match_time")
+    if match_time is None and match_seconds is not None:
+        match_time = _format_match_time(match_seconds)
     if in_match and hero_name:
-        presence_label = f"В матче ({hero_name})"
+        extras = [hero_name]
+        if hero_level is not None:
+            extras.append(f"??. {hero_level}")
+        if match_time:
+            extras.append(match_time)
+        presence_label = f"? ????? ({', '.join(extras)})"
     elif in_match:
-        presence_label = "В матче"
+        extras = []
+        if hero_level is not None:
+            extras.append(f"??. {hero_level}")
+        if match_time:
+            extras.append(match_time)
+        presence_label = f"? ????? ({', '.join(extras)})" if extras else "? ?????"
     elif in_game:
-        presence_label = "В игре"
+        presence_label = "? ????"
     else:
-        presence_label = "Оффлайн"
+        presence_label = "???????"
     return {
         "in_game": bool(bridge_presence.get("in_game")),
         "in_match": bool(bridge_presence.get("in_match")),
@@ -543,6 +579,9 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
         "hero_name": hero_name,
         "hero_token": bridge_presence.get("hero_token") or None,
         "presence_label": presence_label,
+        "hero_level": hero_level,
+        "match_seconds": match_seconds,
+        "match_time": match_time,
     }
 
 

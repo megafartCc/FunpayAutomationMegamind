@@ -242,8 +242,13 @@ const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/
 
 const presenceLabel = (item) => {
   if (item?.presence_label) return item.presence_label;
-  if (item?.in_match && item?.hero_name) return `В матче (${item.hero_name})`;
-  if (item?.in_match) return "В матче";
+  if (item?.in_match) {
+    const extras = [];
+    if (item?.hero_name) extras.push(item.hero_name);
+    if (item?.hero_level != null) extras.push(`ур. ${item.hero_level}`);
+    if (item?.match_time) extras.push(item.match_time);
+    return extras.length ? `В матче (${extras.join(", ")})` : "В матче";
+  }
   if (item?.in_game) return "В игре";
   return "Оффлайн";
 };

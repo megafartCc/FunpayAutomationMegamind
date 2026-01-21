@@ -6,6 +6,7 @@ const {
   STEAM_BRIDGE_USERNAME,
   STEAM_BRIDGE_PASSWORD,
   STEAM_BRIDGE_SHARED_SECRET,
+  PRESENCE_DEBUG_TOKEN,
 } = process.env;
 
 const app = express();
@@ -121,6 +122,33 @@ function toHeroDisplay(token) {
   return name.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function normalizeKey(key) {
+  return String(key || "").toLowerCase();
+}
+
+function getRichPresenceValue(rp, rpRaw, key) {
+  const target = normalizeKey(key);
+  if (rp && typeof rp === "object") {
+    for (const [k, v] of Object.entries(rp)) {
+      if (normalizeKey(k) === target) return v;
+    }
+  }
+  if (Array.isArray(rpRaw)) {
+    const entry = rpRaw.find((e) => normalizeKey(e.key) === target);
+    if (entry) return entry.value;
+  }
+  return undefined;
+}
+
+function parseIntMaybe(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 function extractHeroToken(rp, rpRaw) {
   const candidates = [
     rp?.param2,
@@ -139,6 +167,65 @@ function extractHeroToken(rp, rpRaw) {
     }
   }
   return "";
+}
+
+function extractHeroLevel(rp, rpRaw) {
+  const raw = getRichPresenceValue(rp, rpRaw, "level");
+  const level = parseIntMaybe(raw);
+  return Number.isFinite(level) && level >= 0 ? level : null;
+}
+
+function extractMatchSeconds(rp, rpRaw) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const keys = [
+    "matchtime",
+    "match_time",
+    "game_time",
+    "gametime",
+    "elapsed",
+    "elapsed_time",
+    "match_duration",
+    "duration",
+    "time",
+    "start_time",
+    "starttime",
+  ];
+
+  for (const key of keys) {
+    const raw = getRichPresenceValue(rp, rpRaw, key);
+    const value = parseIntMaybe(raw);
+    if (value === null) continue;
+
+    if (key.includes("start")) {
+      let start = value;
+      if (start > 1e12) start = Math.floor(start / 1000);
+      const elapsed = nowSec - start;
+      if (elapsed > 0 && elapsed < 12 * 60 * 60) return elapsed;
+      continue;
+    }
+
+    let seconds = value;
+    if (seconds > 1e12) seconds = Math.floor(seconds / 1000);
+    if (seconds > 12 * 60 * 60 && seconds < nowSec) {
+      const elapsed = nowSec - seconds;
+      if (elapsed > 0 && elapsed < 12 * 60 * 60) return elapsed;
+    }
+    if (seconds >= 0 && seconds < 12 * 60 * 60) return seconds;
+  }
+
+  return null;
+}
+
+function formatMatchTime(seconds) {
+  if (seconds === null || seconds === undefined) return null;
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function logOn() {
@@ -185,12 +272,46 @@ app.get("/presence/:steamid", (req, res) => {
   const in_game = !!(data.in_game || data.appid || lobbyRaw || statusHit);
   const heroToken = extractHeroToken(rp, rpRaw);
   const heroName = toHeroDisplay(heroToken);
+  const heroLevel = extractHeroLevel(rp, rpRaw);
+  const matchSeconds = extractMatchSeconds(rp, rpRaw);
+  const matchTime = formatMatchTime(matchSeconds);
   res.json({
     in_game,
     in_match,
     lobby_info: lobbyRaw || "",
     hero_token: heroToken || null,
     hero_name: heroName || null,
+    hero_level: heroLevel ?? null,
+    match_seconds: matchSeconds ?? null,
+    match_time: matchTime ?? null,
+  });
+});
+
+app.get("/presencefull/:steamid", (req, res) => {
+  if (PRESENCE_DEBUG_TOKEN && req.query.token !== PRESENCE_DEBUG_TOKEN) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const sid = req.params.steamid;
+  const data = presence.get(sid);
+  if (!data) return res.status(404).json({ error: "not_found" });
+
+  const rp = data.rich_presence || {};
+  const rpRaw = data.rich_presence_raw || [];
+  const heroToken = extractHeroToken(rp, rpRaw);
+  const heroName = toHeroDisplay(heroToken);
+  const heroLevel = extractHeroLevel(rp, rpRaw);
+  const matchSeconds = extractMatchSeconds(rp, rpRaw);
+  const matchTime = formatMatchTime(matchSeconds);
+
+  res.json({
+    ...data,
+    derived: {
+      hero_token: heroToken || null,
+      hero_name: heroName || null,
+      hero_level: heroLevel ?? null,
+      match_seconds: matchSeconds ?? null,
+      match_time: matchTime ?? null,
+    },
   });
 });
 
