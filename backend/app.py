@@ -528,7 +528,7 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
             "lobby_info": "",
             "hero_name": None,
             "hero_token": None,
-            "presence_label": "???????",
+            "presence_label": "Оффлайн",
             "hero_level": None,
             "match_seconds": None,
             "match_time": None,
@@ -541,7 +541,7 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
             "lobby_info": "",
             "hero_name": None,
             "hero_token": None,
-            "presence_label": "???????",
+            "presence_label": "Оффлайн",
             "hero_level": None,
             "match_seconds": None,
             "match_time": None,
@@ -549,29 +549,22 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
     in_match = bool(bridge_presence.get("in_match"))
     in_game = bool(bridge_presence.get("in_game"))
     hero_name = bridge_presence.get("hero_name") or None
-    hero_level = bridge_presence.get("hero_level")
+    hero_level = None
     match_seconds = bridge_presence.get("match_seconds")
     match_time = bridge_presence.get("match_time")
     if match_time is None and match_seconds is not None:
         match_time = _format_match_time(match_seconds)
-    if in_match and hero_name:
-        extras = [hero_name]
-        if hero_level is not None:
-            extras.append(f"??. {hero_level}")
-        if match_time:
-            extras.append(match_time)
-        presence_label = f"? ????? ({', '.join(extras)})"
-    elif in_match:
+    if in_match:
         extras = []
-        if hero_level is not None:
-            extras.append(f"??. {hero_level}")
+        if hero_name:
+            extras.append(hero_name)
         if match_time:
             extras.append(match_time)
-        presence_label = f"? ????? ({', '.join(extras)})" if extras else "? ?????"
+        presence_label = f"В матче({')('.join(extras)})" if extras else "В матче"
     elif in_game:
-        presence_label = "? ????"
+        presence_label = "В игре"
     else:
-        presence_label = "???????"
+        presence_label = "Оффлайн"
     return {
         "in_game": bool(bridge_presence.get("in_game")),
         "in_match": bool(bridge_presence.get("in_match")),

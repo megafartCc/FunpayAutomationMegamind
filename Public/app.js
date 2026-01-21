@@ -245,9 +245,8 @@ const presenceLabel = (item) => {
   if (item?.in_match) {
     const extras = [];
     if (item?.hero_name) extras.push(item.hero_name);
-    if (item?.hero_level != null) extras.push(`ур. ${item.hero_level}`);
     if (item?.match_time) extras.push(item.match_time);
-    return extras.length ? `В матче (${extras.join(", ")})` : "В матче";
+    return extras.length ? `В матче(${extras.join(")(")})` : "В матче";
   }
   if (item?.in_game) return "В игре";
   return "Оффлайн";
