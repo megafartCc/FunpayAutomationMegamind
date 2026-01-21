@@ -49,9 +49,12 @@ class PendingLotExtend:
 
 
 class FunpayBot:
-    def __init__(self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None) -> None:
+    def __init__(
+        self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None, user_id: int | None = None
+    ) -> None:
         self._token = token
         self._db = db or SQLiteDB()
+        self._user_id = user_id
 
         self._acc: Account | None = None
         self._runner: Runner | None = None
@@ -658,7 +661,7 @@ class FunpayBot:
 
     def _handle_stock(self, acc: Account, chat_id: int) -> None:
         try:
-            available_lots = self._db.get_available_lot_accounts()
+            available_lots = self._db.get_available_lot_accounts(self._user_id)
             if available_lots:
                 lines = [USER.stock_title]
                 for account in available_lots:
@@ -671,7 +674,7 @@ class FunpayBot:
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
-            all_lots = self._db.get_all_lot_accounts()
+            all_lots = self._db.get_all_lot_accounts(self._user_id)
             if not all_lots:
                 acc.send_message(chat_id, USER.stock_no_lots_configured)
                 return
