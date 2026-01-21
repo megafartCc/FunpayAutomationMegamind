@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -74,17 +75,31 @@ class FunpayBot:
             return False
         chat = self._acc.get_chat_by_name(owner, True)
         messages = getattr(chat, "messages", None) or []
+        owner_lower = owner.lower()
         for message in reversed(messages):
             if getattr(message, "author_id", None) != 0:
                 continue
             initiator = getattr(message, "initiator_username", None)
             if initiator and initiator != owner:
                 continue
+            text = (message.text or "").lower()
+            if not initiator and owner_lower not in text:
+                continue
             msg_type = getattr(message, "type", None)
             if msg_type in (types.MessageTypes.NEW_FEEDBACK, types.MessageTypes.FEEDBACK_CHANGED):
                 return True
             if msg_type is types.MessageTypes.FEEDBACK_DELETED:
                 return False
+            if "удалил отзыв" in text or "has deleted their feedback" in text:
+                return False
+            if (
+                "написал отзыв" in text
+                or "оставил отзыв" in text
+                or "изменил отзыв" in text
+                or "has given feedback" in text
+                or "has edited their feedback" in text
+            ):
+                return True
         return False
 
     def _get_unit_minutes(self, account: dict) -> int:
@@ -175,8 +190,20 @@ class FunpayBot:
                     self._handle_new_message(event)
 
                 message = getattr(event, "message", None)
-                if message is not None and getattr(message, "type", None) == types.MessageTypes.NEW_FEEDBACK:
-                    self._handle_new_feedback(event)
+                if message is not None:
+                    msg_type = getattr(message, "type", None)
+                    if msg_type in (
+                        types.MessageTypes.NEW_FEEDBACK,
+                        types.MessageTypes.FEEDBACK_CHANGED,
+                        types.MessageTypes.FEEDBACK_DELETED,
+                    ):
+                        self._handle_new_feedback(event)
+                    else:
+                        text = (message.text or "").lower()
+                        if getattr(message, "author_id", None) == 0 and (
+                            "отзыв" in text or "feedback" in text
+                        ):
+                            self._handle_new_feedback(event)
             except Exception as exc:
                 logger.error(f"An error occurred while processing event: {exc}")
 
@@ -851,9 +878,24 @@ class FunpayBot:
         try:
             message = getattr(event, "message", None)
             owner = None
+            text = ""
             if message is not None:
                 owner = message.initiator_username or message.author
-            if owner and owner not in self._feedback_given:
+                text = (message.text or "")
+                if owner is None and text:
+                    match = re.search(r"(?:Покупатель|The buyer)\\s+([a-zA-Z0-9_]+)", text)
+                    if match:
+                        owner = match.group(1)
+
+            if not owner:
+                return
+
+            text_lower = text.lower()
+            if "удалил отзыв" in text_lower or "has deleted their feedback" in text_lower:
+                self._bonus_eligible.discard(owner)
+                return
+
+            if owner not in self._feedback_given:
                 self._bonus_eligible.add(owner)
                 if self._acc is None:
                     return
