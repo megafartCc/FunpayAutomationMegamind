@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
     except Exception:  # pragma: no cover
         ExceptionGroup = None  # type: ignore[assignment]
 
-from logger import logger
+from backend.logger import logger
 
 try:
     from steam import Client as SteamClient

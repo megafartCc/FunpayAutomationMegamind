@@ -95,17 +95,17 @@ const hideAuth = () => {
   ui.auth.overlay.classList.add("hidden");
 };
 
-const apiFetch = async (path, options = {}, retry = true) => {
+const apiFetch = async (path, options = {}) => {
   const headers = options.headers ? { ...options.headers } : {};
   headers["Content-Type"] = "application/json";
-  const adminKey = getAdminKey();
-  if (adminKey) {
-    headers["Authorization"] = `Bearer ${adminKey}`;
+  const adminToken = getAdminKey();
+  if (adminToken) {
+    headers["Authorization"] = `Bearer ${adminToken}`;
   }
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
     if (response.status === 401) {
-      sessionStorage.removeItem("adminKey");
+      sessionStorage.removeItem("adminToken");
       showAuth("Пожалуйста, войдите.");
     }
     const contentType = response.headers.get("content-type") || "";
@@ -125,21 +125,6 @@ const apiFetch = async (path, options = {}, retry = true) => {
       }
     } else {
       message = await response.text();
-    }
-    if (response.status === 401 && message.includes("Invalid admin key") && retry) {
-      sessionStorage.removeItem("adminKey");
-      try {
-        const keyResponse = await fetch("/api/admin-key");
-        if (keyResponse.ok) {
-          const data = await keyResponse.json();
-          if (data.key) {
-            sessionStorage.setItem("adminKey", data.key);
-            return apiFetch(path, options, false);
-          }
-        }
-      } catch (error) {
-        // Fall through to the original error.
-      }
     }
     throw new Error(message || "Запрос не выполнен");
   }
@@ -245,13 +230,15 @@ const renderHealth = (status) => {
 const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
 const presenceLabel = (item) => {
+  if (item?.presence_label) return item.presence_label;
+  if (item?.in_match && item?.hero_name) return `В матче (${item.hero_name})`;
   if (item?.in_match) return "В матче";
   if (item?.in_game) return "В игре";
   return "Оффлайн";
 };
 
 const presenceLink = (item) => {
-  const label = presenceLabel(item);
+  const label = escapeHtml(presenceLabel(item));
   if (!item?.steamid) return label;
   const url = `${PRESENCE_BASE_URL}/${item.steamid}`;
   return `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`;
@@ -953,8 +940,4 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   sessionStorage.removeItem("adminUser");
   showAuth();
 });
-
-
-
-
 
