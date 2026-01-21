@@ -56,16 +56,6 @@ class FunpayBot:
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
-        self._token = token
-        self._db = db or MySQLDB()
-        self, token: str | None = None, db: MySQLDB | None = None, user_id: int | None = None
-    ) -> None:
-        self._token = token
-        self._db = db or MySQLDB()
-        self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None, user_id: int | None = None
-    ) -> None:
-        self._token = token
-        self._db = db or SQLiteDB()
         self._user_id = user_id
 
         self._acc: Optional[Account] = None
@@ -252,7 +242,7 @@ class FunpayBot:
         lot_number: int,
         amount: int,
     ) -> None:
-        mapping = self._db.get_lot_mapping(lot_number)
+        mapping = self._db.get_lot_mapping(lot_number, self._user_id)
         if not mapping:
             acc.send_message(chat_id, "Лот не привязан к аккаунту. Дождитесь ответа администратора.")
             send_message_to_admin(
@@ -263,7 +253,7 @@ class FunpayBot:
             )
             return
 
-        account = self._db.get_account_by_lot_number(lot_number)
+        account = self._db.get_account_by_lot_number(lot_number, self._user_id)
         if not account:
             acc.send_message(chat_id, "Ошибка: лот привязан к аккаунту, но аккаунт не найден. Напишите администратору.")
             send_message_to_admin(
@@ -458,7 +448,7 @@ class FunpayBot:
 
     def _issue_new_account(self, acc: Account, chat_id: int, event: Any, account: dict, units: int) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
-        self._db.set_account_owner(account["id"], event.order.buyer_username)
+        self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id)
         unit_minutes = self._get_unit_minutes(account)
         duration_label = format_duration_minutes(unit_minutes * units)
         self._set_rental_duration_for_order(account["id"], units, unit_minutes)
@@ -657,7 +647,7 @@ class FunpayBot:
                 acc.send_message(chat_id, "Номер лота должен быть больше 0.")
                 return
 
-            mapping = self._db.get_lot_mapping(lot_number)
+            mapping = self._db.get_lot_mapping(lot_number, self._user_id)
             if not mapping:
                 acc.send_message(chat_id, f"Лот №{lot_number} не привязан к аккаунту. Напишите администратору.")
                 return
