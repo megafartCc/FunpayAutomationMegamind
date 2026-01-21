@@ -941,3 +941,6 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   showAuth();
 });
 
+
+
+
