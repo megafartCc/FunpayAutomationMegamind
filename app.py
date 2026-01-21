@@ -287,7 +287,7 @@ async def accounts(request: Request) -> dict:
 
     for acc in items:
         steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
-        acc["steamid"] = steamid64
+        acc["steamid"] = str(steamid64) if steamid64 is not None else None
         acc.pop("mafile_json", None)
     return {"items": items}
 
@@ -474,7 +474,7 @@ def active_rentals(request: Request) -> dict:
     for item in items:
         mafile_json = item.get("mafile_json")
         steamid64 = _steamid64_from_mafile(mafile_json)
-        item["steamid"] = steamid64
+        item["steamid"] = str(steamid64) if steamid64 is not None else None
         item.update(_presence_for_steamid(steamid64))
         item.pop("mafile_json", None)
         owner = item.get("owner")
