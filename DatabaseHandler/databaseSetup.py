@@ -9,7 +9,6 @@ from backend.config import (
     MYSQLPOOLSIZE,
     MYSQLPORT,
     MYSQLUSER,
-    SESSION_TOKEN_TTL_HOURS,
 )
 from backend.logger import logger
 
@@ -30,6 +29,7 @@ class _CursorWrapper:
         self._cursor = cursor
         self._formatter = formatter
         self._connection = connection
+        self._closed = False
 
     def execute(self, sql, params=None):
         if params is None:
@@ -50,11 +50,27 @@ class _CursorWrapper:
         return self._cursor.rowcount
 
     def close(self):
+        if self._closed:
+            return None
+        self._closed = True
         try:
             return self._cursor.close()
         finally:
             if self._connection is not None:
                 self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class MySQLDB:
@@ -1677,8 +1693,8 @@ class MySQLDB:
         except Exception:
             return False
 
-    def _token_expiry(self) -> datetime:
-        return datetime.utcnow() + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
+    def _token_expiry(self) -> datetime | None:
+        return None
 
     def create_user(self, username: str, password: str, golden_key: str) -> str | None:
         cursor = self._cursor()
@@ -1730,15 +1746,6 @@ class MySQLDB:
             row = cursor.fetchone()
             if not row:
                 return None
-            expires_at = row[3]
-            if isinstance(expires_at, str):
-                try:
-                    expires_at = datetime.fromisoformat(expires_at)
-                except ValueError:
-                    expires_at = None
-            if expires_at and expires_at < datetime.utcnow():
-                self.logout_token(token)
-                return None
             return {"id": row[0], "username": row[1], "golden_key": row[2], "session_token": token}
         finally:
             cursor.close()
@@ -1746,10 +1753,9 @@ class MySQLDB:
     def update_session_token(self, user_id: int, token: str) -> None:
         cursor = self._cursor()
         try:
-            expires_at = self._token_expiry()
             cursor.execute(
                 "UPDATE users SET session_token = ?, session_token_expires_at = ? WHERE id = ?",
-                (token, expires_at, user_id),
+                (token, self._token_expiry(), user_id),
             )
             self.conn.commit()
         finally:
