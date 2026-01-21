@@ -836,11 +836,21 @@ class FunpayBot:
                 (self._next_rental_event_time - current_time).total_seconds(),
             )
 
+
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> Optional[float]:
         try:
             conn, cursor = self._db.open_connection()
         except Exception as exc:
             logger.error(f"Error in rental expiration checker: {exc}")
             return None
+
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Error in rental expiration checker: {exc}")
+            return None
+            return
 
         try:
             cursor.execute(
@@ -859,6 +869,8 @@ class FunpayBot:
         current_time = datetime.now(tz=MOSCOW_TZ)
         next_event_time: Optional[datetime] = None
         expired_accounts: list[dict[str, Any]] = []
+            
+        current_time = datetime.now(tz=MOSCOW_TZ)
         for row in accounts_data:
             (
                 account_id,
@@ -905,6 +917,7 @@ class FunpayBot:
                 sent.add(10)
 
             if current_time >= expiry_time and account_id not in invalid_accs:
+                steam_login = login or account_name
                 if self._should_delay_expire_due_to_dota_match(
                     account_id=account_id,
                     owner=owner,
@@ -961,6 +974,15 @@ class FunpayBot:
         self._next_rental_event_time = next_event_time
         self._next_rental_db_refresh_ts = time.time() + delay_seconds
         return delay_seconds
+                self._expire_rental(
+                    invalid_accs=invalid_accs,
+                    owner=owner,
+                    account_id=account_id,
+                    mafile_json=mafile_json,
+                    password=password,
+                    steam_login=steam_login,
+                    expiry_time=expiry_time,
+                )
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
         if not mafile_json:
@@ -1097,6 +1119,10 @@ class FunpayBot:
             return
         try:
             cursor.executemany(
+    def _clear_expired_rental_state(self, account_id: int) -> None:
+        conn, cursor = self._db.open_connection()
+        try:
+            cursor.execute(
                 """
                 UPDATE accounts
                 SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
@@ -1108,12 +1134,16 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to clear expired rental state: {exc}")
             invalid_accs.extend([account["account_id"] for account in accounts])
+                (account_id,),
+            )
+            conn.commit()
         finally:
             cursor.close()
             conn.close()
 
     def _expire_rental(
         self,
+        invalid_accs: list[int],
         owner: str,
         account_id: int,
         mafile_json: str,
@@ -1145,6 +1175,8 @@ class FunpayBot:
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
+            self._clear_expired_rental_state(account_id)
+
             try:
                 self.send_message_by_owner(
                     owner,
@@ -1169,3 +1201,9 @@ class FunpayBot:
             except Exception:
                 pass
             return True
+
+            try:
+                self._clear_expired_rental_state(account_id)
+            except Exception as exc2:
+                logger.error(f"Failed to clear expired rental state for account {account_id}: {exc2}")
+                invalid_accs.append(account_id)
