@@ -3,7 +3,7 @@ from pathlib import Path
 from threading import Thread
 from threading import Lock
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -95,14 +95,24 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
         return None
 
 
+def _normalize_bridge_base(url: str | None) -> str:
+    if not url:
+        return ""
+    cleaned = url.strip().rstrip("/")
+    if not cleaned:
+        return ""
+    parts = urlsplit(cleaned)
+    path = parts.path or ""
+    if "/presence" in path:
+        path = path.split("/presence", 1)[0]
+    return urlunsplit((parts.scheme, parts.netloc, path.rstrip("/"), "", ""))
+
+
 def _fetch_bridge_presence(steamid64: int) -> dict:
-    if not STEAM_BRIDGE_URL:
+    base = _normalize_bridge_base(STEAM_BRIDGE_URL)
+    if not base:
         return {}
-    base = STEAM_BRIDGE_URL.rstrip("/")
-    if base.endswith("/presence"):
-        url = f"{base}/{steamid64}"
-    else:
-        url = f"{base}/presence/{steamid64}"
+    url = f"{base}/presence/{steamid64}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
