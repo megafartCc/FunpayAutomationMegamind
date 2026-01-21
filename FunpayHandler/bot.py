@@ -37,6 +37,7 @@ from .utils import (
 
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
+RENTAL_IDLE_REFRESH_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ class FunpayBot:
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: Dict[int, set[int]] = {}
         self._expire_warning_start: Dict[int, str] = {}
+        self._next_rental_db_refresh_ts = 0.0
+        self._next_rental_event_time: Optional[datetime] = None
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -806,17 +809,40 @@ class FunpayBot:
     def _check_rental_expiration_loop(self) -> None:
         logger.info("Starting rental expiration checker...")
         invalid_accs: list[int] = []
+        backoff_seconds = RENTAL_CHECK_INTERVAL
         while True:
             try:
-                self._check_rental_expiration_once(invalid_accs)
+                suggested_delay = self._check_rental_expiration_once(invalid_accs)
+                if suggested_delay is None:
+                    backoff_seconds = min(backoff_seconds * 2, 15 * 60)
+                    time.sleep(backoff_seconds)
+                    continue
+                backoff_seconds = RENTAL_CHECK_INTERVAL
+                time.sleep(max(1.0, suggested_delay))
             except Exception as exc:
                 logger.error(f"Error in rental expiration checker: {exc}")
-            time.sleep(RENTAL_CHECK_INTERVAL)
+                time.sleep(backoff_seconds)
 
-    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
-        conn, cursor = self._db.open_connection()
-        try:
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> Optional[float]:
+        now_ts = time.time()
+        if now_ts < self._next_rental_db_refresh_ts:
+            if self._next_rental_event_time is None:
+                return float(RENTAL_IDLE_REFRESH_SECONDS)
             current_time = datetime.now(tz=MOSCOW_TZ)
+            if self._next_rental_event_time <= current_time:
+                return 1.0
+            return min(
+                float(RENTAL_IDLE_REFRESH_SECONDS),
+                (self._next_rental_event_time - current_time).total_seconds(),
+            )
+
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Error in rental expiration checker: {exc}")
+            return None
+
+        try:
             cursor.execute(
                 """
                 SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mafile_json, a.password, a.login, a.account_name
@@ -826,72 +852,115 @@ class FunpayBot:
                 """
             )
             accounts_data = cursor.fetchall()
-
-            for row in accounts_data:
-                (
-                    account_id,
-                    owner,
-                    start_time,
-                    duration,
-                    duration_minutes,
-                    mafile_json,
-                    password,
-                    login,
-                    account_name,
-                ) = row
-                if not owner:
-                    continue
-
-                if isinstance(start_time, datetime):
-                    start_datetime = start_time
-                else:
-                    start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                start_datetime = MOSCOW_TZ.localize(start_datetime)
-                try:
-                    total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
-                except Exception:
-                    total_minutes = 0
-                if total_minutes <= 0:
-                    continue
-                expiry_time = start_datetime + timedelta(minutes=total_minutes)
-
-                time_remaining = expiry_time - current_time
-                minutes_remaining = time_remaining.total_seconds() / 60
-                start_key = f"{start_datetime.isoformat()}|{total_minutes}"
-                if self._expire_warning_start.get(account_id) != start_key:
-                    self._expire_warning_start[account_id] = start_key
-                    self._expire_warning_sent.pop(account_id, None)
-
-                sent = self._expire_warning_sent.setdefault(account_id, set())
-                if 0 < minutes_remaining <= 10 and 10 not in sent:
-                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
-                    sent.add(10)
-
-                if current_time >= expiry_time and account_id not in invalid_accs:
-                    steam_login = login or account_name
-                    if self._should_delay_expire_due_to_dota_match(
-                        account_id=account_id,
-                        owner=owner,
-                        current_time=current_time,
-                        mafile_json=mafile_json,
-                    ):
-                        continue
-                    self._expire_rental(
-                        cursor=cursor,
-                        conn=conn,
-                        invalid_accs=invalid_accs,
-                        owner=owner,
-                        account_id=account_id,
-                        mafile_json=mafile_json,
-                        password=password,
-                        steam_login=steam_login,
-                        expiry_time=expiry_time,
-                    )
-
-            conn.commit()
         finally:
             cursor.close()
             conn.close()
+
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        next_event_time: Optional[datetime] = None
+        expired_accounts: list[dict[str, Any]] = []
+        for row in accounts_data:
+            (
+                account_id,
+                owner,
+                start_time,
+                duration,
+                duration_minutes,
+                mafile_json,
+                password,
+                login,
+                account_name,
+            ) = row
+            if not owner:
+                continue
+
+            if isinstance(start_time, datetime):
+                start_datetime = start_time
+            else:
+                start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+            start_datetime = MOSCOW_TZ.localize(start_datetime)
+            try:
+                total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
+            except Exception:
+                total_minutes = 0
+            if total_minutes <= 0:
+                continue
+            expiry_time = start_datetime + timedelta(minutes=total_minutes)
+
+            time_remaining = expiry_time - current_time
+            minutes_remaining = time_remaining.total_seconds() / 60
+            start_key = f"{start_datetime.isoformat()}|{total_minutes}"
+            if self._expire_warning_start.get(account_id) != start_key:
+                self._expire_warning_start[account_id] = start_key
+                self._expire_warning_sent.pop(account_id, None)
+
+            sent = self._expire_warning_sent.setdefault(account_id, set())
+            warning_time = expiry_time - timedelta(minutes=10)
+            if minutes_remaining > 10 and 10 not in sent:
+                next_event_time = warning_time if next_event_time is None else min(next_event_time, warning_time)
+            else:
+                next_event_time = expiry_time if next_event_time is None else min(next_event_time, expiry_time)
+            if 0 < minutes_remaining <= 10 and 10 not in sent:
+                self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
+                sent.add(10)
+
+            if current_time >= expiry_time and account_id not in invalid_accs:
+                if self._should_delay_expire_due_to_dota_match(
+                    account_id=account_id,
+                    owner=owner,
+                    current_time=current_time,
+                    mafile_json=mafile_json,
+                ):
+                    continue
+                expired_accounts.append(
+                    {
+                        "account_id": account_id,
+                        "owner": owner,
+                        "mafile_json": mafile_json,
+                        "password": password,
+                        "steam_login": login or account_name,
+                        "expiry_time": expiry_time,
+                    }
+                )
+                next_event_time = current_time
+
+        accounts_to_clear: list[dict[str, Any]] = []
+        for account in expired_accounts:
+            if account["account_id"] in invalid_accs:
+                continue
+            should_clear = self._expire_rental(
+                owner=account["owner"],
+                account_id=account["account_id"],
+                mafile_json=account["mafile_json"],
+                password=account["password"],
+                steam_login=account["steam_login"],
+                expiry_time=account["expiry_time"],
+            )
+            if should_clear:
+                accounts_to_clear.append(account)
+
+        if accounts_to_clear:
+            self._clear_expired_rental_states(accounts_to_clear, invalid_accs)
+
+        if not accounts_data:
+            self._next_rental_event_time = None
+            self._next_rental_db_refresh_ts = time.time() + max(
+                float(RENTAL_CHECK_INTERVAL),
+                float(RENTAL_IDLE_REFRESH_SECONDS),
+            )
+            return float(RENTAL_IDLE_REFRESH_SECONDS)
+        if next_event_time is None:
+            self._next_rental_event_time = None
+            self._next_rental_db_refresh_ts = time.time() + float(RENTAL_CHECK_INTERVAL)
+            return float(RENTAL_CHECK_INTERVAL)
+        if next_event_time <= current_time:
+            self._next_rental_event_time = next_event_time
+            self._next_rental_db_refresh_ts = time.time()
+            return 1.0
+        delay_seconds = min(float(RENTAL_CHECK_INTERVAL), (next_event_time - current_time).total_seconds())
+        self._next_rental_event_time = next_event_time
+        self._next_rental_db_refresh_ts = time.time() + delay_seconds
+        return delay_seconds
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
         if not mafile_json:
@@ -1019,18 +1088,39 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to send warning notification: {exc}")
 
+    def _clear_expired_rental_states(self, accounts: list[dict[str, Any]], invalid_accs: list[int]) -> None:
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Failed to clear expired rental state: {exc}")
+            invalid_accs.extend([account["account_id"] for account in accounts])
+            return
+        try:
+            cursor.executemany(
+                """
+                UPDATE accounts
+                SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
+                WHERE ID = ?
+                """,
+                [(account["account_id"],) for account in accounts],
+            )
+            conn.commit()
+        except Exception as exc:
+            logger.error(f"Failed to clear expired rental state: {exc}")
+            invalid_accs.extend([account["account_id"] for account in accounts])
+        finally:
+            cursor.close()
+            conn.close()
+
     def _expire_rental(
         self,
-        cursor: Any,
-        conn: Any,
-        invalid_accs: list[int],
         owner: str,
         account_id: int,
         mafile_json: str,
         password: str,
         steam_login: str,
         expiry_time: datetime,
-    ) -> None:
+    ) -> bool:
         logger.info(f"Account {account_id} rental expired.")
         self._expire_warning_sent.pop(account_id, None)
         self._expire_warning_start.pop(account_id, None)
@@ -1055,16 +1145,6 @@ class FunpayBot:
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
-            cursor.execute(
-                """
-                UPDATE accounts
-                SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
-                WHERE ID = ?
-                """,
-                (account_id,),
-            )
-            conn.commit()
-
             try:
                 self.send_message_by_owner(
                     owner,
@@ -1075,6 +1155,7 @@ class FunpayBot:
                 )
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
+            return True
         except Exception as exc:
             logger.error(f"Failed to expire account {account_id}: {exc}")
             try:
@@ -1087,17 +1168,4 @@ class FunpayBot:
                 )
             except Exception:
                 pass
-
-            try:
-                cursor.execute(
-                    """
-                    UPDATE accounts
-                    SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
-                    WHERE ID = ?
-                    """,
-                    (account_id,),
-                )
-                conn.commit()
-            except Exception as exc2:
-                logger.error(f"Failed to clear expired rental state for account {account_id}: {exc2}")
-                invalid_accs.append(account_id)
+            return True
