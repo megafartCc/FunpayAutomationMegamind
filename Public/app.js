@@ -215,6 +215,12 @@ const renderHealth = (status) => {
   }
 };
 
+const presenceLabel = (item) => {
+  if (item.in_match || item.presence_in_match) return "In match";
+  if (item.in_game || item.presence_state === "in_game") return "In game";
+  return "Offline";
+};
+
 const ensureActiveRentalsHeader = () => {
   const tbody = ui.activeTable;
   if (!tbody) return;
@@ -234,8 +240,9 @@ const ensureActiveRentalsHeader = () => {
 
 const renderActiveRentals = (items) => {
   ensureActiveRentalsHeader();
+  ensureActiveStatusHeader?.();
   if (!items.length) {
-    ui.activeTable.innerHTML = "<tr><td colspan=\"8\">No active rentals.</td></tr>";
+    ui.activeTable.innerHTML = "<tr><td colspan=\"9\">No active rentals.</td></tr>";
     return;
   }
   ui.activeTable.innerHTML = items
@@ -250,6 +257,7 @@ const renderActiveRentals = (items) => {
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
           <td>${item.rental_duration}</td>
+          <td>${presenceLabel(item)}</td>
         </tr>
       `
     )

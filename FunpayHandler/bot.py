@@ -747,6 +747,9 @@ class FunpayBot:
                         mafile_json=mafile_json,
                     ):
                         continue
+                    if self._should_delay_expire_due_to_in_game(mafile_json):
+                        logger.info(f"Account {account_id} expired but still in game; will retry in 30s.")
+                        continue
                     self._expire_rental(
                         cursor=cursor,
                         conn=conn,
@@ -844,6 +847,16 @@ class FunpayBot:
             self._expire_delay_notified.add(account_id)
 
         return True
+
+    def _should_delay_expire_due_to_in_game(self, mafile_json: str | None) -> bool:
+        steamid64 = self._steamid64_from_mafile(mafile_json)
+        if steamid64 is None:
+            return False
+        try:
+            presence = fetch_web_presence(steamid64)
+            return bool(presence.get("in_game"))
+        except Exception:
+            return False
 
     def _send_expiration_warning(self, owner: str, account_id: int, hours_remaining: float, expiry_time: datetime) -> None:
         try:
