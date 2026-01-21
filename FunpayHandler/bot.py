@@ -747,9 +747,6 @@ class FunpayBot:
                         mafile_json=mafile_json,
                     ):
                         continue
-                    if self._should_delay_expire_due_to_in_game(mafile_json):
-                        logger.info(f"Account {account_id} expired but still in game; will retry in 30s.")
-                        continue
                     self._expire_rental(
                         cursor=cursor,
                         conn=conn,
