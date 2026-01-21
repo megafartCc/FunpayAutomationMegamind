@@ -1,11 +1,19 @@
+import json
 import secrets
 import bcrypt
 from datetime import datetime, timedelta
 
-from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.config import DATA_ENCRYPTION_KEY, MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
 from backend.logger import logger
 
 import mysql.connector as mysql_connector
+
+try:
+    from cryptography.fernet import Fernet
+except Exception:
+    Fernet = None
+
+_ENC_PREFIX = "enc:"
 
 
 class _NoopConnection:
@@ -52,12 +60,76 @@ class MySQLDB:
     def __init__(self):
         self.db_type = "mysql"
         self.conn = _NoopConnection()
+        self._fernet = None
+        self._fernet_ready = False
         self.create_table()
 
     def _format_sql(self, sql: str) -> str:
         if self.db_type == "mysql":
             return sql.replace("?", "%s")
         return sql
+
+    def _get_fernet(self):
+        if self._fernet_ready:
+            return self._fernet
+        self._fernet_ready = True
+        if not DATA_ENCRYPTION_KEY:
+            return None
+        if Fernet is None:
+            logger.error("DATA_ENCRYPTION_KEY is set but cryptography is not installed.")
+            return None
+        try:
+            self._fernet = Fernet(DATA_ENCRYPTION_KEY.encode("utf-8"))
+        except Exception as exc:
+            logger.error(f"Invalid DATA_ENCRYPTION_KEY: {exc}")
+            self._fernet = None
+        return self._fernet
+
+    def _normalize_mafile(self, mafile_json):
+        if mafile_json is None:
+            return None
+        if isinstance(mafile_json, str):
+            return mafile_json
+        try:
+            return json.dumps(mafile_json)
+        except Exception:
+            return str(mafile_json)
+
+    def _encrypt_value(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        f = self._get_fernet()
+        if not f:
+            return value
+        if value.startswith(_ENC_PREFIX):
+            return value
+        try:
+            token = f.encrypt(value.encode("utf-8")).decode("utf-8")
+            return f"{_ENC_PREFIX}{token}"
+        except Exception as exc:
+            logger.error(f"Failed to encrypt sensitive value: {exc}")
+            return value
+
+    def _decrypt_value(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            try:
+                value = value.decode("utf-8")
+            except Exception:
+                value = str(value)
+        if not value.startswith(_ENC_PREFIX):
+            return value
+        f = self._get_fernet()
+        if not f:
+            logger.error("Encrypted value found but DATA_ENCRYPTION_KEY is not set.")
+            return None
+        token = value[len(_ENC_PREFIX):]
+        try:
+            return f.decrypt(token.encode("utf-8")).decode("utf-8")
+        except Exception as exc:
+            logger.error(f"Failed to decrypt sensitive value: {exc}")
+            return None
 
     def _cursor(self):
         if self.db_type == "mysql":
@@ -195,6 +267,7 @@ class MySQLDB:
         self._ensure_lot_url_column()
         self._ensure_users_table()
         self._ensure_user_owner_columns()
+        self._ensure_feedback_rewards_table()
         self._migrate_lots_schema()
 
     def _ensure_mafile_column(self):
@@ -337,6 +410,28 @@ class MySQLDB:
             pass
         finally:
             cursor.close()
+
+    def _ensure_feedback_rewards_table(self):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS feedback_rewards (
+                    order_id VARCHAR(16) PRIMARY KEY,
+                    owner VARCHAR(255) NOT NULL,
+                    rating INT NOT NULL,
+                    review_text TEXT DEFAULT NULL,
+                    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    claimed_at TIMESTAMP NULL,
+                    account_id INT DEFAULT NULL
+                )
+                """
+            )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
     def add_account(
         self,
         account_name,
@@ -373,6 +468,11 @@ class MySQLDB:
                 except Exception:
                     total_minutes = duration_value * 60
 
+            if mafile_json is not None:
+                mafile_json = self._normalize_mafile(mafile_json)
+            enc_password = self._encrypt_value(password)
+            enc_mafile = self._encrypt_value(mafile_json)
+
             cursor = self._cursor()
             cursor.execute(
                 """
@@ -384,9 +484,9 @@ class MySQLDB:
                 (
                     account_name,
                     path_to_maFile,
-                    mafile_json,
+                    enc_mafile,
                     login,
-                    password,
+                    enc_password,
                     duration_value,
                     total_minutes,
                     owner,
@@ -421,7 +521,7 @@ class MySQLDB:
                 "account_name": row[1],
                 "path_to_maFile": row[2],
                 "login": row[3],
-                "password": row[4],
+                "password": self._decrypt_value(row[4]),
                 "rental_duration": row[5],
                 "rental_duration_minutes": row[6],
             }
@@ -540,13 +640,17 @@ class MySQLDB:
         )
         rows = cursor.fetchall()
         cursor.close()
-        return rows
+        return [
+            (row[0], row[1], row[2], self._decrypt_value(row[3]), row[4], row[5])
+            for row in rows
+        ]
 
     def update_password_by_owner(self, owner_name: str, new_password: str) -> bool:
         """
         Update the password for the most recent account owned by the specified owner.
         """
         try:
+            enc_password = self._encrypt_value(new_password)
             cursor = self._cursor()
             cursor.execute(
                 """
@@ -559,7 +663,7 @@ class MySQLDB:
                     WHERE owner = ?
                 )
                 """,
-                (new_password, owner_name, owner_name),
+                (enc_password, owner_name, owner_name),
             )
             success = cursor.rowcount > 0
             self.conn.commit()
@@ -590,7 +694,7 @@ class MySQLDB:
         )
         owners_data = cursor.fetchall()
         cursor.close()
-        return owners_data
+        return [(row[0], row[1], self._decrypt_value(row[2])) for row in owners_data]
 
     def get_all_accounts(self, user_id: int | None = None):
         """Retrieve all accounts from the database."""
@@ -619,13 +723,13 @@ class MySQLDB:
                 "account_name": row[1],
                 "path_to_maFile": row[2],
                 "login": row[3],
-                "password": row[4],
+                "password": self._decrypt_value(row[4]),
                 "rental_duration": row[5],
                 "rental_duration_minutes": row[6],
                 "owner": row[7],
                 "rental_start": row[8],
                 "user_id": row[9] if len(row) > 9 else None,
-                "mafile_json": row[10] if len(row) > 10 else None,
+                "mafile_json": self._decrypt_value(row[10]) if len(row) > 10 else None,
             }
             for row in rows
         ]
@@ -768,12 +872,12 @@ class MySQLDB:
             "id": row[0],
             "account_name": row[1],
             "login": row[2],
-            "password": row[3],
+            "password": self._decrypt_value(row[3]),
             "rental_duration": row[4],
             "rental_duration_minutes": row[5],
             "owner": row[6],
             "rental_start": row[7],
-            "mafile_json": row[8],
+            "mafile_json": self._decrypt_value(row[8]),
         }
 
     def get_available_lot_accounts(self, user_id: int | None = None) -> list:
@@ -955,6 +1059,10 @@ class MySQLDB:
         updates = {key: value for key, value in fields.items() if key in allowed_fields}
         if not updates:
             return False
+        if "mafile_json" in updates:
+            updates["mafile_json"] = self._encrypt_value(self._normalize_mafile(updates["mafile_json"]))
+        if "password" in updates:
+            updates["password"] = self._encrypt_value(updates["password"])
 
         try:
             cursor = self._cursor()
@@ -1042,7 +1150,7 @@ class MySQLDB:
                     "account_name": row[1],
                     "path_to_maFile": row[2],
                     "login": row[3],
-                    "password": row[4],
+                    "password": self._decrypt_value(row[4]),
                     "rental_duration": row[5],
                     "rental_duration_minutes": row[6],
                     "owner": row[7],
@@ -1092,12 +1200,12 @@ class MySQLDB:
                     "account_name": row[1],
                     "path_to_maFile": row[2],
                     "login": row[3],
-                    "password": row[4],
+                    "password": self._decrypt_value(row[4]),
                     "rental_duration": row[5],
                     "rental_duration_minutes": row[6],
                     "owner": row[7],
                     "rental_start": row[8],
-                    "mafile_json": row[9],
+                    "mafile_json": self._decrypt_value(row[9]),
                 }
             return None
         except Exception as e:
@@ -1356,7 +1464,7 @@ class MySQLDB:
                     "rental_duration_minutes": row[5],
                     "path_to_maFile": row[6],
                     "login": row[7],
-                    "mafile_json": row[8],
+                    "mafile_json": self._decrypt_value(row[8]),
                 }
                 for row in rows
             ]
@@ -1364,6 +1472,90 @@ class MySQLDB:
         except Exception as e:
             logger.error(f"Error retrieving active users: {str(e)}")
             return []
+        finally:
+            cursor.close()
+
+    def upsert_feedback_reward(self, order_id: str, owner: str, rating: int, review_text: str | None) -> bool:
+        try:
+            cursor = self._cursor()
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT INTO feedback_rewards (order_id, owner, rating, review_text)
+                    VALUES (?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        owner = VALUES(owner),
+                        rating = VALUES(rating),
+                        review_text = VALUES(review_text),
+                        reviewed_at = CURRENT_TIMESTAMP
+                    """,
+                    (order_id, owner, int(rating), review_text),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO feedback_rewards (order_id, owner, rating, review_text, reviewed_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(order_id) DO UPDATE SET
+                        owner = excluded.owner,
+                        rating = excluded.rating,
+                        review_text = excluded.review_text,
+                        reviewed_at = excluded.reviewed_at
+                    """,
+                    (order_id, owner, int(rating), review_text),
+                )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error upserting feedback reward: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
+    def get_unclaimed_feedback_reward(self, owner: str, min_rating: int = 5) -> dict | None:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT order_id, rating, review_text, reviewed_at
+                FROM feedback_rewards
+                WHERE owner = ? AND claimed_at IS NULL AND rating >= ?
+                ORDER BY reviewed_at DESC
+                LIMIT 1
+                """,
+                (owner, int(min_rating)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "order_id": row[0],
+                "rating": row[1],
+                "review_text": row[2],
+                "reviewed_at": row[3],
+            }
+        except Exception as e:
+            logger.error(f"Error reading feedback rewards: {str(e)}")
+            return None
+        finally:
+            cursor.close()
+
+    def mark_feedback_reward_claimed(self, order_id: str, account_id: int | None = None) -> bool:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                UPDATE feedback_rewards
+                SET claimed_at = CURRENT_TIMESTAMP, account_id = ?
+                WHERE order_id = ? AND claimed_at IS NULL
+                """,
+                (account_id, order_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error marking feedback reward claimed: {str(e)}")
+            return False
         finally:
             cursor.close()
 
@@ -1394,7 +1586,7 @@ class MySQLDB:
                     "id": row[0],
                     "account_name": row[1],
                     "login": row[2],
-                    "password": row[3],
+                    "password": self._decrypt_value(row[3]),
                     "rental_duration": row[4],
                     "rental_duration_minutes": row[5],
                     "rental_start": row[6],
@@ -1445,7 +1637,7 @@ class MySQLDB:
                     "id": row[0],
                     "account_name": row[1],
                     "login": row[2],
-                    "password": row[3],
+                    "password": self._decrypt_value(row[3]),
                     "rental_duration": row[4],
                     "rental_duration_minutes": row[5],
                     "rental_start": row[6],
@@ -1547,6 +1739,7 @@ class MySQLDB:
         Returns number of rows updated.
         """
         try:
+            enc_password = self._encrypt_value(new_password)
             cursor = self._cursor()
             cursor.execute(
                 """
@@ -1554,7 +1747,7 @@ class MySQLDB:
                 SET password = ?
                 WHERE login = ?
                 """,
-                (new_password, login),
+                (enc_password, login),
             )
             updated = cursor.rowcount
             self.conn.commit()
@@ -1587,7 +1780,7 @@ class MySQLDB:
                     "id": row[0],
                     "account_name": row[1],
                     "login": row[2],
-                    "password": row[3],
+                    "password": self._decrypt_value(row[3]),
                     "rental_duration": row[4],
                     "rental_duration_minutes": row[5],
                     "rental_start": row[6],

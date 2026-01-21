@@ -14,11 +14,13 @@ from backend.config import (
     AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
+    HOURS_FOR_REVIEW,
     RENTAL_CHECK_INTERVAL,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
 from backend.logger import logger
 from backend.notifications import send_message_to_admin
+from FunPayAPI.common.utils import RegularExpressions
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -66,6 +68,8 @@ class FunpayBot:
         self._processed_order_ids: set[str] = set()
 
         self._last_refresh_ts = 0.0
+        self._token_lock = threading.Lock()
+        self._refresh_requested = threading.Event()
         self._expire_delay_since: Dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: Dict[int, set[int]] = {}
@@ -126,9 +130,21 @@ class FunpayBot:
 
     def refresh_session(self) -> None:
         logger.info("Refreshing FunPay session...")
-        self._acc = Account(self._token).get()
+        with self._token_lock:
+            token = self._token
+        if not token:
+            logger.error("FunPay golden key is missing. FunPay automation stopped.")
+            return
+        self._acc = Account(token).get()
         self._runner = Runner(self._acc)
         logger.info("FunPay session refreshed successfully.")
+
+    def request_token_update(self, token: str) -> None:
+        if not token:
+            return
+        with self._token_lock:
+            self._token = token
+        self._refresh_requested.set()
 
     def start(self) -> None:
         logger.info("Starting FunPay bot...")
@@ -173,6 +189,12 @@ class FunpayBot:
 
     def _tick_refresh_if_needed(self) -> None:
         now = time.time()
+        if self._refresh_requested.is_set():
+            self._refresh_requested.clear()
+            logger.info("Refreshing session due to updated token...")
+            self.refresh_session()
+            self._last_refresh_ts = now
+            return
         if now - self._last_refresh_ts < REFRESH_INTERVAL_SECONDS:
             return
         logger.info("Refreshing session due to interval timeout...")
@@ -431,7 +453,7 @@ class FunpayBot:
                 f"Логин: {rental['login']}\n"
                 f"Пароль: {rental['password']}\n"
                 f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                "Команды: !акк, !код, !сток, !продлить, !отмена",
+                "Команды: !акк, !код, !сток, !продлить, !отмена, !бонус",
             )
 
         send_message_to_admin(
@@ -479,7 +501,7 @@ class FunpayBot:
             "!код — код Steam Guard\n"
             "!сток — наличие\n"
             "!продлить <часы> <номер_лота> — продлить аренду\n"
-            "!отмена <ID> — отменить аренду\n\n"
+            "!отмена <ID> — отменить аренду\n!бонус — бонус за отзыв\n\n"
             "Если нужна помощь — напишите в чат.",
         )
 
@@ -492,6 +514,13 @@ class FunpayBot:
         chat = acc.get_chat_by_name(event.message.author, True)
 
         if event.message.author_id == acc.id:
+            return
+
+        if event.message.type in (
+            types.MessageTypes.NEW_FEEDBACK,
+            types.MessageTypes.FEEDBACK_CHANGED,
+        ):
+            self._handle_feedback_event(acc, event)
             return
 
         logger.info(f"{event.message.author} : {event.message.text}")
@@ -521,6 +550,70 @@ class FunpayBot:
         if message_text.startswith("!отмена"):
             self._handle_cancel(acc, chat.id, event.message.author, raw_text)
             return
+
+        if message_text in ("!bonus", "!бонус"):
+            self._handle_bonus(acc, chat.id, event.message.author)
+            return
+
+    def _extract_order_id(self, text: str) -> Optional[str]:
+        match = RegularExpressions().ORDER_ID.search(text or "")
+        if not match:
+            return None
+        return match.group(0).lstrip("#")
+
+    def _handle_feedback_event(self, acc: Account, event: Any) -> None:
+        order_id = self._extract_order_id(event.message.text or "")
+        if not order_id:
+            return
+        try:
+            order = acc.get_order(order_id)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch order {order_id} for feedback: {exc}")
+            return
+        review = getattr(order, "review", None)
+        if not review or review.stars is None:
+            return
+        owner = review.author or getattr(order, "buyer_username", None) or event.message.author
+        if not owner:
+            return
+        review_text = review.text or ""
+        self._db.upsert_feedback_reward(order_id, owner, int(review.stars), review_text)
+
+    def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
+        reward = self._db.get_unclaimed_feedback_reward(owner, min_rating=5)
+        if not reward:
+            acc.send_message(chat_id, "No unclaimed 5-star review found.")
+            return
+
+        order_id = reward["order_id"]
+        try:
+            order = acc.get_order(order_id)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch order {order_id} for bonus: {exc}")
+            acc.send_message(chat_id, "Failed to verify review. Try again later.")
+            return
+
+        review = getattr(order, "review", None)
+        if not review or review.stars is None or int(review.stars) < 5:
+            acc.send_message(chat_id, "Review does not meet the 5-star requirement.")
+            return
+
+        accounts = self._db.get_user_active_accounts(owner)
+        if not accounts:
+            acc.send_message(chat_id, "No active rentals found to apply the bonus.")
+            return
+
+        target = accounts[0]
+        account_id = target["id"]
+        if not self._db.extend_rental_duration_for_owner(account_id, owner, HOURS_FOR_REVIEW, 0):
+            acc.send_message(chat_id, "Failed to apply bonus. Try again later.")
+            return
+
+        self._db.mark_feedback_reward_claimed(order_id, account_id)
+        acc.send_message(
+            chat_id,
+            f"Bonus applied: +{HOURS_FOR_REVIEW} hour(s) for your 5-star review. Order #{order_id}.",
+        )
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
         if owner in self._pending_account_choice:
@@ -811,7 +904,6 @@ class FunpayBot:
     def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
         conn, cursor = self._db.open_connection()
         try:
-            current_time = datetime.now(tz=MOSCOW_TZ)
             cursor.execute(
                 """
                 SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
@@ -821,74 +913,71 @@ class FunpayBot:
                 """
             )
             accounts_data = cursor.fetchall()
-
-            for row in accounts_data:
-                (
-                    account_id,
-                    owner,
-                    start_time,
-                    duration,
-                    duration_minutes,
-                    mafile_path,
-                    mafile_json,
-                    password,
-                    login,
-                    account_name,
-                ) = row
-                if not owner:
-                    continue
-
-                if isinstance(start_time, datetime):
-                    start_datetime = start_time
-                else:
-                    start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                start_datetime = MOSCOW_TZ.localize(start_datetime)
-                try:
-                    total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
-                except Exception:
-                    total_minutes = 0
-                if total_minutes <= 0:
-                    continue
-                expiry_time = start_datetime + timedelta(minutes=total_minutes)
-
-                time_remaining = expiry_time - current_time
-                minutes_remaining = time_remaining.total_seconds() / 60
-                start_key = f"{start_datetime.isoformat()}|{total_minutes}"
-                if self._expire_warning_start.get(account_id) != start_key:
-                    self._expire_warning_start[account_id] = start_key
-                    self._expire_warning_sent.pop(account_id, None)
-
-                sent = self._expire_warning_sent.setdefault(account_id, set())
-                if 0 < minutes_remaining <= 10 and 10 not in sent:
-                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
-                    sent.add(10)
-
-                if current_time >= expiry_time and account_id not in invalid_accs:
-                    steam_login = login or account_name
-                    if self._should_delay_expire_due_to_dota_match(
-                        account_id=account_id,
-                        owner=owner,
-                        current_time=current_time,
-                        mafile_json=mafile_json,
-                    ):
-                        continue
-                    self._expire_rental(
-                        cursor=cursor,
-                        conn=conn,
-                        invalid_accs=invalid_accs,
-                        owner=owner,
-                        account_id=account_id,
-                        mafile_path=mafile_path,
-                        mafile_json=mafile_json,
-                        password=password,
-                        steam_login=steam_login,
-                        expiry_time=expiry_time,
-                    )
-
-            conn.commit()
         finally:
             cursor.close()
             conn.close()
+
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        for row in accounts_data:
+            (
+                account_id,
+                owner,
+                start_time,
+                duration,
+                duration_minutes,
+                mafile_path,
+                mafile_json,
+                password,
+                login,
+                account_name,
+            ) = row
+            if not owner:
+                continue
+
+            if isinstance(start_time, datetime):
+                start_datetime = start_time
+            else:
+                start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+            start_datetime = MOSCOW_TZ.localize(start_datetime)
+            try:
+                total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
+            except Exception:
+                total_minutes = 0
+            if total_minutes <= 0:
+                continue
+            expiry_time = start_datetime + timedelta(minutes=total_minutes)
+
+            time_remaining = expiry_time - current_time
+            minutes_remaining = time_remaining.total_seconds() / 60
+            start_key = f"{start_datetime.isoformat()}|{total_minutes}"
+            if self._expire_warning_start.get(account_id) != start_key:
+                self._expire_warning_start[account_id] = start_key
+                self._expire_warning_sent.pop(account_id, None)
+
+            sent = self._expire_warning_sent.setdefault(account_id, set())
+            if 0 < minutes_remaining <= 10 and 10 not in sent:
+                self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
+                sent.add(10)
+
+            if current_time >= expiry_time and account_id not in invalid_accs:
+                steam_login = login or account_name
+                if self._should_delay_expire_due_to_dota_match(
+                    account_id=account_id,
+                    owner=owner,
+                    current_time=current_time,
+                    mafile_json=mafile_json,
+                ):
+                    continue
+                self._expire_rental(
+                    invalid_accs=invalid_accs,
+                    owner=owner,
+                    account_id=account_id,
+                    mafile_path=mafile_path,
+                    mafile_json=mafile_json,
+                    password=password,
+                    steam_login=steam_login,
+                    expiry_time=expiry_time,
+                )
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
         if not mafile_json:
@@ -1010,7 +1099,7 @@ class FunpayBot:
                 "!код — код Steam Guard\n"
                 "!сток — наличие\n"
                 "!продлить <часы> <номер_лота> — продлить аренду\n"
-                "!отмена <ID> — отменить аренду\n\n"
+                "!отмена <ID> — отменить аренду\n!бонус — бонус за отзыв\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
         except Exception as exc:
@@ -1018,8 +1107,6 @@ class FunpayBot:
 
     def _expire_rental(
         self,
-        cursor: Any,
-        conn: Any,
         invalid_accs: list[int],
         owner: str,
         account_id: int,
@@ -1032,8 +1119,9 @@ class FunpayBot:
         logger.info(f"Account {account_id} rental expired.")
         self._expire_warning_sent.pop(account_id, None)
         self._expire_warning_start.pop(account_id, None)
+        deauth_ok = False
+        new_password = None
         try:
-            deauth_ok = False
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
                 try:
                     deauth_ok = asyncio.run(
@@ -1062,23 +1150,13 @@ class FunpayBot:
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
-            cursor.execute(
-                """
-                UPDATE accounts
-                SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
-                WHERE ID = ?
-                """,
-                (new_password, account_id),
-            )
-            conn.commit()
-
             try:
                 self.send_message_by_owner(
                     owner,
-                    "Срок аренды истёк.\n\n"
-                    f"ID аккаунта: {account_id}\n"
-                    "Доступ закрыт, пароль изменён.\n"
-                    "Если нужна помощь или продление — напишите в чат.",
+                    "???? ?????? ?????.\n\n"
+                    f"ID ????????: {account_id}\n"
+                    "?????? ??????, ?????? ???????.\n"
+                    "???? ????? ?????? ??? ????????? ? ???????? ? ???.",
                 )
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
@@ -1094,17 +1172,15 @@ class FunpayBot:
                 )
             except Exception:
                 pass
+            new_password = None
 
-            try:
-                cursor.execute(
-                    """
-                    UPDATE accounts
-                    SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
-                    WHERE ID = ?
-                    """,
-                    (account_id,),
-                )
-                conn.commit()
-            except Exception as exc2:
-                logger.error(f"Failed to clear expired rental state for account {account_id}: {exc2}")
-                invalid_accs.append(account_id)
+        update_fields = {"rental_duration": 1, "rental_duration_minutes": 60}
+        if new_password:
+            update_fields["password"] = new_password
+
+        if not self._db.update_account(account_id, update_fields):
+            logger.error(f"Failed to update expired account state for account {account_id}")
+            invalid_accs.append(account_id)
+        if not self._db.release_account(account_id):
+            logger.error(f"Failed to release expired account {account_id}")
+            invalid_accs.append(account_id)

@@ -11,14 +11,23 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL
+from backend.config import (
+    DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
+    STEAM_BRIDGE_URL,
+    STEAM_PRESENCE_ENABLED,
+    STEAM_PRESENCE_IDENTITY_SECRET,
+    STEAM_PRESENCE_LOGIN,
+    STEAM_PRESENCE_PASSWORD,
+    STEAM_PRESENCE_REFRESH_TOKEN,
+    STEAM_PRESENCE_SHARED_SECRET,
+)
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
 from backend.logger import logger
 from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.presence_bot import get_presence_bot
+from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
@@ -41,7 +50,13 @@ class BotManager:
             return
         with self._lock:
             existing = self._bots.get(user_id)
-            if existing and existing.get("key") == golden_key and existing.get("thread") and existing["thread"].is_alive():
+            if existing and existing.get("thread") and existing["thread"].is_alive():
+                if existing.get("key") == golden_key:
+                    return
+                bot = existing.get("bot")
+                if bot is not None:
+                    bot.request_token_update(golden_key)
+                existing["key"] = golden_key
                 return
             try:
                 bot = FunpayBot(token=golden_key, db=db, user_id=user_id)
@@ -67,14 +82,18 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 @app.on_event("startup")
 def start_background_services() -> None:
-    bot_manager.start_all()
-    # One-shot presence check for debugging a specific SteamID
     try:
-        test_sid = 76561198749779076
-        presence = _fetch_bridge_presence(test_sid)
-        logger.info(f"Test bridge presence for {test_sid}: {presence or 'no data'}")
+        init_presence_bot(
+            enabled=STEAM_PRESENCE_ENABLED,
+            login=STEAM_PRESENCE_LOGIN,
+            password=STEAM_PRESENCE_PASSWORD,
+            shared_secret=STEAM_PRESENCE_SHARED_SECRET or None,
+            identity_secret=STEAM_PRESENCE_IDENTITY_SECRET or None,
+            refresh_token=STEAM_PRESENCE_REFRESH_TOKEN or None,
+        )
     except Exception as exc:
-        logger.warning(f"Test bridge presence check failed: {exc}")
+        logger.warning(f"Failed to init Steam presence bot: {exc}")
+    bot_manager.start_all()
     logger.info("Startup complete (per-user FunPay bots initialized if keys are present).")
 
 
