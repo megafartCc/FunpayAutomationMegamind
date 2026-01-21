@@ -14,6 +14,7 @@ app.use(express.json());
 
 const client = new SteamUser();
 const presence = new Map();
+const matchStart = new Map();
 let loggedOn = false;
 
 client.on("loggedOn", () => {
@@ -169,12 +170,6 @@ function extractHeroToken(rp, rpRaw) {
   return "";
 }
 
-function extractHeroLevel(rp, rpRaw) {
-  const raw = getRichPresenceValue(rp, rpRaw, "level");
-  const level = parseIntMaybe(raw);
-  return Number.isFinite(level) && level >= 0 ? level : null;
-}
-
 function extractMatchSeconds(rp, rpRaw) {
   const nowSec = Math.floor(Date.now() / 1000);
   const keys = [
@@ -228,6 +223,63 @@ function formatMatchTime(seconds) {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+function updateMatchStart(id64, inMatch) {
+  if (inMatch) {
+    if (!matchStart.has(id64)) {
+      matchStart.set(id64, Date.now());
+    }
+  } else {
+    matchStart.delete(id64);
+  }
+}
+
+function derivePresence(data) {
+  const rp = data.rich_presence || {};
+  const rpRaw = data.rich_presence_raw || [];
+  const lobbyRaw =
+    rp.lobby ||
+    (Array.isArray(rpRaw)
+      ? rpRaw.find((e) => (e.key || "").toLowerCase() === "lobby")?.value || ""
+      : "");
+  const lobbyLower = String(lobbyRaw || "").toLowerCase();
+  const lobbyStateHit = /lobby_state:\s*(run|serversetup)/.test(lobbyLower);
+  const statusLower = String(rp.status || "").toLowerCase();
+  const displayLower = String(rp.steam_display || "").toLowerCase();
+  const statusKeywords = ["private_lobby", "finding_match", "playing", "match", "ranked", "turbo"];
+  const statusHit = statusKeywords.some(
+    (kw) => statusLower.includes(kw) || displayLower.includes(kw)
+  );
+  const inMatch = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
+  const inGame = !!(data.in_game || data.appid || lobbyRaw || statusHit);
+  updateMatchStart(data.steamid64, inMatch);
+
+  const heroToken = extractHeroToken(rp, rpRaw);
+  const heroName = toHeroDisplay(heroToken);
+  const heroLevel = null;
+
+  let matchSeconds = extractMatchSeconds(rp, rpRaw);
+  if (matchSeconds === null && inMatch) {
+    const startedAt = matchStart.get(data.steamid64);
+    if (startedAt) {
+      matchSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    }
+  }
+  const matchTime = formatMatchTime(matchSeconds);
+
+  return {
+    rp,
+    rpRaw,
+    lobbyRaw,
+    inMatch,
+    inGame,
+    heroToken,
+    heroName,
+    heroLevel,
+    matchSeconds,
+    matchTime,
+  };
+}
+
 function logOn() {
   if (!STEAM_BRIDGE_USERNAME || !STEAM_BRIDGE_PASSWORD) {
     console.error("[bridge] Missing STEAM_BRIDGE_USERNAME/STEAM_BRIDGE_PASSWORD");
@@ -253,37 +305,16 @@ app.get("/presence/:steamid", (req, res) => {
   const sid = req.params.steamid;
   const data = presence.get(sid);
   if (!data) return res.status(404).json({ error: "not_found" });
-  const rp = data.rich_presence || {};
-  const rpRaw = data.rich_presence_raw || [];
-  const lobbyRaw =
-    rp.lobby ||
-    (Array.isArray(rpRaw)
-      ? rpRaw.find((e) => (e.key || "").toLowerCase() === "lobby")?.value || ""
-      : "");
-  const lobbyLower = String(lobbyRaw || "").toLowerCase();
-  const lobbyStateHit = /lobby_state:\s*(run|serversetup)/.test(lobbyLower);
-  const statusLower = String(rp.status || "").toLowerCase();
-  const displayLower = String(rp.steam_display || "").toLowerCase();
-  const statusKeywords = ["private_lobby", "finding_match", "playing", "match", "ranked", "turbo"];
-  const statusHit = statusKeywords.some(
-    (kw) => statusLower.includes(kw) || displayLower.includes(kw)
-  );
-  const in_match = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
-  const in_game = !!(data.in_game || data.appid || lobbyRaw || statusHit);
-  const heroToken = extractHeroToken(rp, rpRaw);
-  const heroName = toHeroDisplay(heroToken);
-  const heroLevel = extractHeroLevel(rp, rpRaw);
-  const matchSeconds = extractMatchSeconds(rp, rpRaw);
-  const matchTime = formatMatchTime(matchSeconds);
+  const derived = derivePresence(data);
   res.json({
-    in_game,
-    in_match,
-    lobby_info: lobbyRaw || "",
-    hero_token: heroToken || null,
-    hero_name: heroName || null,
-    hero_level: heroLevel ?? null,
-    match_seconds: matchSeconds ?? null,
-    match_time: matchTime ?? null,
+    in_game: derived.inGame,
+    in_match: derived.inMatch,
+    lobby_info: derived.lobbyRaw || "",
+    hero_token: derived.heroToken || null,
+    hero_name: derived.heroName || null,
+    hero_level: derived.heroLevel ?? null,
+    match_seconds: derived.matchSeconds ?? null,
+    match_time: derived.matchTime ?? null,
   });
 });
 
@@ -295,22 +326,16 @@ app.get("/presencefull/:steamid", (req, res) => {
   const data = presence.get(sid);
   if (!data) return res.status(404).json({ error: "not_found" });
 
-  const rp = data.rich_presence || {};
-  const rpRaw = data.rich_presence_raw || [];
-  const heroToken = extractHeroToken(rp, rpRaw);
-  const heroName = toHeroDisplay(heroToken);
-  const heroLevel = extractHeroLevel(rp, rpRaw);
-  const matchSeconds = extractMatchSeconds(rp, rpRaw);
-  const matchTime = formatMatchTime(matchSeconds);
+  const derived = derivePresence(data);
 
   res.json({
     ...data,
     derived: {
-      hero_token: heroToken || null,
-      hero_name: heroName || null,
-      hero_level: heroLevel ?? null,
-      match_seconds: matchSeconds ?? null,
-      match_time: matchTime ?? null,
+      hero_token: derived.heroToken || null,
+      hero_name: derived.heroName || null,
+      hero_level: derived.heroLevel ?? null,
+      match_seconds: derived.matchSeconds ?? null,
+      match_time: derived.matchTime ?? null,
     },
   });
 });
