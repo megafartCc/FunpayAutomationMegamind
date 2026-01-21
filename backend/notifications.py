@@ -33,6 +33,16 @@ def _get_conn():
     return conn
 
 
+def close_pool() -> None:
+    global _POOL
+    if _POOL is None:
+        return
+    try:
+        _POOL = None
+    except Exception as exc:
+        logger.warning(f"Failed to close notifications pool: {exc}")
+
+
 def _ensure_table(conn) -> None:
     cursor = conn.cursor()
     cursor.execute(

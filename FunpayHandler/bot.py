@@ -20,7 +20,6 @@ from DatabaseHandler.databaseSetup import MySQLDB
 from backend.logger import logger
 from backend.notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
-from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
 
@@ -48,6 +47,9 @@ class PendingLotExtend:
 
 
 class FunpayBot:
+    _expiration_thread_started = False
+    _expiration_thread_lock = threading.Lock()
+
     def __init__(
         self,
         token: Optional[str] = None,
@@ -139,9 +141,12 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = time.time()
 
-        thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
-        thread.start()
-        logger.info("Rental expiration checker started.")
+        with self._expiration_thread_lock:
+            if not self._expiration_thread_started:
+                thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
+                thread.start()
+                self._expiration_thread_started = True
+                logger.info("Rental expiration checker started.")
 
         if self._runner is None:
             raise RuntimeError("Runner not initialized")
@@ -814,7 +819,7 @@ class FunpayBot:
             current_time = datetime.now(tz=MOSCOW_TZ)
             cursor.execute(
                 """
-                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
+                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mafile_json, a.password, a.login, a.account_name
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
@@ -829,7 +834,6 @@ class FunpayBot:
                     start_time,
                     duration,
                     duration_minutes,
-                    mafile_path,
                     mafile_json,
                     password,
                     login,
@@ -878,7 +882,6 @@ class FunpayBot:
                         invalid_accs=invalid_accs,
                         owner=owner,
                         account_id=account_id,
-                        mafile_path=mafile_path,
                         mafile_json=mafile_json,
                         password=password,
                         steam_login=steam_login,
@@ -1023,7 +1026,6 @@ class FunpayBot:
         invalid_accs: list[int],
         owner: str,
         account_id: int,
-        mafile_path: str,
         mafile_json: str,
         password: str,
         steam_login: str,
@@ -1045,30 +1047,21 @@ class FunpayBot:
                     )
                 except Exception as exc:
                     logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
-
-            new_password = asyncio.run(
-                changeSteamPassword(
-                    path_to_maFile=mafile_path,
-                    password=password,
-                    mafile_json=mafile_json,
-                )
-            )
             send_message_to_admin(
                 "RENTAL EXPIRED\n\n"
                 f"Account ID: {account_id}\n"
                 f"Owner: {owner}\n"
                 f"Deauthorize: {'ok' if deauth_ok else 'failed'}\n"
-                f"New password: {new_password}\n"
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
             cursor.execute(
                 """
                 UPDATE accounts
-                SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
+                SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
                 WHERE ID = ?
                 """,
-                (new_password, account_id),
+                (account_id,),
             )
             conn.commit()
 
@@ -1077,7 +1070,7 @@ class FunpayBot:
                     owner,
                     "Срок аренды истёк.\n\n"
                     f"ID аккаунта: {account_id}\n"
-                    "Доступ закрыт, пароль изменён.\n"
+                    "Доступ закрыт.\n"
                     "Если нужна помощь или продление — напишите в чат.",
                 )
             except Exception as exc:
@@ -1089,7 +1082,7 @@ class FunpayBot:
                     "RENTAL EXPIRED (PARTIAL)\n\n"
                     f"Account ID: {account_id}\n"
                     f"Owner: {owner}\n"
-                    "Result: password rotation failed; owner cleared anyway\n"
+                    "Result: deauthorization failed; owner cleared anyway\n"
                     f"Error: {exc}\n",
                 )
             except Exception:
