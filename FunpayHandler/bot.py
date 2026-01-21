@@ -66,6 +66,8 @@ class FunpayBot:
         self._last_refresh_ts = 0.0
         self._expire_delay_since: dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
+        self._expire_warning_sent: dict[int, set[int]] = {}
+        self._expire_warning_start: dict[int, str] = {}
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -606,7 +608,10 @@ class FunpayBot:
                 acc.send_message(chat_id, USER.bonus_already_given)
                 return
             if owner not in self._bonus_eligible:
-                acc.send_message(chat_id, USER.bonus_unavailable)
+                acc.send_message(
+                    chat_id,
+                    f"Оставьте отзыв и напишите !bonus, чтобы добавить +{HOURS_FOR_REVIEW} ч к вашей аренде как бонус.",
+                )
                 return
 
             accounts = self._db.get_user_active_accounts(owner)
@@ -891,10 +896,18 @@ class FunpayBot:
 
                 time_remaining = expiry_time - current_time
                 minutes_remaining = time_remaining.total_seconds() / 60
-                hours_remaining = minutes_remaining / 60
+                start_key = f"{start_datetime.isoformat()}|{total_minutes}"
+                if self._expire_warning_start.get(account_id) != start_key:
+                    self._expire_warning_start[account_id] = start_key
+                    self._expire_warning_sent.pop(account_id, None)
 
-                if 6 <= minutes_remaining <= 12:
-                    self._send_expiration_warning(owner, account_id, hours_remaining, expiry_time)
+                sent = self._expire_warning_sent.setdefault(account_id, set())
+                if 5 < minutes_remaining <= 10 and 10 not in sent:
+                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
+                    sent.add(10)
+                if 0 < minutes_remaining <= 5 and 5 not in sent:
+                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 5)
+                    sent.add(5)
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
                     steam_login = login or account_name
@@ -1013,20 +1026,29 @@ class FunpayBot:
         except Exception:
             return False
 
-    def _send_expiration_warning(self, owner: str, account_id: int, hours_remaining: float, expiry_time: datetime) -> None:
+    def _send_expiration_warning(
+        self,
+        owner: str,
+        account_id: int,
+        minutes_remaining: float,
+        expiry_time: datetime,
+        reminder_minutes: int,
+    ) -> None:
         try:
+            remaining_minutes = max(int(minutes_remaining), 0)
             send_message_to_admin(
                 "EXPIRATION WARNING!\n\n"
                 f"Account ID: {account_id}\n"
                 f"Owner: {owner}\n"
-                f"Time left: {hours_remaining:.1f} hours (~{int(hours_remaining * 60)} minutes)\n"
+                f"Time left: ~{remaining_minutes} minutes\n"
+                f"Reminder: {reminder_minutes} minutes\n"
                 "Tip: user will lose access soon!",
             )
             self.send_message_by_owner(
                 owner,
-                "Внимание! Ваша аренда скоро закончится (~10 минут).\n\n"
+                f"Внимание! Ваша аренда скоро закончится (~{reminder_minutes} минут).\n\n"
                 f"ID аккаунта: {account_id}\n"
-                f"Осталось: ~{int(hours_remaining * 60)} мин\n"
+                f"Осталось: ~{remaining_minutes} мин\n"
                 "Если нужно продление — напишите в чат на FunPay.\n\n"
                 "Команды:\n"
                 "!акк — данные аккаунта\n"
@@ -1050,6 +1072,8 @@ class FunpayBot:
         expiry_time: datetime,
     ) -> None:
         logger.info(f"Account {account_id} rental expired.")
+        self._expire_warning_sent.pop(account_id, None)
+        self._expire_warning_start.pop(account_id, None)
         try:
             deauth_ok = False
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
