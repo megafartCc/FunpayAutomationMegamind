@@ -163,6 +163,9 @@ class FunpayBot:
             logger.error("FunPay session not initialized; cannot send message.")
             return
         chat = self._acc.get_chat_by_name(owner, True)
+        if not chat or not getattr(chat, "id", None):
+            logger.warning(f"FunPay chat not found for {owner}; cannot send message.")
+            return
         self._acc.send_message(chat.id, message)
 
     def _tick_refresh_if_needed(self) -> None:

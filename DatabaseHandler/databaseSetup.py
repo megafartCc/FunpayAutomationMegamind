@@ -70,7 +70,7 @@ class MySQLDB:
                 autocommit=True,
                 use_pure=True,
             )
-            return _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
+            return _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
         return self.conn.cursor()
 
     def open_connection(self):
@@ -86,7 +86,7 @@ class MySQLDB:
                 autocommit=True,
                 use_pure=True,
             )
-            return conn, _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
+            return conn, _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
         raise RuntimeError("SQLite is not supported. Configure MySQL instead.")
 
     def create_table(self):
