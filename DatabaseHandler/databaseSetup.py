@@ -814,16 +814,28 @@ class SQLiteDB:
             for row in rows
         ]
 
-    def get_all_lot_accounts(self) -> list:
+    def get_all_lot_accounts(self, user_id: int | None = None) -> list:
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            ORDER BY l.lot_number
-            """
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                ORDER BY l.lot_number
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.user_id = ?
+                ORDER BY l.lot_number
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
             cursor.close()
