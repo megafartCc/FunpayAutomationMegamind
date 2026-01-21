@@ -445,7 +445,7 @@ class SQLiteDB:
         """
         try:
             cursor = self._cursor()
-            rental_start = (datetime.utcnow() + timedelta(hours=3, minutes=10)).strftime(
+            rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
             # Update owner and set rental start time

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class UserMessages:
-    extend_usage: str = "Использование: !extend <часы> <номер_лота>"
+    extend_usage: str = "Использование: !продлить <часы> <номер_лота>"
     extend_hours_positive: str = "Количество часов должно быть больше 0."
     active_rentals_empty: str = "Активных аренд нет."
     choose_account_prompt: str = "У вас несколько активных аренд. Напишите ID или логин аккаунта:"

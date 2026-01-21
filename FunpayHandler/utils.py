@@ -82,6 +82,9 @@ def get_remaining_time(account: dict, current_time: datetime):
     remaining = expiry_time - current_time
     if remaining.total_seconds() < 0:
         remaining = timedelta(0)
+    max_remaining = timedelta(minutes=duration_minutes)
+    if remaining > max_remaining:
+        remaining = max_remaining
 
     hours = int(remaining.total_seconds() // 3600)
     minutes = int((remaining.total_seconds() % 3600) // 60)

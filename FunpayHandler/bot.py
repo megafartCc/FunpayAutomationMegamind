@@ -358,7 +358,7 @@ class FunpayBot:
                 f"Логин: {rental['login']}\n"
                 f"Пароль: {rental['password']}\n"
                 f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                "Команды: !acc, !code",
+                "Команды: !акк, !код",
             )
 
         send_message_to_admin(
@@ -414,9 +414,9 @@ class FunpayBot:
             f"Пароль: {account['password']}\n"
             f"Аренда: {hours} ч\n\n"
             "Команды:\n"
-            "!acc — данные аккаунта\n"
-            "!code — код Steam Guard\n"
-            "!stock — наличие\n\n"
+            "!акк — данные аккаунта\n"
+            "!код — код Steam Guard\n"
+            "!сток — наличие\n\n"
             "Если нужна помощь — напишите в чат.",
         )
 
@@ -439,11 +439,11 @@ class FunpayBot:
             if self._try_handle_pending_choice(acc, chat.id, event.message.author, raw_text):
                 return
 
-        if message_text == "!code":
+        if message_text in ("!code", "!код"):
             self._handle_code(acc, chat.id, event.message.author)
             return
 
-        if message_text == "!acc":
+        if message_text in ("!acc", "!акк"):
             self._handle_acc(acc, chat.id, event.message.author)
             return
 
@@ -451,12 +451,16 @@ class FunpayBot:
             self._handle_bonus(acc, chat.id, event.message.author)
             return
 
-        if message_text.startswith("!extend"):
+        if message_text.startswith("!extend") or message_text.startswith("!продлить"):
             self._handle_extend(acc, chat.id, event.message.author, raw_text)
             return
 
-        if message_text == "!stock":
+        if message_text in ("!stock", "!сток"):
             self._handle_stock(acc, chat.id)
+            return
+
+        if message_text.startswith("!отмена"):
+            self._handle_cancel(acc, chat.id, event.message.author, raw_text)
             return
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
@@ -576,7 +580,7 @@ class FunpayBot:
                 current_time = datetime.now(tz=MOSCOW_TZ)
                 lines = [
                     "Чтобы продлить аренду, оплатите нужный лот и укажите количество часов.",
-                    "Команда: !extend <часы> <номер_лота>",
+                    "Команда: !продлить <часы> <номер_лота>",
                     "",
                     "Ваши активные аренды:",
                 ]
@@ -597,7 +601,7 @@ class FunpayBot:
                 return
 
             if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
-                acc.send_message(chat_id, "Использование: !extend <часы> <номер_лота>")
+                acc.send_message(chat_id, "Использование: !продлить <часы> <номер_лота>")
                 return
 
             hours = int(parts[1])
@@ -667,6 +671,62 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to load stock: {exc}")
             acc.send_message(chat_id, USER.stock_failed)
+
+    def _handle_cancel(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
+        try:
+            accounts = self._db.get_user_active_accounts(owner)
+            if not accounts:
+                acc.send_message(chat_id, USER.active_rentals_empty)
+                return
+
+            parts = raw_text.split()
+            if len(parts) < 2:
+                lines = [
+                    "Выберите аренду для отмены.",
+                    "Команда: !отмена <ID>",
+                    "",
+                    "Активные аренды:",
+                ]
+                current_time = datetime.now(tz=MOSCOW_TZ)
+                for account in accounts:
+                    _, _, remaining_str = get_remaining_time(account, current_time)
+                    lines.append(f"ID {account['id']}: {account['account_name']} — осталось {remaining_str}")
+                acc.send_message(chat_id, "\n".join(lines))
+                return
+
+            if not parts[1].isdigit():
+                acc.send_message(chat_id, "Использование: !отмена <ID>")
+                return
+
+            account_id = int(parts[1])
+            account = next((item for item in accounts if item["id"] == account_id), None)
+            if not account:
+                acc.send_message(chat_id, "Аккаунт с таким ID не найден в ваших активных арендах.")
+                return
+
+            acc.send_message(chat_id, "Отмена аренды... Это может занять некоторое время.")
+            conn, cursor = self._db.open_connection()
+            try:
+                self._expire_rental(
+                    cursor,
+                    conn,
+                    [],
+                    owner,
+                    account_id,
+                    account.get("path_to_maFile") or "",
+                    account.get("mafile_json") or "",
+                    account.get("password") or "",
+                    account.get("login") or account.get("account_name") or "",
+                    datetime.now(tz=MOSCOW_TZ),
+                )
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error(f"Failed to cancel rental for {owner}: {exc}")
+            acc.send_message(chat_id, USER.extend_failed)
 
     def _find_next_expiry(self, all_lots: list[dict]) -> datetime | None:
         current_time = datetime.now(tz=MOSCOW_TZ)
@@ -906,8 +966,8 @@ class FunpayBot:
                 f"Осталось: ~{int(hours_remaining * 60)} мин\n"
                 "Если нужно продление — напишите в чат на FunPay.\n\n"
                 "Команды:\n"
-                "!acc — данные аккаунта\n"
-                "!code — код Steam Guard\n\n"
+                "!акк — данные аккаунта\n"
+                "!код — код Steam Guard\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
         except Exception as exc:
