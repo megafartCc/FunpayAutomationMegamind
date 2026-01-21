@@ -847,7 +847,7 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
-
+            
         current_time = datetime.now(tz=MOSCOW_TZ)
         for row in accounts_data:
             (
@@ -1059,7 +1059,7 @@ class FunpayBot:
         password: str,
         steam_login: str,
         expiry_time: datetime,
-    ) -> None:
+    ) -> bool:
         logger.info(f"Account {account_id} rental expired.")
         self._expire_warning_sent.pop(account_id, None)
         self._expire_warning_start.pop(account_id, None)
@@ -1096,6 +1096,7 @@ class FunpayBot:
                 )
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
+            return True
         except Exception as exc:
             logger.error(f"Failed to expire account {account_id}: {exc}")
             try:
