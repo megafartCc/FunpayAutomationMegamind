@@ -240,14 +240,54 @@ const renderHealth = (status) => {
 
 const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
-const presenceLabel = (item) => {
-  if (item?.presence_label) return item.presence_label;
-  if (item?.in_match) {
-    const extras = [];
-    if (item?.hero_name) extras.push(item.hero_name);
-    if (item?.match_time) extras.push(item.match_time);
-    return extras.length ? `В матче(${extras.join(")(")})` : "В матче";
+const parseMatchTimeSeconds = (value) => {
+  if (!value) return null;
+  const parts = String(value).trim().split(":").map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) return null;
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts;
+    if (minutes < 0 || seconds < 0 || seconds >= 60) return null;
+    return Math.floor(minutes * 60 + seconds);
   }
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    if (hours < 0 || minutes < 0 || minutes >= 60 || seconds < 0 || seconds >= 60) return null;
+    return Math.floor(hours * 3600 + minutes * 60 + seconds);
+  }
+  return null;
+};
+
+const formatMatchTimeSeconds = (seconds) => {
+  if (!Number.isFinite(seconds)) return null;
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+};
+
+const buildMatchLabel = (heroName, matchSeconds, matchTime) => {
+  const extras = [];
+  if (heroName) extras.push(heroName);
+  const display = Number.isFinite(matchSeconds)
+    ? formatMatchTimeSeconds(matchSeconds)
+    : matchTime;
+  if (display) extras.push(display);
+  return extras.length ? `В матче(${extras.join(")(")})` : "В матче";
+};
+
+const presenceLabel = (item) => {
+  if (item?.in_match) {
+    const rawSeconds = Number(item?.match_seconds);
+    const matchSeconds = Number.isFinite(rawSeconds)
+      ? Math.floor(rawSeconds)
+      : parseMatchTimeSeconds(item?.match_time);
+    return buildMatchLabel(item?.hero_name, matchSeconds, item?.match_time || null);
+  }
+  if (item?.presence_label) return item.presence_label;
   if (item?.in_game) return "В игре";
   return "Оффлайн";
 };
@@ -290,6 +330,45 @@ const ensureActiveRentalsHeader = () => {
   row.insertBefore(th, insertBefore);
 };
 
+let presenceTicker = null;
+
+const updatePresenceTick = () => {
+  if (document.hidden) return;
+  const cells = document.querySelectorAll(".presence-cell");
+  if (!cells.length) return;
+  const now = Date.now();
+  let hasLive = false;
+  cells.forEach((cell) => {
+    const inMatch = cell.dataset.inMatch === "1";
+    if (!inMatch) return;
+    const baseSeconds = Number.parseInt(cell.dataset.matchSeconds || "", 10);
+    const baseAt = Number.parseInt(cell.dataset.matchAt || "", 10);
+    if (!Number.isFinite(baseSeconds) || !Number.isFinite(baseAt)) return;
+    hasLive = true;
+    const matchSeconds = baseSeconds + Math.floor((now - baseAt) / 1000);
+    const label = buildMatchLabel(cell.dataset.heroName || "", matchSeconds, null);
+    const anchor = cell.querySelector("a");
+    if (anchor) {
+      if (anchor.textContent !== label) anchor.textContent = label;
+    } else if (cell.textContent !== label) {
+      cell.textContent = label;
+    }
+  });
+  if (!hasLive && presenceTicker) {
+    clearInterval(presenceTicker);
+    presenceTicker = null;
+  }
+};
+
+const ensurePresenceTicker = () => {
+  if (presenceTicker) return;
+  const hasMatchCells = document.querySelector(
+    ".presence-cell[data-in-match=\"1\"][data-match-seconds]"
+  );
+  if (!hasMatchCells) return;
+  presenceTicker = setInterval(updatePresenceTick, 1000);
+};
+
 const renderActiveRentals = (items) => {
   ensureActiveRentalsHeader();
   ensureActiveStatusHeader?.();
@@ -297,6 +376,7 @@ const renderActiveRentals = (items) => {
     ui.activeTable.innerHTML = "<tr><td colspan=\"9\">Нет активных аренд.</td></tr>";
     return;
   }
+  const now = Date.now();
   ui.activeTable.innerHTML = items
     .map(
       (item) => `
@@ -309,11 +389,21 @@ const renderActiveRentals = (items) => {
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, getDurationMinutes(item))}</td>
           <td>${formatDuration(item)}</td>
-          <td>${presenceLink(item)}</td>
+          <td class="presence-cell"
+              data-steamid="${escapeHtml(String(item.steamid || ""))}"
+              data-in-match="${item.in_match ? "1" : ""}"
+              data-in-game="${item.in_game ? "1" : ""}"
+              data-hero-name="${escapeHtml(item.hero_name || "")}"
+              data-match-seconds="${Number.isFinite(Number(item.match_seconds)) ? Math.floor(Number(item.match_seconds)) : ""}"
+              data-match-at="${Number.isFinite(Number(item.match_seconds)) ? now : ""}">
+            ${presenceLink(item)}
+          </td>
         </tr>
       `
     )
     .join("");
+  ensurePresenceTicker();
+  updatePresenceTick();
 };
 
 const renderInventory = (items) => {
