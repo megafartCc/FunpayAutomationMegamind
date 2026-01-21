@@ -16,6 +16,7 @@ const client = new SteamUser();
 const presence = new Map();
 const matchStart = new Map();
 let loggedOn = false;
+const MATCH_GRACE_MS = 5 * 60 * 1000;
 
 client.on("loggedOn", () => {
   loggedOn = true;
@@ -223,12 +224,53 @@ function formatMatchTime(seconds) {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
-function updateMatchStart(id64, inMatch) {
+function extractMatchId(rp, rpRaw) {
+  const keys = [
+    "watchablegameid",
+    "watchable_game_id",
+    "watchable_match_id",
+    "watchablematchid",
+    "matchid",
+    "match_id",
+  ];
+  for (const key of keys) {
+    const raw = getRichPresenceValue(rp, rpRaw, key);
+    if (raw === null || raw === undefined) continue;
+    const value = String(raw).trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+function updateMatchStart(id64, inMatch, matchId) {
+  const now = Date.now();
+  const entry = matchStart.get(id64);
+
   if (inMatch) {
-    if (!matchStart.has(id64)) {
-      matchStart.set(id64, Date.now());
+    if (!entry) {
+      matchStart.set(id64, {
+        startedAt: now,
+        matchId: matchId || null,
+        lastSeenAt: now,
+        graceUntil: null,
+      });
+      return;
     }
-  } else {
+    if (matchId && entry.matchId && matchId !== entry.matchId) {
+      entry.startedAt = now;
+    } else if (matchId && !entry.matchId) {
+      entry.matchId = matchId;
+    }
+    entry.lastSeenAt = now;
+    entry.graceUntil = null;
+    return;
+  }
+
+  if (!entry) return;
+  if (!entry.graceUntil) {
+    entry.graceUntil = now + MATCH_GRACE_MS;
+  }
+  if (entry.graceUntil <= now) {
     matchStart.delete(id64);
   }
 }
@@ -251,7 +293,8 @@ function derivePresence(data) {
   );
   const inMatch = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
   const inGame = !!(data.in_game || data.appid || lobbyRaw || statusHit);
-  updateMatchStart(data.steamid64, inMatch);
+  const matchId = extractMatchId(rp, rpRaw);
+  updateMatchStart(data.steamid64, inMatch, matchId);
 
   const heroToken = extractHeroToken(rp, rpRaw);
   const heroName = toHeroDisplay(heroToken);
@@ -259,9 +302,9 @@ function derivePresence(data) {
 
   let matchSeconds = extractMatchSeconds(rp, rpRaw);
   if (matchSeconds === null && inMatch) {
-    const startedAt = matchStart.get(data.steamid64);
-    if (startedAt) {
-      matchSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const entry = matchStart.get(data.steamid64);
+    if (entry?.startedAt) {
+      matchSeconds = Math.max(0, Math.floor((Date.now() - entry.startedAt) / 1000));
     }
   }
   const matchTime = formatMatchTime(matchSeconds);
