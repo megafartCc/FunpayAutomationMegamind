@@ -29,6 +29,7 @@
     password: document.getElementById("managePassword"),
     maFileJson: document.getElementById("manageMaFileJson"),
     duration: document.getElementById("manageDuration"),
+    durationMinutes: document.getElementById("manageDurationMinutes"),
     owner: document.getElementById("manageOwner"),
     start: document.getElementById("manageStart"),
     update: document.getElementById("updateAccount"),
@@ -39,8 +40,10 @@
     steamChangePassword: document.getElementById("steamChangePassword"),
     extend: document.getElementById("extendAccount"),
     extendHours: document.getElementById("extendHours"),
+    extendMinutes: document.getElementById("extendMinutes"),
     extendOwner: document.getElementById("extendOwner"),
     extendOwnerHours: document.getElementById("extendOwnerHours"),
+    extendOwnerMinutes: document.getElementById("extendOwnerMinutes"),
     delete: document.getElementById("deleteAccount"),
   },
   addForm: document.getElementById("addAccountForm"),
@@ -155,13 +158,34 @@ const formatDate = (value) => {
   return parsed.toLocaleString();
 };
 
-const formatRentalEnd = (start, duration) => {
-  if (!start || !duration) return "-";
+const getDurationMinutes = (item) => {
+  if (!item) return 0;
+  const minutes = Number(item.rental_duration_minutes);
+  if (Number.isFinite(minutes) && minutes > 0) {
+    return minutes;
+  }
+  const hours = Number(item.rental_duration || 0);
+  if (!Number.isFinite(hours)) return 0;
+  return hours * 60;
+};
+
+const formatDuration = (item) => {
+  const totalMinutes = getDurationMinutes(item);
+  if (!totalMinutes) return "-";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours && minutes) return `${hours}h ${minutes}m`;
+  if (hours) return `${hours}h`;
+  return `${minutes}m`;
+};
+
+const formatRentalEnd = (start, durationMinutes) => {
+  if (!start || !durationMinutes) return "-";
   const parsed = new Date(start.replace(" ", "T"));
   if (Number.isNaN(parsed.getTime())) {
     return "-";
   }
-  parsed.setHours(parsed.getHours() + Number(duration));
+  parsed.setMinutes(parsed.getMinutes() + Number(durationMinutes));
   return parsed.toLocaleString();
 };
 
@@ -183,6 +207,7 @@ const setManagePanel = (account) => {
     ui.manage.password.value = "";
     ui.manage.maFileJson.value = "";
     ui.manage.duration.value = "";
+    ui.manage.durationMinutes.value = "";
     ui.manage.owner.value = "";
     ui.manage.start.value = "";
     return;
@@ -193,7 +218,9 @@ const setManagePanel = (account) => {
   ui.manage.login.value = account.login || "";
   ui.manage.password.value = account.password || "";
   ui.manage.maFileJson.value = "";
-  ui.manage.duration.value = account.rental_duration || "";
+  const totalMinutes = getDurationMinutes(account);
+  ui.manage.duration.value = Number.isFinite(totalMinutes) ? Math.floor(totalMinutes / 60) : "";
+  ui.manage.durationMinutes.value = Number.isFinite(totalMinutes) ? totalMinutes % 60 : "";
   ui.manage.owner.value = account.owner || "";
   ui.manage.start.value = formatDate(account.rental_start);
 };
@@ -278,8 +305,8 @@ const renderActiveRentals = (items) => {
           <td>${item.chat_url ? `<a href="${item.chat_url}" target="_blank" rel="noreferrer">${escapeHtml(item.chat_url)}</a>` : "-"}</td>
           <td>${item.login}</td>
           <td>${formatDate(item.rental_start)}</td>
-          <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
-          <td>${item.rental_duration}</td>
+          <td>${formatRentalEnd(item.rental_start, getDurationMinutes(item))}</td>
+          <td>${formatDuration(item)}</td>
           <td>${presenceLink(item)}</td>
         </tr>
       `
@@ -311,7 +338,7 @@ const renderInventory = (items) => {
           <td>${item.login}</td>
           <td>${showPasswords ? item.password : "******"}</td>
           <td>${item.owner || "-"}</td>
-          <td>${item.rental_duration}</td>
+          <td>${formatDuration(item)}</td>
           <td>${item.steamid || "-"}</td>
         </tr>
       `
@@ -615,15 +642,31 @@ ui.manage.update.addEventListener("click", async () => {
     toast("Select an account first.", true);
     return;
   }
-  const duration = Number(ui.manage.duration.value);
+  const durationHoursValue = ui.manage.duration.value.trim();
+  const durationMinutesValue = ui.manage.durationMinutes.value.trim();
   const payload = {
     account_name: ui.manage.name.value.trim(),
     login: ui.manage.login.value.trim(),
     password: ui.manage.password.value.trim(),
     mafile_json: ui.manage.maFileJson.value.trim(),
   };
-  if (Number.isFinite(duration) && duration > 0) {
-    payload.rental_duration = duration;
+  if (durationHoursValue !== "" || durationMinutesValue !== "") {
+    const hours = Number(durationHoursValue || 0);
+    const minutes = Number(durationMinutesValue || 0);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+      toast("Duration must be a number.", true);
+      return;
+    }
+    if (hours < 0 || minutes < 0 || minutes > 59) {
+      toast("Minutes must be between 0 and 59.", true);
+      return;
+    }
+    if (hours === 0 && minutes === 0) {
+      toast("Duration must be greater than 0.", true);
+      return;
+    }
+    payload.rental_duration = hours;
+    payload.rental_minutes = minutes;
   }
   if (!payload.mafile_json) {
     delete payload.mafile_json;
@@ -717,18 +760,34 @@ ui.manage.extendOwner.addEventListener("click", async () => {
     toast("Owner is required.", true);
     return;
   }
-  const hours = Number(ui.manage.extendOwnerHours.value || 0);
-  if (hours <= 0) {
-    toast("Enter hours to extend.", true);
+  const hoursValue = ui.manage.extendOwnerHours.value.trim();
+  const minutesValue = ui.manage.extendOwnerMinutes.value.trim();
+  if (hoursValue === "" && minutesValue === "") {
+    toast("Enter hours or minutes to extend.", true);
+    return;
+  }
+  const hours = Number(hoursValue || 0);
+  const minutes = Number(minutesValue || 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    toast("Extension must be numeric.", true);
+    return;
+  }
+  if (hours < 0 || minutes < 0 || minutes > 59) {
+    toast("Minutes must be between 0 and 59.", true);
+    return;
+  }
+  if (hours === 0 && minutes === 0) {
+    toast("Enter hours or minutes to extend.", true);
     return;
   }
   try {
     await apiFetch(`/api/rentals/user/${encodeURIComponent(owner)}/extend`, {
       method: "POST",
-      body: JSON.stringify({ hours }),
+      body: JSON.stringify({ hours, minutes }),
     });
     toast("Owner rentals extended.");
     ui.manage.extendOwnerHours.value = "";
+    ui.manage.extendOwnerMinutes.value = "";
     loadAll();
   } catch (error) {
     toast(error.message || "Extend owner failed", true);
@@ -756,18 +815,34 @@ ui.manage.extend.addEventListener("click", async () => {
     toast("Select an account first.", true);
     return;
   }
-  const hours = Number(ui.manage.extendHours.value || 0);
-  if (hours <= 0) {
-    toast("Enter hours to extend.", true);
+  const hoursValue = ui.manage.extendHours.value.trim();
+  const minutesValue = ui.manage.extendMinutes.value.trim();
+  if (hoursValue === "" && minutesValue === "") {
+    toast("Enter hours or minutes to extend.", true);
+    return;
+  }
+  const hours = Number(hoursValue || 0);
+  const minutes = Number(minutesValue || 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    toast("Extension must be numeric.", true);
+    return;
+  }
+  if (hours < 0 || minutes < 0 || minutes > 59) {
+    toast("Minutes must be between 0 and 59.", true);
+    return;
+  }
+  if (hours === 0 && minutes === 0) {
+    toast("Enter hours or minutes to extend.", true);
     return;
   }
   try {
     await apiFetch(`/api/accounts/${selectedId}/extend`, {
       method: "POST",
-      body: JSON.stringify({ hours }),
+      body: JSON.stringify({ hours, minutes }),
     });
     toast("Rental extended.");
     ui.manage.extendHours.value = "";
+    ui.manage.extendMinutes.value = "";
     loadAll();
   } catch (error) {
     toast(error.message || "Extend failed", true);

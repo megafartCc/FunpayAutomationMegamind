@@ -3,7 +3,7 @@ from pathlib import Path
 from threading import Thread
 from threading import Lock
 from typing import Optional
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -95,24 +95,10 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
         return None
 
 
-def _normalize_bridge_base(url: str | None) -> str:
-    if not url:
-        return ""
-    cleaned = url.strip().rstrip("/")
-    if not cleaned:
-        return ""
-    parts = urlsplit(cleaned)
-    path = parts.path or ""
-    if "/presence" in path:
-        path = path.split("/presence", 1)[0]
-    return urlunsplit((parts.scheme, parts.netloc, path.rstrip("/"), "", ""))
-
-
 def _fetch_bridge_presence(steamid64: int) -> dict:
-    base = _normalize_bridge_base(STEAM_BRIDGE_URL)
-    if not base:
+    if not STEAM_BRIDGE_URL:
         return {}
-    url = f"{base}/presence/{steamid64}"
+    url = f"{STEAM_BRIDGE_URL.rstrip('/')}/presence/{steamid64}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
@@ -161,7 +147,8 @@ class AccountCreate(BaseModel):
     mafile_json: str
     login: str
     password: str
-    rental_duration: int = Field(default=1, ge=1)
+    rental_duration: int = Field(default=1, ge=0)
+    rental_minutes: int = Field(default=0, ge=0, le=59)
     owner: Optional[str] = None
 
 
@@ -170,7 +157,8 @@ class AccountUpdate(BaseModel):
     mafile_json: Optional[str] = None
     login: Optional[str] = None
     password: Optional[str] = None
-    rental_duration: Optional[int] = Field(default=None, ge=1)
+    rental_duration: Optional[int] = Field(default=None, ge=0)
+    rental_minutes: Optional[int] = Field(default=None, ge=0, le=59)
 
 
 class AssignRequest(BaseModel):
@@ -178,7 +166,8 @@ class AssignRequest(BaseModel):
 
 
 class ExtendRequest(BaseModel):
-    hours: int = Field(ge=1)
+    hours: int = Field(default=0, ge=0)
+    minutes: int = Field(default=0, ge=0, le=59)
 
 
 class ChatMessage(BaseModel):
@@ -342,6 +331,9 @@ def account_detail(account_id: int, request: Request) -> dict:
 def create_account(payload: AccountCreate, request: Request) -> dict:
     if not payload.mafile_json.strip():
         raise HTTPException(status_code=400, detail="mafile_json is required")
+    total_minutes = payload.rental_duration * 60 + payload.rental_minutes
+    if total_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Rental duration must be greater than 0")
     uid = current_user_id(request)
     success = db.add_account(
         payload.account_name,
@@ -352,6 +344,7 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
         payload.owner,
         mafile_json=payload.mafile_json,
         user_id=uid,
+        duration_minutes=total_minutes,
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to create account")
@@ -361,7 +354,27 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
 @app.patch("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
 def update_account(account_id: int, payload: AccountUpdate, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.update_account(account_id, payload.dict(exclude_none=True), uid)
+    fields = payload.dict(exclude_none=True)
+    duration_hours = fields.pop("rental_duration", None)
+    duration_minutes = fields.pop("rental_minutes", None)
+    if duration_hours is not None or duration_minutes is not None:
+        if duration_hours is None or duration_minutes is None:
+            existing = db.get_account_by_id(account_id, uid)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Account not found")
+            if duration_hours is None:
+                duration_hours = int(existing.get("rental_duration") or 0)
+            if duration_minutes is None:
+                existing_minutes = existing.get("rental_duration_minutes")
+                if existing_minutes is None:
+                    existing_minutes = int(existing.get("rental_duration") or 0) * 60
+                duration_minutes = int(existing_minutes) % 60
+        total_minutes = int(duration_hours) * 60 + int(duration_minutes)
+        if total_minutes <= 0:
+            raise HTTPException(status_code=400, detail="Rental duration must be greater than 0")
+        fields["rental_duration"] = int(duration_hours)
+        fields["rental_duration_minutes"] = total_minutes
+    success = db.update_account(account_id, fields, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update account")
     return {"status": "ok"}
@@ -397,7 +410,10 @@ def release_account(account_id: int, request: Request) -> dict:
 @app.post("/api/accounts/{account_id}/extend", dependencies=[Depends(require_admin)])
 def extend_account(account_id: int, payload: ExtendRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.extend_rental_duration(account_id, payload.hours, uid)
+    total_minutes = payload.hours * 60 + payload.minutes
+    if total_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Extension must be greater than 0")
+    success = db.extend_rental_duration(account_id, payload.hours, payload.minutes, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rental")
     return {"status": "ok"}
@@ -520,7 +536,10 @@ def user_rentals(owner: str, request: Request) -> dict:
 @app.post("/api/rentals/user/{owner}/extend", dependencies=[Depends(require_admin)])
 def extend_owner(owner: str, payload: ExtendRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.add_time_to_owner_accounts(owner, payload.hours, uid)
+    total_minutes = payload.hours * 60 + payload.minutes
+    if total_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Extension must be greater than 0")
+    success = db.add_time_to_owner_accounts(owner, payload.hours, payload.minutes, uid)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rentals")
     return {"status": "ok"}

@@ -84,7 +84,7 @@
                   <th>Login</th>
                   <th>Start</th>
                   <th>Ends</th>
-                  <th>Duration (h)</th>
+                  <th>Duration</th>
                 </tr>
               </thead>
               <tbody id="activeRentals"></tbody>
@@ -113,7 +113,7 @@
                   <th>Login</th>
                   <th>Password</th>
                   <th>Owner</th>
-                  <th>Duration (h)</th>
+                  <th>Duration</th>
                   <th>SteamID</th>
                 </tr>
               </thead>
@@ -222,7 +222,11 @@
               </div>
               <div class="field">
                 <label>Duration (hours)</label>
-                <input id="manageDuration" type="number" min="1" />
+                <input id="manageDuration" type="number" min="0" />
+              </div>
+              <div class="field">
+                <label>Duration (minutes)</label>
+                <input id="manageDurationMinutes" type="number" min="0" max="59" />
               </div>
               <div class="field">
                 <label>Owner</label>
@@ -237,13 +241,15 @@
               <button class="btn" id="updateAccount">Update</button>
               <button class="btn" id="assignAccount">Assign owner</button>
               <div class="inline">
-                <input id="extendOwnerHours" type="number" min="1" placeholder="+hours for owner" />
+                <input id="extendOwnerHours" type="number" min="0" placeholder="+hours for owner" />
+                <input id="extendOwnerMinutes" type="number" min="0" max="59" placeholder="+minutes" />
                 <button class="btn ghost" id="extendOwner">Extend owner rentals</button>
               </div>
               <button class="btn ghost" id="releaseAccount">Release</button>
               <button class="btn ghost" id="steamDeauth">Steam: deauthorize sessions</button>
               <div class="inline">
-                <input id="extendHours" type="number" min="1" placeholder="+hours" />
+                <input id="extendHours" type="number" min="0" placeholder="+hours" />
+                <input id="extendMinutes" type="number" min="0" max="59" placeholder="+minutes" />
                 <button class="btn" id="extendAccount">Extend</button>
               </div>
               <div class="inline">

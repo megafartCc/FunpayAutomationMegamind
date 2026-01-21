@@ -112,6 +112,7 @@ class SQLiteDB:
                     login VARCHAR(255) NOT NULL,
                     password TEXT NOT NULL,
                     rental_duration INT NOT NULL,
+                    rental_duration_minutes INT NULL,
                     owner VARCHAR(255) DEFAULT NULL,
                     rental_start DATETIME DEFAULT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -159,6 +160,7 @@ class SQLiteDB:
                     login TEXT NOT NULL,
                     password TEXT NOT NULL,
                     rental_duration INTEGER NOT NULL,
+                    rental_duration_minutes INTEGER,
                     owner TEXT DEFAULT NULL,
                     rental_start TIMESTAMP DEFAULT NULL
                 )
@@ -198,6 +200,7 @@ class SQLiteDB:
         self.conn.commit()
         cursor.close()
         self._ensure_mafile_column()
+        self._ensure_rental_duration_minutes_column()
         self._ensure_lot_url_column()
         self._ensure_users_table()
         self._ensure_user_owner_columns()
@@ -221,6 +224,30 @@ class SQLiteDB:
                     self.conn.commit()
             else:
                 cursor.execute("ALTER TABLE accounts ADD COLUMN mafile_json TEXT")
+                self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_rental_duration_minutes_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'accounts' AND column_name = 'rental_duration_minutes'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE accounts ADD COLUMN rental_duration_minutes INT NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN rental_duration_minutes INTEGER")
                 self.conn.commit()
         except Exception:
             pass
@@ -329,6 +356,7 @@ class SQLiteDB:
         owner=None,
         mafile_json=None,
         user_id: int | None = None,
+        duration_minutes: int | None = None,
     ):
         """Add an account to the database."""
         cursor = None
@@ -342,15 +370,37 @@ class SQLiteDB:
             if not path_to_maFile and mafile_json:
                 path_to_maFile = ""
 
+            try:
+                duration_value = int(duration) if duration is not None else 0
+            except Exception:
+                duration_value = 0
+            if duration_minutes is None:
+                total_minutes = duration_value * 60
+            else:
+                try:
+                    total_minutes = int(duration_minutes)
+                except Exception:
+                    total_minutes = duration_value * 60
+
             cursor = self._cursor()
             cursor.execute(
                 """
                 INSERT INTO accounts (
-                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, owner, user_id
+                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, rental_duration_minutes, owner, user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (account_name, path_to_maFile, mafile_json, login, password, duration, owner, user_id),
+                (
+                    account_name,
+                    path_to_maFile,
+                    mafile_json,
+                    login,
+                    password,
+                    duration_value,
+                    total_minutes,
+                    owner,
+                    user_id,
+                ),
             )
             self.conn.commit()
             logger.info(f"Account '{account_name}' added successfully")
@@ -367,7 +417,7 @@ class SQLiteDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT ID, account_name, path_to_maFile, login, password, rental_duration
+            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes
             FROM accounts 
             WHERE owner IS NULL
             """
@@ -382,6 +432,7 @@ class SQLiteDB:
                 "login": row[3],
                 "password": row[4],
                 "rental_duration": row[5],
+                "rental_duration_minutes": row[6],
             }
             for row in rows
         ]
@@ -556,14 +607,14 @@ class SQLiteDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 """
             )
         else:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 WHERE user_id = ?
                 """,
@@ -579,10 +630,11 @@ class SQLiteDB:
                 "login": row[3],
                 "password": row[4],
                 "rental_duration": row[5],
-                "owner": row[6],
-                "rental_start": row[7],
-                "user_id": row[8] if len(row) > 8 else None,
-                "mafile_json": row[9] if len(row) > 9 else None,
+                "rental_duration_minutes": row[6],
+                "owner": row[7],
+                "rental_start": row[8],
+                "user_id": row[9] if len(row) > 9 else None,
+                "mafile_json": row[10] if len(row) > 10 else None,
             }
             for row in rows
         ]
@@ -688,7 +740,7 @@ class SQLiteDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.owner, a.rental_start, a.mafile_json
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.lot_number = ?
@@ -698,7 +750,7 @@ class SQLiteDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.owner, a.rental_start, a.mafile_json
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.owner, a.rental_start, a.mafile_json
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.lot_number = ? AND l.user_id = ?
@@ -716,9 +768,10 @@ class SQLiteDB:
             "login": row[2],
             "password": row[3],
             "rental_duration": row[4],
-            "owner": row[5],
-            "rental_start": row[6],
-            "mafile_json": row[7],
+            "rental_duration_minutes": row[5],
+            "owner": row[6],
+            "rental_start": row[7],
+            "mafile_json": row[8],
         }
 
     def get_available_lot_accounts(self, user_id: int | None = None) -> list:
@@ -726,7 +779,7 @@ class SQLiteDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE a.owner IS NULL
@@ -736,7 +789,7 @@ class SQLiteDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE a.owner IS NULL AND a.user_id = ?
@@ -754,8 +807,9 @@ class SQLiteDB:
                 "owner": row[2],
                 "rental_start": row[3],
                 "rental_duration": row[4],
-                "lot_number": row[5],
-                "lot_url": row[6],
+                "rental_duration_minutes": row[5],
+                "lot_number": row[6],
+                "lot_url": row[7],
             }
             for row in rows
         ]
@@ -764,7 +818,7 @@ class SQLiteDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, l.lot_number, l.lot_url
+            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
             FROM lots l
             JOIN accounts a ON a.ID = l.account_id
             ORDER BY l.lot_number
@@ -780,8 +834,9 @@ class SQLiteDB:
                 "owner": row[2],
                 "rental_start": row[3],
                 "rental_duration": row[4],
-                "lot_number": row[5],
-                "lot_url": row[6],
+                "rental_duration_minutes": row[5],
+                "lot_number": row[6],
+                "lot_url": row[7],
             }
             for row in rows
         ]
@@ -881,6 +936,7 @@ class SQLiteDB:
             "login",
             "password",
             "rental_duration",
+            "rental_duration_minutes",
         }
         updates = {key: value for key, value in fields.items() if key in allowed_fields}
         if not updates:
@@ -957,7 +1013,7 @@ class SQLiteDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start
                 FROM accounts 
                 WHERE account_name = ?
                 """,
@@ -974,8 +1030,9 @@ class SQLiteDB:
                     "login": row[3],
                     "password": row[4],
                     "rental_duration": row[5],
-                    "owner": row[6],
-                    "rental_start": row[7]
+                    "rental_duration_minutes": row[6],
+                    "owner": row[7],
+                    "rental_start": row[8]
                 }
             return None
         except Exception as e:
@@ -998,7 +1055,7 @@ class SQLiteDB:
                 cursor.execute(
                     """
                     SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, owner, rental_start, mafile_json
+                           rental_duration, rental_duration_minutes, owner, rental_start, mafile_json
                     FROM accounts 
                     WHERE ID = ?
                     """,
@@ -1008,7 +1065,7 @@ class SQLiteDB:
                 cursor.execute(
                     """
                     SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, owner, rental_start, mafile_json
+                           rental_duration, rental_duration_minutes, owner, rental_start, mafile_json
                     FROM accounts 
                     WHERE ID = ? AND user_id = ?
                     """,
@@ -1023,9 +1080,10 @@ class SQLiteDB:
                     "login": row[3],
                     "password": row[4],
                     "rental_duration": row[5],
-                    "owner": row[6],
-                    "rental_start": row[7],
-                    "mafile_json": row[8],
+                    "rental_duration_minutes": row[6],
+                    "owner": row[7],
+                    "rental_start": row[8],
+                    "mafile_json": row[9],
                 }
             return None
         except Exception as e:
@@ -1067,12 +1125,16 @@ class SQLiteDB:
             
             # Total rental hours
             if user_id is None:
-                cursor.execute("SELECT SUM(rental_duration) FROM accounts WHERE owner IS NOT NULL")
+                cursor.execute(
+                    "SELECT SUM(COALESCE(rental_duration_minutes, rental_duration * 60)) FROM accounts WHERE owner IS NOT NULL"
+                )
             else:
                 cursor.execute(
-                    "SELECT SUM(rental_duration) FROM accounts WHERE owner IS NOT NULL AND user_id = ?", (user_id,)
+                    "SELECT SUM(COALESCE(rental_duration_minutes, rental_duration * 60)) FROM accounts WHERE owner IS NOT NULL AND user_id = ?",
+                    (user_id,),
                 )
-            total_hours = cursor.fetchone()[0] or 0
+            total_minutes = cursor.fetchone()[0] or 0
+            total_hours = round(total_minutes / 60, 2)
             
             # Recent rentals (last 24 hours)
             since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1124,7 +1186,7 @@ class SQLiteDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT ID, account_name, login, rental_duration, rental_start
+                SELECT ID, account_name, login, rental_duration, rental_duration_minutes, rental_start
                 FROM accounts 
                 WHERE owner = ?
                 ORDER BY rental_start DESC
@@ -1138,7 +1200,8 @@ class SQLiteDB:
                     "account_name": row[1],
                     "login": row[2],
                     "rental_duration": row[3],
-                    "rental_start": row[4],
+                    "rental_duration_minutes": row[4],
+                    "rental_start": row[5],
                 }
                 for row in rows
             ]
@@ -1148,7 +1211,9 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def add_time_to_owner_accounts(self, owner: str, hours: int, user_id: int | None = None) -> bool:
+    def add_time_to_owner_accounts(
+        self, owner: str, hours: int, minutes: int = 0, user_id: int | None = None
+    ) -> bool:
         """
         Extract the rental_start timestamp, add the specified number of hours to it,
         and update the rental_start field for all accounts with the same owner.
@@ -1185,12 +1250,13 @@ class SQLiteDB:
             # Update each account with the new timestamp
             for account_id, rental_start in accounts:
                 if rental_start:
+                    delta = timedelta(hours=hours, minutes=minutes)
                     if isinstance(rental_start, datetime):
-                        new_rental_start = rental_start - timedelta(hours=hours)
+                        new_rental_start = rental_start - delta
                     else:
                         new_rental_start = datetime.strptime(
                             rental_start, "%Y-%m-%d %H:%M:%S"
-                        ) - timedelta(hours=hours)
+                        ) - delta
                     new_rental_start_str = new_rental_start.strftime(
                         "%Y-%m-%d %H:%M:%S"
                     )
@@ -1232,6 +1298,7 @@ class SQLiteDB:
                         owner,
                         rental_start,
                         rental_duration,
+                        rental_duration_minutes,
                         path_to_maFile,
                         login,
                         mafile_json
@@ -1251,6 +1318,7 @@ class SQLiteDB:
                         owner,
                         rental_start,
                         rental_duration,
+                        rental_duration_minutes,
                         path_to_maFile,
                         login,
                         mafile_json
@@ -1271,9 +1339,10 @@ class SQLiteDB:
                     "owner": row[2],
                     "rental_start": row[3],
                     "rental_duration": row[4],
-                    "path_to_maFile": row[5],
-                    "login": row[6],
-                    "mafile_json": row[7],
+                    "rental_duration_minutes": row[5],
+                    "path_to_maFile": row[6],
+                    "login": row[7],
+                    "mafile_json": row[8],
                 }
                 for row in rows
             ]
@@ -1299,7 +1368,7 @@ class SQLiteDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT ID, account_name, login, password, rental_duration, rental_start
+                SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
                 FROM accounts 
                 WHERE owner = ? AND account_name = ?
                 """,
@@ -1313,7 +1382,8 @@ class SQLiteDB:
                     "login": row[2],
                     "password": row[3],
                     "rental_duration": row[4],
-                    "rental_start": row[5],
+                    "rental_duration_minutes": row[5],
+                    "rental_start": row[6],
                 }
                 for row in rows
             ]
@@ -1338,7 +1408,7 @@ class SQLiteDB:
             if user_id in (None, 0):
                 cursor.execute(
                     """
-                    SELECT ID, account_name, login, password, rental_duration, rental_start
+                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
                     FROM accounts 
                     WHERE owner = ?
                     ORDER BY rental_start DESC
@@ -1348,7 +1418,7 @@ class SQLiteDB:
             else:
                 cursor.execute(
                     """
-                    SELECT ID, account_name, login, password, rental_duration, rental_start
+                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
                     FROM accounts 
                     WHERE owner = ? AND user_id = ?
                     ORDER BY rental_start DESC
@@ -1363,7 +1433,8 @@ class SQLiteDB:
                     "login": row[2],
                     "password": row[3],
                     "rental_duration": row[4],
-                    "rental_start": row[5],
+                    "rental_duration_minutes": row[5],
+                    "rental_start": row[6],
                 }
                 for row in rows
             ]
@@ -1488,7 +1559,7 @@ class SQLiteDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_start, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
                 FROM accounts a
                 LEFT JOIN lots l ON l.account_id = a.ID
                 WHERE a.owner = ?
@@ -1504,9 +1575,10 @@ class SQLiteDB:
                     "login": row[2],
                     "password": row[3],
                     "rental_duration": row[4],
-                    "rental_start": row[5],
-                    "lot_number": row[6],
-                    "lot_url": row[7],
+                    "rental_duration_minutes": row[5],
+                    "rental_start": row[6],
+                    "lot_number": row[7],
+                    "lot_url": row[8],
                 }
                 for row in rows
             ]
@@ -1683,7 +1755,13 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def extend_rental_duration(self, account_id: int, additional_hours: int, user_id: int | None = None) -> bool:
+    def extend_rental_duration(
+        self,
+        account_id: int,
+        additional_hours: int,
+        additional_minutes: int = 0,
+        user_id: int | None = None,
+    ) -> bool:
         """
         Extend the rental duration for a specific account.
         
@@ -1695,24 +1773,29 @@ class SQLiteDB:
             bool: True if successful, False otherwise
         """
         try:
+            total_minutes = int(additional_hours) * 60 + int(additional_minutes)
+            if total_minutes <= 0:
+                return False
             cursor = self._cursor()
             if user_id in (None, 0):
                 cursor.execute(
                     """
                     UPDATE accounts 
-                    SET rental_duration = rental_duration + ?
+                    SET rental_duration_minutes = COALESCE(rental_duration_minutes, rental_duration * 60) + ?,
+                        rental_duration = rental_duration + ?
                     WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT'
                     """,
-                    (additional_hours, account_id),
+                    (total_minutes, additional_hours, account_id),
                 )
             else:
                 cursor.execute(
                     """
                     UPDATE accounts 
-                    SET rental_duration = rental_duration + ?
+                    SET rental_duration_minutes = COALESCE(rental_duration_minutes, rental_duration * 60) + ?,
+                        rental_duration = rental_duration + ?
                     WHERE ID = ? AND owner IS NOT NULL AND owner != 'OTHER_ACCOUNT' AND user_id = ?
                     """,
-                    (additional_hours, account_id, user_id),
+                    (total_minutes, additional_hours, account_id, user_id),
                 )
             success = cursor.rowcount > 0
             self.conn.commit()
@@ -1723,19 +1806,25 @@ class SQLiteDB:
         finally:
             cursor.close()
 
-    def extend_rental_duration_for_owner(self, account_id: int, owner_id: str, additional_hours: int) -> bool:
+    def extend_rental_duration_for_owner(
+        self, account_id: int, owner_id: str, additional_hours: int, additional_minutes: int = 0
+    ) -> bool:
         """
         Extend rental duration, but only if the account is currently owned by the given owner.
         """
         try:
+            total_minutes = int(additional_hours) * 60 + int(additional_minutes)
+            if total_minutes <= 0:
+                return False
             cursor = self._cursor()
             cursor.execute(
                 """
                 UPDATE accounts
-                SET rental_duration = rental_duration + ?
+                SET rental_duration_minutes = COALESCE(rental_duration_minutes, rental_duration * 60) + ?,
+                    rental_duration = rental_duration + ?
                 WHERE ID = ? AND owner = ?
                 """,
-                (additional_hours, account_id, owner_id),
+                (total_minutes, additional_hours, account_id, owner_id),
             )
             success = cursor.rowcount > 0
             self.conn.commit()

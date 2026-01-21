@@ -29,6 +29,7 @@ from SteamHandler.presence_bot import get_presence_bot
 from .messages import USER
 from .utils import (
     MOSCOW_TZ,
+    get_duration_minutes,
     get_remaining_time,
     match_account_choice,
     match_account_name,
@@ -59,7 +60,7 @@ class FunpayBot:
         self._bonus_eligible: set[str] = set()
         self._pending_account_choice: dict[str, list[dict]] = {}
         self._pending_lot_extend: dict[str, PendingLotExtend] = {}
-        self._processed_order_ids: set[int] = set()
+        self._processed_order_ids: set[str] = set()
 
         self._last_refresh_ts = 0.0
         self._expire_delay_since: dict[int, datetime] = {}
@@ -130,6 +131,15 @@ class FunpayBot:
     def _handle_order_paid(self, event: Any) -> None:
         self._process_order(event, source="ORDER_PAID")
 
+    def _mark_order_processed(self, event: Any) -> None:
+        order = getattr(event, "order", None)
+        if not order:
+            return
+        order_id = getattr(order, "id", None)
+        if order_id is None:
+            return
+        self._processed_order_ids.add(str(order_id))
+
     def _process_order(self, event: Any, source: str) -> None:
         if self._acc is None:
             self.refresh_session()
@@ -141,27 +151,33 @@ class FunpayBot:
         if order is None:
             return
 
-        try:
-            order_id = int(order.id)
-        except Exception:
-            logger.warning(f"Skipping order with invalid id from {source}: {getattr(order, 'id', None)}")
+        order_id = getattr(order, "id", None)
+        if not order_id:
+            logger.warning(f"Skipping order with invalid id from {source}: {order_id}")
             return
+        order_id = str(order_id)
 
         if order_id in self._processed_order_ids:
             return
 
         buyer = str(order.buyer_username)
         chat = acc.get_chat_by_name(buyer, True)
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None:
+            chat_id = getattr(order, "chat_id", None)
+        if chat_id is None:
+            logger.warning(f"Skipping order {order_id}: chat id not found")
+            return
 
         description = str(getattr(order, "description", "") or "")
         amount = int(getattr(order, "amount", 1) or 1)
 
         lot_number = parse_lot_number(description)
         if lot_number is not None:
-            self._process_lot_order(acc, chat.id, event, buyer, lot_number, amount)
+            self._process_lot_order(acc, chat_id, event, buyer, lot_number, amount)
             return
 
-        self._process_named_order(acc, chat.id, event, buyer, description, amount)
+        self._process_named_order(acc, chat_id, event, buyer, description, amount)
 
     def _process_lot_order(
         self,
@@ -206,7 +222,7 @@ class FunpayBot:
 
         if account.get("owner") is None:
             self._issue_new_account(acc, chat_id, event, account, amount)
-            self._processed_order_ids.add(int(event.order.id))
+            self._mark_order_processed(event)
             return
 
         if account.get("owner") == buyer:
@@ -232,7 +248,7 @@ class FunpayBot:
                 f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}{note}",
             )
             acc.confirm(event.order.id)
-            self._processed_order_ids.add(int(event.order.id))
+            self._mark_order_processed(event)
             return
 
         acc.send_message(
@@ -298,11 +314,11 @@ class FunpayBot:
         existing_rentals = self._db.get_user_accounts_by_name(buyer, account_name)
         if existing_rentals:
             self._extend_existing_rental(acc, chat_id, event, existing_rentals[0], account_name, amount)
-            self._processed_order_ids.add(int(event.order.id))
+            self._mark_order_processed(event)
             return
 
         self._issue_new_account(acc, chat_id, event, specific_account, amount)
-        self._processed_order_ids.add(int(event.order.id))
+        self._mark_order_processed(event)
 
     def _extend_existing_rental(
         self,
@@ -334,7 +350,8 @@ class FunpayBot:
                 start_dt = rental_start
             else:
                 start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
-            expiry_time = start_dt + timedelta(hours=int(account["rental_duration"]))
+            duration_minutes = get_duration_minutes(account)
+            expiry_time = start_dt + timedelta(minutes=duration_minutes)
             acc.send_message(
                 chat_id,
                 f"ID: {rental['id']}\n"
@@ -365,10 +382,10 @@ class FunpayBot:
             cursor.execute(
                 """
                 UPDATE accounts
-                SET rental_duration = ?
+                SET rental_duration = ?, rental_duration_minutes = ?
                 WHERE ID = ?
                 """,
-                (hours, account["id"]),
+                (hours, hours * 60, account["id"]),
             )
             conn.commit()
         finally:
@@ -658,8 +675,8 @@ class FunpayBot:
             if account.get("owner") is None:
                 continue
             rental_start = account.get("rental_start")
-            duration = account.get("rental_duration")
-            if not rental_start or not duration:
+            duration_minutes = get_duration_minutes(account)
+            if not rental_start or duration_minutes <= 0:
                 continue
 
             if isinstance(rental_start, datetime):
@@ -673,7 +690,7 @@ class FunpayBot:
             if start_dt.tzinfo is None:
                 start_dt = MOSCOW_TZ.localize(start_dt)
 
-            expiry_time = start_dt + timedelta(hours=int(duration))
+            expiry_time = start_dt + timedelta(minutes=duration_minutes)
             if next_expiry is None or expiry_time < next_expiry:
                 next_expiry = expiry_time
 
@@ -712,7 +729,7 @@ class FunpayBot:
             current_time = datetime.now(tz=MOSCOW_TZ)
             cursor.execute(
                 """
-                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
+                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
@@ -721,7 +738,18 @@ class FunpayBot:
             accounts_data = cursor.fetchall()
 
             for row in accounts_data:
-                account_id, owner, start_time, duration, mafile_path, mafile_json, password, login, account_name = row
+                (
+                    account_id,
+                    owner,
+                    start_time,
+                    duration,
+                    duration_minutes,
+                    mafile_path,
+                    mafile_json,
+                    password,
+                    login,
+                    account_name,
+                ) = row
                 if not owner:
                     continue
 
@@ -730,12 +758,19 @@ class FunpayBot:
                 else:
                     start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
                 start_datetime = MOSCOW_TZ.localize(start_datetime)
-                expiry_time = start_datetime + timedelta(hours=int(duration))
+                try:
+                    total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
+                except Exception:
+                    total_minutes = 0
+                if total_minutes <= 0:
+                    continue
+                expiry_time = start_datetime + timedelta(minutes=total_minutes)
 
                 time_remaining = expiry_time - current_time
-                hours_remaining = time_remaining.total_seconds() / 3600
+                minutes_remaining = time_remaining.total_seconds() / 60
+                hours_remaining = minutes_remaining / 60
 
-                if 0.1 <= hours_remaining <= 0.2:
+                if 6 <= minutes_remaining <= 12:
                     self._send_expiration_warning(owner, account_id, hours_remaining, expiry_time)
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
@@ -925,7 +960,7 @@ class FunpayBot:
             cursor.execute(
                 """
                 UPDATE accounts
-                SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1
+                SET password = ?, owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
                 WHERE ID = ?
                 """,
                 (new_password, account_id),
@@ -959,7 +994,7 @@ class FunpayBot:
                 cursor.execute(
                     """
                     UPDATE accounts
-                    SET owner = NULL, rental_start = NULL, rental_duration = 1
+                    SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
                     WHERE ID = ?
                     """,
                     (account_id,),

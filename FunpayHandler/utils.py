@@ -75,7 +75,10 @@ def get_remaining_time(account: dict, current_time: datetime):
     if start_dt.tzinfo is None:
         start_dt = MOSCOW_TZ.localize(start_dt)
 
-    expiry_time = start_dt + timedelta(hours=int(account["rental_duration"]))
+    duration_minutes = get_duration_minutes(account)
+    if duration_minutes <= 0:
+        return None, "не задано", "не задано"
+    expiry_time = start_dt + timedelta(minutes=duration_minutes)
     remaining = expiry_time - current_time
     if remaining.total_seconds() < 0:
         remaining = timedelta(0)
@@ -86,3 +89,18 @@ def get_remaining_time(account: dict, current_time: datetime):
     expiry_str = expiry_time.strftime("%H:%M:%S")
     return expiry_time, expiry_str, remaining_str
 
+
+def get_duration_minutes(account: dict) -> int:
+    minutes = account.get("rental_duration_minutes")
+    if minutes is not None:
+        try:
+            return int(minutes)
+        except Exception:
+            return 0
+    hours = account.get("rental_duration")
+    if hours is None:
+        return 0
+    try:
+        return int(hours) * 60
+    except Exception:
+        return 0
