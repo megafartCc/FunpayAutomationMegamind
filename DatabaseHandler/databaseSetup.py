@@ -1656,6 +1656,16 @@ class MySQLDB:
         """Close the persistent database connection."""
         self.conn.close()
 
+    def close_pool(self):
+        if self.db_type != "mysql":
+            return
+        try:
+            for _ in range(MYSQLPOOLSIZE):
+                conn = self._pool.get_connection()
+                conn.close()
+        except Exception as exc:
+            logger.warning(f"Failed to close MySQL pool: {exc}")
+
     # ---- User auth helpers ----
 
     def _hash_password(self, password: str) -> str:
