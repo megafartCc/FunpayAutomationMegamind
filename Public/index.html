@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FunpaySeller Dashboard</title>
+    <title>Панель FunpaySeller</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,52 +17,52 @@
     <div class="app">
       <aside class="sidebar">
         <div class="brand">FunpaySeller</div>
-        <p class="subtitle">Automation for FunPay rentals and Steam tools.</p>
+        <p class="subtitle">Автоматизация аренды FunPay и Steam-инструменты.</p>
         <nav class="nav">
-          <a href="#overview">Overview</a>
-          <a href="#rentals">Active rentals</a>
-          <a href="#inventory">Inventory</a>
-          <a href="#lots">Lots</a>
-          <a href="#chats">FunPay chats</a>
-          <a href="#manage">Account management</a>
-          <a href="#add">Add account</a>
-          <a href="#notifications">Notifications</a>
-          <a href="#settings">Settings</a>
+          <a href="#overview">Обзор</a>
+          <a href="#rentals">Активные аренды</a>
+          <a href="#inventory">Инвентарь</a>
+          <a href="#lots">Лоты</a>
+          <a href="#chats">Чаты FunPay</a>
+          <a href="#manage">Управление аккаунтом</a>
+          <a href="#add">Добавить аккаунт</a>
+          <a href="#notifications">Уведомления</a>
+          <a href="#settings">Настройки</a>
         </nav>
         <div class="side-card">
-          <p>Status</p>
-          <div class="pill" id="healthStatus">Loading...</div>
-          <button class="btn ghost" id="refreshAll">Refresh all</button>
+          <p>Статус</p>
+          <div class="pill" id="healthStatus">Загрузка...</div>
+          <button class="btn ghost" id="refreshAll">Обновить все</button>
         </div>
       </aside>
       <main class="main">
         <header class="topbar">
           <div>
-            <h1>Operations</h1>
-            <p>Manage rentals, inventory, lots, chats and automation.</p>
+            <h1>Панель управления</h1>
+            <p>Управляйте арендами, инвентарём, лотами, чатами и автоматизацией.</p>
           </div>
         </header>
 
         <section class="section" id="overview">
           <div class="section-head">
-            <h2>Overview</h2>
-            <p>Key stats at a glance.</p>
+            <h2>Обзор</h2>
+            <p>Ключевые показатели.</p>
           </div>
           <div class="stats">
             <div class="card">
-              <p>Total accounts</p>
+              <p>Всего аккаунтов</p>
               <h3 id="statTotal">0</h3>
             </div>
             <div class="card">
-              <p>Active rentals</p>
+              <p>Активные аренды</p>
               <h3 id="statActive">0</h3>
             </div>
             <div class="card">
-              <p>Available</p>
+              <p>Свободные</p>
               <h3 id="statAvailable">0</h3>
             </div>
             <div class="card">
-              <p>Last 24h</p>
+              <p>За 24 часа</p>
               <h3 id="statRecent">0</h3>
             </div>
           </div>
@@ -70,21 +70,21 @@
 
         <section class="section" id="rentals">
           <div class="section-head">
-            <h2>Active rentals</h2>
-            <p>Running rentals and timing.</p>
+            <h2>Активные аренды</h2>
+            <p>Текущие аренды и тайминг.</p>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Account</th>
-                  <th>Owner</th>
-                  <th data-key="chat">Chat</th>
-                  <th>Login</th>
-                  <th>Start</th>
-                  <th>Ends</th>
-                  <th>Duration</th>
+                  <th>Аккаунт</th>
+                  <th>Покупатель</th>
+                  <th data-key="chat">Чат</th>
+                  <th>Логин</th>
+                  <th>Начало</th>
+                  <th>Окончание</th>
+                  <th>Длительность</th>
                 </tr>
               </thead>
               <tbody id="activeRentals"></tbody>
@@ -94,24 +94,24 @@
 
         <section class="section" id="inventory">
           <div class="section-head">
-            <h2>Inventory</h2>
-            <p>All accounts in storage. Click a row to manage.</p>
+            <h2>Инвентарь</h2>
+            <p>Все аккаунты в наличии. Нажмите строку для управления.</p>
           </div>
           <div class="table-actions">
             <label class="toggle">
               <input type="checkbox" id="showPasswords" />
-              <span>Show passwords</span>
+              <span>Показать пароли</span>
             </label>
-            <input type="search" id="searchAccounts" placeholder="Filter by name" />
+            <input type="search" id="searchAccounts" placeholder="Фильтр по названию или логину" />
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Account</th>
-                  <th>Login</th>
-                  <th>Password</th>
+                  <th>Аккаунт</th>
+                  <th>Логин</th>
+                  <th>Пароль</th>
                   <th>SteamID</th>
                 </tr>
               </thead>
@@ -122,35 +122,35 @@
 
         <section class="section" id="lots">
           <div class="section-head">
-            <h2>Lots</h2>
-            <p>Mapping lots to accounts.</p>
+            <h2>Лоты</h2>
+            <p>Связка лотов с аккаунтами.</p>
           </div>
           <div class="panel">
             <form class="panel-grid" id="lotForm">
               <div class="field">
-                <label>Lot number</label>
+                <label>Номер лота</label>
                 <input id="lotNumber" type="number" min="1" placeholder="3" required />
               </div>
               <div class="field">
-                <label>Account</label>
+                <label>Аккаунт</label>
                 <select id="lotAccount" required></select>
               </div>
               <div class="field">
-                <label>Lot URL</label>
+                <label>Ссылка на лот</label>
                 <input id="lotUrl" type="url" placeholder="https://funpay.com/lots/81/..." />
               </div>
               <div class="field">
                 <label>&nbsp;</label>
-                <button class="btn" type="submit">Save mapping</button>
+                <button class="btn" type="submit">Сохранить</button>
               </div>
             </form>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Lot #</th>
-                    <th>Account</th>
-                    <th>Lot URL</th>
+                    <th>Лот</th>
+                    <th>Аккаунт</th>
+                    <th>Ссылка</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -162,29 +162,29 @@
 
         <section class="section" id="chats">
           <div class="section-head">
-            <h2>FunPay chats</h2>
-            <p>Conversations with buyers.</p>
+            <h2>Чаты FunPay</h2>
+            <p>Диалоги с покупателями.</p>
           </div>
           <div class="panel chat-layout">
             <div class="chat-list">
               <div class="chat-list-head">
-                <input id="chatSearch" type="search" placeholder="Search chats" />
-                <button class="btn ghost" id="refreshChats">Refresh</button>
+                <input id="chatSearch" type="search" placeholder="Поиск чатов" />
+                <button class="btn ghost" id="refreshChats">Обновить</button>
               </div>
               <div id="chatList" class="chat-items"></div>
             </div>
             <div class="chat-window">
               <div class="chat-window-head">
                 <div>
-                  <h3 id="chatTitle">Select a chat</h3>
-                  <span class="helper" id="chatSubtitle">Load messages to start.</span>
+                  <h3 id="chatTitle">Выберите чат</h3>
+                  <span class="helper" id="chatSubtitle">Загрузите историю.</span>
                 </div>
-                <button class="btn ghost" id="loadHistory">Load history</button>
+                <button class="btn ghost" id="loadHistory">Загрузить историю</button>
               </div>
               <div id="chatMessages" class="chat-messages"></div>
               <form id="chatSendForm" class="chat-send">
-                <textarea id="chatMessageInput" rows="2" placeholder="Type a message..."></textarea>
-                <button class="btn" type="submit">Send</button>
+                <textarea id="chatMessageInput" rows="2" placeholder="Введите сообщение..."></textarea>
+                <button class="btn" type="submit">Отправить</button>
               </form>
             </div>
           </div>
@@ -192,8 +192,8 @@
 
         <section class="section" id="manage">
           <div class="section-head">
-            <h2>Account management</h2>
-            <p>Edit accounts and trigger actions.</p>
+            <h2>Управление аккаунтом</h2>
+            <p>Редактируйте аккаунты и запускайте действия.</p>
           </div>
           <div class="panel" id="managePanel">
             <div class="panel-grid">
@@ -202,88 +202,88 @@
                 <input id="manageId" type="text" disabled />
               </div>
               <div class="field">
-                <label>Account name</label>
+                <label>Название аккаунта</label>
                 <input id="manageName" type="text" />
               </div>
               <div class="field">
-                <label>Login</label>
+                <label>Логин</label>
                 <input id="manageLogin" type="text" />
               </div>
               <div class="field">
-                <label>Password</label>
+                <label>Пароль</label>
                 <input id="managePassword" type="text" />
               </div>
               <div class="field">
                 <label>JSON maFile</label>
-                <textarea id="manageMaFileJson" rows="3" placeholder="Paste JSON .maFile here"></textarea>
+                <textarea id="manageMaFileJson" rows="3" placeholder="Вставьте JSON .maFile сюда"></textarea>
               </div>
               <div class="field">
-                <label>Duration (hours)</label>
+                <label>Длительность (часы)</label>
                 <input id="manageDuration" type="number" min="0" />
               </div>
               <div class="field">
-                <label>Duration (minutes)</label>
+                <label>Длительность (минуты)</label>
                 <input id="manageDurationMinutes" type="number" min="0" max="59" />
               </div>
               <div class="field">
-                <label>Owner</label>
-                <input id="manageOwner" type="text" placeholder="optional" />
+                <label>Владелец</label>
+                <input id="manageOwner" type="text" placeholder="необязательно" />
               </div>
               <div class="field">
-                <label>Rental start</label>
+                <label>Начало аренды</label>
                 <input id="manageStart" type="text" disabled />
               </div>
             </div>
             <div class="panel-actions">
-              <button class="btn" id="updateAccount">Update</button>
-              <button class="btn" id="assignAccount">Assign owner</button>
+              <button class="btn" id="updateAccount">Сохранить</button>
+              <button class="btn" id="assignAccount">Назначить владельца</button>
               <div class="inline">
-                <input id="extendOwnerHours" type="number" min="0" placeholder="+hours for owner" />
-                <input id="extendOwnerMinutes" type="number" min="0" max="59" placeholder="+minutes" />
-                <button class="btn ghost" id="extendOwner">Extend owner rentals</button>
+                <input id="extendOwnerHours" type="number" min="0" placeholder="+часы владельцу" />
+                <input id="extendOwnerMinutes" type="number" min="0" max="59" placeholder="+минуты" />
+                <button class="btn ghost" id="extendOwner">Продлить аренды</button>
               </div>
-              <button class="btn ghost" id="releaseAccount">Release</button>
-              <button class="btn ghost" id="steamDeauth">Steam: deauthorize sessions</button>
+              <button class="btn ghost" id="releaseAccount">Освободить</button>
+              <button class="btn ghost" id="steamDeauth">Steam: деавторизовать</button>
               <div class="inline">
-                <input id="extendHours" type="number" min="0" placeholder="+hours" />
-                <input id="extendMinutes" type="number" min="0" max="59" placeholder="+minutes" />
-                <button class="btn" id="extendAccount">Extend</button>
+                <input id="extendHours" type="number" min="0" placeholder="+часы" />
+                <input id="extendMinutes" type="number" min="0" max="59" placeholder="+минуты" />
+                <button class="btn" id="extendAccount">Продлить</button>
               </div>
               <div class="inline">
-                <input id="steamNewPassword" type="text" placeholder="New Steam password (optional)" />
-                <button class="btn ghost" id="steamChangePassword">Change Steam password</button>
+                <input id="steamNewPassword" type="text" placeholder="Новый пароль Steam (необязательно)" />
+                <button class="btn ghost" id="steamChangePassword">Сменить пароль Steam</button>
               </div>
-              <button class="btn danger" id="deleteAccount">Delete</button>
+              <button class="btn danger" id="deleteAccount">Удалить</button>
             </div>
           </div>
         </section>
 
         <section class="section" id="add">
           <div class="section-head">
-            <h2>Add account</h2>
-            <p>Add a new account to the inventory.</p>
+            <h2>Добавить аккаунт</h2>
+            <p>Добавьте новый аккаунт в инвентарь.</p>
           </div>
           <form class="panel" id="addAccountForm">
             <div class="panel-grid">
               <div class="field">
-                <label>Account name</label>
+                <label>Название аккаунта</label>
                 <input name="account_name" type="text" required />
               </div>
               <div class="field">
-                <label>Login</label>
+                <label>Логин</label>
                 <input name="login" type="text" required />
               </div>
               <div class="field">
-                <label>Password</label>
+                <label>Пароль</label>
                 <input name="password" type="text" required />
               </div>
               <div class="field">
                 <label>JSON maFile</label>
-                <textarea name="mafile_json" rows="3" placeholder="Paste JSON .maFile here" required></textarea>
+                <textarea name="mafile_json" rows="3" placeholder="Вставьте JSON .maFile сюда" required></textarea>
               </div>
             </div>
             <div class="panel-actions">
-              <button class="btn" type="submit">Add account</button>
+              <button class="btn" type="submit">Добавить аккаунт</button>
               <span class="helper" id="addStatus"></span>
             </div>
           </form>
@@ -291,8 +291,8 @@
 
         <section class="section" id="notifications">
           <div class="section-head">
-            <h2>Notifications</h2>
-            <p>System and bot messages.</p>
+            <h2>Уведомления</h2>
+            <p>Системные сообщения и события бота.</p>
           </div>
           <div class="panel">
             <div class="notifications" id="notificationsList"></div>
@@ -301,19 +301,19 @@
 
         <section class="section" id="settings">
           <div class="section-head">
-            <h2>Settings</h2>
-            <p>Manage your golden key and session.</p>
+            <h2>Настройки</h2>
+            <p>Управление золотым ключом и сессией.</p>
           </div>
           <div class="panel">
             <form id="settingsForm" class="panel-grid">
               <div class="field">
-                <label>New FunPay golden key</label>
-                <input id="settingsGoldenKey" type="text" placeholder="Enter key" required />
+                <label>Новый золотой ключ FunPay</label>
+                <input id="settingsGoldenKey" type="text" placeholder="Введите ключ" required />
               </div>
               <div class="field">
                 <label>&nbsp;</label>
-                <button class="btn" type="submit">Save</button>
-                <button class="btn ghost" type="button" id="logoutBtn">Logout</button>
+                <button class="btn" type="submit">Сохранить</button>
+                <button class="btn ghost" type="button" id="logoutBtn">Выйти</button>
               </div>
             </form>
           </div>
@@ -325,26 +325,26 @@
 
     <div class="auth-overlay hidden" id="authOverlay">
       <div class="auth-container">
-        <h2>Account Access</h2>
-        <p class="auth-sub">Register with your golden key, then sign in to unlock the panel.</p>
+        <h2>Доступ</h2>
+        <p class="auth-sub">Зарегистрируйтесь с золотым ключом и войдите в панель.</p>
         <div class="auth-panels">
           <form class="auth-card" id="registerForm">
-            <h3>Register</h3>
-            <label>Username</label>
+            <h3>Регистрация</h3>
+            <label>Логин</label>
             <input id="regUsername" type="text" required />
-            <label>Password</label>
+            <label>Пароль</label>
             <input id="regPassword" type="password" required />
-            <label>FunPay Golden Key</label>
+            <label>Золотой ключ FunPay</label>
             <input id="regGoldenKey" type="text" required />
-            <button type="submit" class="btn full">Register</button>
+            <button type="submit" class="btn full">Зарегистрироваться</button>
           </form>
           <form class="auth-card" id="loginForm">
-            <h3>Login</h3>
-            <label>Username</label>
+            <h3>Вход</h3>
+            <label>Логин</label>
             <input id="loginUsername" type="text" required />
-            <label>Password</label>
+            <label>Пароль</label>
             <input id="loginPassword" type="password" required />
-            <button type="submit" class="btn full">Login</button>
+            <button type="submit" class="btn full">Войти</button>
           </form>
         </div>
       </div>

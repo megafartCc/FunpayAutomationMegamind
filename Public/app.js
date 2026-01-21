@@ -106,7 +106,7 @@ const apiFetch = async (path, options = {}, retry = true) => {
   if (!response.ok) {
     if (response.status === 401) {
       sessionStorage.removeItem("adminKey");
-      showAuth("Please log in.");
+      showAuth("Пожалуйста, войдите.");
     }
     const contentType = response.headers.get("content-type") || "";
     let message = "";
@@ -121,7 +121,7 @@ const apiFetch = async (path, options = {}, retry = true) => {
           message = JSON.stringify(data);
         }
       } catch (error) {
-        message = "Request failed";
+        message = "Запрос не выполнен";
       }
     } else {
       message = await response.text();
@@ -141,7 +141,7 @@ const apiFetch = async (path, options = {}, retry = true) => {
         // Fall through to the original error.
       }
     }
-    throw new Error(message || "Request failed");
+    throw new Error(message || "Запрос не выполнен");
   }
   if (response.status === 204) {
     return null;
@@ -174,9 +174,9 @@ const formatDuration = (item) => {
   if (!totalMinutes) return "-";
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (hours && minutes) return `${hours}h ${minutes}m`;
-  if (hours) return `${hours}h`;
-  return `${minutes}m`;
+  if (hours && minutes) return `${hours}ч ${minutes}м`;
+  if (hours) return `${hours}ч`;
+  return `${minutes}м`;
 };
 
 const formatRentalEnd = (start, durationMinutes) => {
@@ -234,20 +234,20 @@ const renderStats = (stats) => {
 
 const renderHealth = (status) => {
   if (status?.funpay_ready) {
-    ui.health.textContent = "FunPay ready";
+    ui.health.textContent = "FunPay готов";
   } else if (status?.funpay_enabled) {
-    ui.health.textContent = "FunPay starting";
+    ui.health.textContent = "FunPay запускается";
   } else {
-    ui.health.textContent = "FunPay disabled";
+    ui.health.textContent = "FunPay отключен";
   }
 };
 
 const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
 const presenceLabel = (item) => {
-  if (item?.in_match) return "In match";
-  if (item?.in_game) return "In game";
-  return "Offline";
+  if (item?.in_match) return "В матче";
+  if (item?.in_game) return "В игре";
+  return "Оффлайн";
 };
 
 const presenceLink = (item) => {
@@ -266,7 +266,7 @@ const ensureActiveStatusHeader = () => {
   const headers = Array.from(row.querySelectorAll("th"));
   if (headers.some((th) => th.dataset.key === "status")) return;
   const statusTh = document.createElement("th");
-  statusTh.textContent = "Status";
+  statusTh.textContent = "Статус";
   statusTh.dataset.key = "status";
   row.appendChild(statusTh);
 };
@@ -292,7 +292,7 @@ const renderActiveRentals = (items) => {
   ensureActiveRentalsHeader();
   ensureActiveStatusHeader?.();
   if (!items.length) {
-    ui.activeTable.innerHTML = "<tr><td colspan=\"9\">No active rentals.</td></tr>";
+    ui.activeTable.innerHTML = "<tr><td colspan=\"9\">Нет активных аренд.</td></tr>";
     return;
   }
   ui.activeTable.innerHTML = items
@@ -323,7 +323,7 @@ const renderInventory = (items) => {
   });
 
   if (!filtered.length) {
-    ui.inventoryTable.innerHTML = "<tr><td colspan=\"5\">No accounts found.</td></tr>";
+    ui.inventoryTable.innerHTML = "<tr><td colspan=\"5\">Аккаунты не найдены.</td></tr>";
     return;
   }
 
@@ -391,16 +391,16 @@ const renderLots = (lots) => {
 };
 const renderNotifications = (items) => {
   if (!items.length) {
-    ui.notifications.innerHTML = "<div class=\"notice\"><h4>No notifications</h4><p>System events will appear here.</p></div>";
+    ui.notifications.innerHTML = "<div class=\"notice\"><h4>Уведомлений нет</h4><p>Системные события появятся здесь.</p></div>";
     return;
   }
   ui.notifications.innerHTML = items
     .map(
       (item) => `
         <div class="notice">
-          <h4>${item.level?.toUpperCase() || "INFO"} - ${formatDate(item.created_at)}</h4>
+          <h4>${item.level?.toUpperCase() || "ИНФО"} - ${formatDate(item.created_at)}</h4>
           <p>${escapeHtml(item.message)}</p>
-          <p>Owner: ${item.owner || "-"} | Account: ${item.account_id || "-"}</p>
+          <p>Владелец: ${item.owner || "-"} | Аккаунт: ${item.account_id || "-"}</p>
         </div>
       `
     )
@@ -416,7 +416,7 @@ const renderChatList = (items) => {
   });
 
   if (!filtered.length) {
-    ui.chats.list.innerHTML = "<div class=\"notice\"><h4>No chats</h4><p>No chats found.</p></div>";
+    ui.chats.list.innerHTML = "<div class=\"notice\"><h4>Чатов нет</h4><p>Чаты не найдены.</p></div>";
     return;
   }
 
@@ -425,10 +425,10 @@ const renderChatList = (items) => {
       (chat) => `
         <button class="chat-item ${chat.id === selectedChatId ? "active" : ""}" data-id="${chat.id}">
           <div>
-            <h4>${escapeHtml(chat.name || "Unknown")}</h4>
+            <h4>${escapeHtml(chat.name || "Без имени")}</h4>
             <p>${escapeHtml(chat.last_message_text || "")}</p>
           </div>
-          ${chat.unread ? '<span class="badge">new</span>' : ''}
+          ${chat.unread ? '<span class="badge">новое</span>' : ''}
         </button>
       `
     )
@@ -438,8 +438,8 @@ const renderChatList = (items) => {
     item.addEventListener("click", () => {
       selectedChatId = Number(item.dataset.id);
       const chat = chatsCache.find((c) => c.id === selectedChatId);
-      ui.chats.title.textContent = chat?.name || "Chat";
-      ui.chats.subtitle.textContent = `Chat ID: ${selectedChatId}`;
+      ui.chats.title.textContent = chat?.name || "Чат";
+      ui.chats.subtitle.textContent = `ID чата: ${selectedChatId}`;
       ui.chats.list.querySelectorAll(".chat-item").forEach((row) => {
         row.classList.toggle("active", Number(row.dataset.id) === selectedChatId);
       });
@@ -450,22 +450,22 @@ const renderChatList = (items) => {
 
 const renderChatMessages = (items) => {
   if (!items.length) {
-    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>No messages</h4><p>Select a chat to load history.</p></div>";
+    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>Сообщений нет</h4><p>Выберите чат, чтобы загрузить историю.</p></div>";
     return;
   }
 
   ui.chats.messages.innerHTML = items
     .map((message) => {
-      const author = message.author || "Unknown";
+      const author = message.author || "Неизвестно";
       const text = escapeHtml(message.text || "");
       const image = message.image_link
-        ? `<a href="${message.image_link}" target="_blank" rel="noreferrer">View image</a>`
+        ? `<a href="${message.image_link}" target="_blank" rel="noreferrer">Открыть изображение</a>`
         : "";
       const type = message.type ? `(${message.type})` : "";
       return `
         <div class="chat-message ${message.by_bot ? "self" : ""}">
           <h5>${escapeHtml(author)} ${type}</h5>
-          <p>${text || "(no text)"}</p>
+          <p>${text || "(без текста)"}</p>
           ${image}
         </div>
       `;
@@ -479,20 +479,20 @@ const loadChats = async () => {
     chatsCache = data.items || [];
     renderChatList(chatsCache);
   } catch (error) {
-    toast(error.message || "Failed to load chats", true);
+    toast(error.message || "Не удалось загрузить чаты", true);
   }
 };
 
 const loadChatHistory = async () => {
   if (!selectedChatId) {
-    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>Select a chat</h4><p>Pick a chat to view messages.</p></div>";
+    ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>Выберите чат</h4><p>Выберите чат, чтобы просмотреть сообщения.</p></div>";
     return;
   }
   try {
     const data = await apiFetch(`/api/chats/${selectedChatId}/history?limit=60`);
     renderChatMessages(data.items || []);
   } catch (error) {
-    toast(error.message || "Failed to load history", true);
+    toast(error.message || "Не удалось загрузить историю", true);
   }
 };
 
@@ -523,7 +523,7 @@ const loadAll = async () => {
 
     loadChats();
   } catch (error) {
-    toast(error.message || "Failed to load data", true);
+    toast(error.message || "Не удалось загрузить данные", true);
   }
 };
 
@@ -551,12 +551,12 @@ ui.chats.loadHistory.addEventListener("click", () => loadChatHistory());
 ui.chats.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!selectedChatId) {
-    toast("Select a chat first.", true);
+    toast("Сначала выберите чат.", true);
     return;
   }
   const text = ui.chats.input.value.trim();
   if (!text) {
-    toast("Message is empty.", true);
+    toast("Сообщение пустое.", true);
     return;
   }
   try {
@@ -565,10 +565,10 @@ ui.chats.form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ text }),
     });
     ui.chats.input.value = "";
-    toast("Message sent.");
+    toast("Сообщение отправлено.");
     loadChatHistory();
   } catch (error) {
-    toast(error.message || "Send failed", true);
+    toast(error.message || "Не удалось отправить сообщение", true);
   }
 });
 
@@ -587,10 +587,10 @@ ui.addForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(payload),
     });
     ui.addForm.reset();
-    toast("Account added.");
+    toast("Аккаунт добавлен.");
     loadAll();
   } catch (error) {
-    toast(error.message || "Failed to add account", true);
+    toast(error.message || "Не удалось добавить аккаунт", true);
   }
 });
 
@@ -636,7 +636,7 @@ if (ui.lots.table) {
 
 ui.manage.update.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   const durationHoursValue = ui.manage.duration.value.trim();
@@ -651,15 +651,15 @@ ui.manage.update.addEventListener("click", async () => {
     const hours = Number(durationHoursValue || 0);
     const minutes = Number(durationMinutesValue || 0);
     if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-      toast("Duration must be a number.", true);
+      toast("Длительность должна быть числом.", true);
       return;
     }
     if (hours < 0 || minutes < 0 || minutes > 59) {
-      toast("Minutes must be between 0 and 59.", true);
+      toast("Минуты должны быть от 0 до 59.", true);
       return;
     }
     if (hours === 0 && minutes === 0) {
-      toast("Duration must be greater than 0.", true);
+      toast("Длительность должна быть больше 0.", true);
       return;
     }
     payload.rental_duration = hours;
@@ -673,35 +673,35 @@ ui.manage.update.addEventListener("click", async () => {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
-    toast("Account updated.");
+    toast("Аккаунт обновлён.");
     loadAll();
   } catch (error) {
-    toast(error.message || "Update failed", true);
+    toast(error.message || "Не удалось обновить аккаунт", true);
   }
 });
 
 ui.manage.steamDeauth.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   try {
-    toast("Steam deauthorize started...");
+    toast("Деавторизация Steam запущена...");
     await apiFetch(`/api/accounts/${selectedId}/steam/deauthorize`, { method: "POST" });
-    toast("Steam sessions deauthorized.");
+    toast("Сессии Steam деавторизованы.");
   } catch (error) {
-    toast(error.message || "Steam deauthorize failed", true);
+    toast(error.message || "Не удалось деавторизовать Steam", true);
   }
 });
 
 ui.manage.steamChangePassword.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   const newPassword = ui.manage.steamNewPassword.value.trim();
   try {
-    toast("Changing Steam password...");
+    toast("Смена пароля Steam...");
     const result = await apiFetch(`/api/accounts/${selectedId}/steam/password`, {
       method: "POST",
       body: JSON.stringify({ new_password: newPassword || null }),
@@ -720,23 +720,23 @@ ui.manage.steamChangePassword.addEventListener("click", async () => {
         selected.password = password;
       }
       renderInventory(accountsCache);
-      toast(`Steam password changed: ${password}`);
+      toast(`Пароль Steam изменён: ${password}`);
     } else {
-      toast("Steam password changed.");
+      toast("Пароль Steam изменён.");
     }
   } catch (error) {
-    toast(error.message || "Steam password change failed", true);
+    toast(error.message || "Не удалось изменить пароль Steam", true);
   }
 });
 
 ui.manage.assign.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   const owner = ui.manage.owner.value.trim();
   if (!owner) {
-    toast("Owner is required.", true);
+    toast("Укажите владельца.", true);
     return;
   }
   try {
@@ -744,37 +744,37 @@ ui.manage.assign.addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({ owner }),
     });
-    toast("Owner assigned.");
+    toast("Владелец назначен.");
     loadAll();
   } catch (error) {
-    toast(error.message || "Assign failed", true);
+    toast(error.message || "Не удалось назначить владельца", true);
   }
 });
 
 ui.manage.extendOwner.addEventListener("click", async () => {
   const owner = ui.manage.owner.value.trim();
   if (!owner) {
-    toast("Owner is required.", true);
+    toast("Укажите владельца.", true);
     return;
   }
   const hoursValue = ui.manage.extendOwnerHours.value.trim();
   const minutesValue = ui.manage.extendOwnerMinutes.value.trim();
   if (hoursValue === "" && minutesValue === "") {
-    toast("Enter hours or minutes to extend.", true);
+    toast("Укажите часы или минуты для продления.", true);
     return;
   }
   const hours = Number(hoursValue || 0);
   const minutes = Number(minutesValue || 0);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    toast("Extension must be numeric.", true);
+    toast("Продление должно быть числом.", true);
     return;
   }
   if (hours < 0 || minutes < 0 || minutes > 59) {
-    toast("Minutes must be between 0 and 59.", true);
+    toast("Минуты должны быть от 0 до 59.", true);
     return;
   }
   if (hours === 0 && minutes === 0) {
-    toast("Enter hours or minutes to extend.", true);
+    toast("Укажите часы или минуты для продления.", true);
     return;
   }
   try {
@@ -782,54 +782,54 @@ ui.manage.extendOwner.addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({ hours, minutes }),
     });
-    toast("Owner rentals extended.");
+    toast("Аренды владельца продлены.");
     ui.manage.extendOwnerHours.value = "";
     ui.manage.extendOwnerMinutes.value = "";
     loadAll();
   } catch (error) {
-    toast(error.message || "Extend owner failed", true);
+    toast(error.message || "Не удалось продлить аренды владельца", true);
   }
 });
 
 ui.manage.release.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   try {
     await apiFetch(`/api/accounts/${selectedId}/release`, {
       method: "POST",
     });
-    toast("Account released.");
+    toast("Аккаунт освобождён.");
     loadAll();
   } catch (error) {
-    toast(error.message || "Release failed", true);
+    toast(error.message || "Не удалось освободить аккаунт", true);
   }
 });
 
 ui.manage.extend.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
   const hoursValue = ui.manage.extendHours.value.trim();
   const minutesValue = ui.manage.extendMinutes.value.trim();
   if (hoursValue === "" && minutesValue === "") {
-    toast("Enter hours or minutes to extend.", true);
+    toast("Укажите часы или минуты для продления.", true);
     return;
   }
   const hours = Number(hoursValue || 0);
   const minutes = Number(minutesValue || 0);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    toast("Extension must be numeric.", true);
+    toast("Продление должно быть числом.", true);
     return;
   }
   if (hours < 0 || minutes < 0 || minutes > 59) {
-    toast("Minutes must be between 0 and 59.", true);
+    toast("Минуты должны быть от 0 до 59.", true);
     return;
   }
   if (hours === 0 && minutes === 0) {
-    toast("Enter hours or minutes to extend.", true);
+    toast("Укажите часы или минуты для продления.", true);
     return;
   }
   try {
@@ -837,33 +837,33 @@ ui.manage.extend.addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({ hours, minutes }),
     });
-    toast("Rental extended.");
+    toast("Аренда продлена.");
     ui.manage.extendHours.value = "";
     ui.manage.extendMinutes.value = "";
     loadAll();
   } catch (error) {
-    toast(error.message || "Extend failed", true);
+    toast(error.message || "Не удалось продлить аренду", true);
   }
 });
 
 ui.manage.delete.addEventListener("click", async () => {
   if (!selectedId) {
-    toast("Select an account first.", true);
+    toast("Сначала выберите аккаунт.", true);
     return;
   }
-  if (!confirm("Delete this account group?")) {
+  if (!confirm("Удалить этот аккаунт?")) {
     return;
   }
   try {
     await apiFetch(`/api/accounts/${selectedId}`, {
       method: "DELETE",
     });
-    toast("Account deleted.");
+    toast("Аккаунт удалён.");
     selectedId = null;
     setManagePanel(null);
     loadAll();
   } catch (error) {
-    toast(error.message || "Delete failed", true);
+    toast(error.message || "Не удалось удалить аккаунт", true);
   }
 });
 
@@ -874,7 +874,7 @@ ui.auth.registerForm.addEventListener("submit", (e) => {
   const password = ui.auth.regPassword.value.trim();
   const goldenKey = ui.auth.regGoldenKey.value.trim();
   if (!username || !password || !goldenKey) {
-    toast("Fill all fields", true);
+    toast("Заполните все поля.", true);
     return;
   }
   apiFetch("/api/auth/register", {
@@ -887,9 +887,9 @@ ui.auth.registerForm.addEventListener("submit", (e) => {
       hideAuth();
       loadAll();
       startAutoRefresh();
-      toast("Registered and logged in.");
+      toast("Регистрация выполнена, вы вошли.");
     })
-    .catch((err) => toast(err.message || "Register failed", true));
+    .catch((err) => toast(err.message || "Не удалось зарегистрироваться", true));
 });
 
 ui.auth.loginForm.addEventListener("submit", (e) => {
@@ -906,9 +906,9 @@ ui.auth.loginForm.addEventListener("submit", (e) => {
       hideAuth();
       loadAll();
       startAutoRefresh();
-      toast("Logged in.");
+      toast("Вход выполнен.");
     })
-    .catch((err) => toast(err.message || "Login failed", true));
+    .catch((err) => toast(err.message || "Не удалось войти", true));
 });
 
 const init = async () => {
@@ -929,7 +929,7 @@ document.getElementById("settingsForm").addEventListener("submit", async (e) => 
   e.preventDefault();
   const key = document.getElementById("settingsGoldenKey").value.trim();
   if (!key) {
-    toast("Enter a golden key.", true);
+    toast("Введите золотой ключ.", true);
     return;
   }
   try {
@@ -937,9 +937,9 @@ document.getElementById("settingsForm").addEventListener("submit", async (e) => 
       method: "PUT",
       body: JSON.stringify({ golden_key: key }),
     });
-    toast("Golden key updated.");
+    toast("Золотой ключ обновлён.");
   } catch (error) {
-    toast(error.message || "Failed to update key", true);
+    toast(error.message || "Не удалось обновить ключ", true);
   }
 });
 
