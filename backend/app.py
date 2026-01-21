@@ -1,8 +1,9 @@
 import json
+import time
 from pathlib import Path
 from threading import Thread
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import quote
 import secrets
 
@@ -38,6 +39,9 @@ PUBLIC_DIR = BASE_DIR.parent / "Public"
 
 app = FastAPI(title="FunpaySeller")
 db = MySQLDB()
+CHAT_LIST_TTL = 5.0
+CHAT_HISTORY_TTL = 3.0
+CHAT_HISTORY_MAX = 200
 
 
 class BotManager:
@@ -76,6 +80,163 @@ class BotManager:
 
 
 bot_manager = BotManager()
+
+
+class ChatCache:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._chats: dict[int, dict[str, Any]] = {}
+        self._histories: dict[int, dict[int, dict[str, Any]]] = {}
+        self._refreshing_chats: set[int] = set()
+        self._refreshing_histories: set[tuple[int, int]] = set()
+
+    def get_cached_chats(self, user_id: int) -> tuple[list[dict] | None, float | None]:
+        with self._lock:
+            entry = self._chats.get(user_id)
+            if not entry:
+                return None, None
+            return list(entry["items"]), entry["ts"]
+
+    def get_cached_history(self, user_id: int, chat_id: int) -> tuple[list[dict] | None, float | None]:
+        with self._lock:
+            user_hist = self._histories.get(user_id)
+            if not user_hist:
+                return None, None
+            entry = user_hist.get(chat_id)
+            if not entry:
+                return None, None
+            return list(entry["items"]), entry["ts"]
+
+    def get_chat_summary(self, user_id: int, chat_id: int) -> dict | None:
+        with self._lock:
+            entry = self._chats.get(user_id)
+            if not entry:
+                return None
+            for chat in entry["items"]:
+                if chat.get("id") == chat_id:
+                    return dict(chat)
+        return None
+
+    def _set_chats(self, user_id: int, items: list[dict]) -> None:
+        with self._lock:
+            self._chats[user_id] = {"items": list(items), "ts": time.time()}
+
+    def _set_history(self, user_id: int, chat_id: int, items: list[dict]) -> None:
+        with self._lock:
+            user_hist = self._histories.setdefault(user_id, {})
+            trimmed = list(items)[-CHAT_HISTORY_MAX:]
+            user_hist[chat_id] = {"items": trimmed, "ts": time.time()}
+
+    def append_message(self, user_id: int, chat_id: int, item: dict, max_items: int = CHAT_HISTORY_MAX) -> None:
+        now = time.time()
+        with self._lock:
+            user_hist = self._histories.setdefault(user_id, {})
+            entry = user_hist.get(chat_id)
+            if not entry:
+                entry = {"items": [], "ts": now}
+                user_hist[chat_id] = entry
+            items = entry["items"]
+            items.append(item)
+            if len(items) > max_items:
+                del items[:-max_items]
+            entry["ts"] = now
+
+            chats_entry = self._chats.get(user_id)
+            if chats_entry:
+                for chat in chats_entry["items"]:
+                    if chat.get("id") == chat_id:
+                        chat["last_message_text"] = item.get("text") or ""
+                        chat["unread"] = False
+                        break
+                chats_entry["ts"] = now
+
+    def _fetch_chats(self, token: str) -> list[dict]:
+        account = FPAccount(token).get()
+        chats_map = account.get_chats(update=True)
+        items = []
+        for chat in chats_map.values():
+            items.append(
+                {
+                    "id": chat.id,
+                    "name": chat.name,
+                    "last_message_text": chat.last_message_text,
+                    "unread": chat.unread,
+                    "node_msg_id": chat.node_msg_id,
+                    "user_msg_id": chat.user_msg_id,
+                }
+            )
+        return items
+
+    def _fetch_history(self, token: str, chat_id: int) -> list[dict]:
+        account = FPAccount(token).get()
+        messages = account.get_chat_history(chat_id) or []
+        items = []
+        for message in messages:
+            items.append(
+                {
+                    "id": message.id,
+                    "text": message.text,
+                    "author": message.author,
+                    "author_id": message.author_id,
+                    "chat_id": message.chat_id,
+                    "chat_name": message.chat_name,
+                    "image_link": message.image_link,
+                    "by_bot": message.by_bot,
+                    "by_vertex": message.by_vertex,
+                    "type": message.type.name if message.type else None,
+                }
+            )
+        return items
+
+    def refresh_chats_sync(self, user_id: int, token: str) -> list[dict]:
+        items = self._fetch_chats(token)
+        self._set_chats(user_id, items)
+        return items
+
+    def refresh_history_sync(self, user_id: int, chat_id: int, token: str) -> list[dict]:
+        items = self._fetch_history(token, chat_id)
+        self._set_history(user_id, chat_id, items)
+        return items
+
+    def refresh_chats_async(self, user_id: int, token: str) -> None:
+        with self._lock:
+            if user_id in self._refreshing_chats:
+                return
+            self._refreshing_chats.add(user_id)
+
+        def runner() -> None:
+            try:
+                items = self._fetch_chats(token)
+                self._set_chats(user_id, items)
+            except Exception as exc:
+                logger.warning(f"Failed to refresh chats cache for user {user_id}: {exc}")
+            finally:
+                with self._lock:
+                    self._refreshing_chats.discard(user_id)
+
+        Thread(target=runner, daemon=True).start()
+
+    def refresh_history_async(self, user_id: int, chat_id: int, token: str) -> None:
+        key = (user_id, chat_id)
+        with self._lock:
+            if key in self._refreshing_histories:
+                return
+            self._refreshing_histories.add(key)
+
+        def runner() -> None:
+            try:
+                items = self._fetch_history(token, chat_id)
+                self._set_history(user_id, chat_id, items)
+            except Exception as exc:
+                logger.warning(f"Failed to refresh history cache for user {user_id}, chat {chat_id}: {exc}")
+            finally:
+                with self._lock:
+                    self._refreshing_histories.discard(key)
+
+        Thread(target=runner, daemon=True).start()
+
+
+chat_cache = ChatCache()
 
 app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
@@ -137,6 +298,17 @@ def require_admin(request: Request) -> None:
 def current_user_id(request: Request) -> int | None:
     user = getattr(request.state, "user", None)
     return user.get("id") if user else None
+
+
+def require_funpay_token(request: Request) -> tuple[int, str]:
+    user = getattr(request.state, "user", None) or {}
+    token = user.get("golden_key")
+    if not token:
+        raise HTTPException(status_code=503, detail="FunPay golden key not configured")
+    user_id = user.get("id")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user_id, token
 
 
 def require_funpay_account(request: Request):
@@ -583,60 +755,83 @@ def extend_owner(owner: str, payload: ExtendRequest, request: Request) -> dict:
 
 
 @app.get("/api/chats", dependencies=[Depends(require_admin)])
-def chats(account=Depends(require_funpay_account)) -> dict:
+def chats(
+    request: Request,
+    fast: bool = True,
+    refresh: bool = False,
+    max_age: float = CHAT_LIST_TTL,
+) -> dict:
+    user_id, token = require_funpay_token(request)
+    max_age = max(0.0, float(max_age))
+    cached, ts = chat_cache.get_cached_chats(user_id)
+    now = time.time()
+
+    if fast and cached is not None:
+        if refresh or ts is None or now - ts > max_age:
+            chat_cache.refresh_chats_async(user_id, token)
+        return {"items": cached}
+
     try:
-        chats_map = account.get_chats(update=True)
-        items = []
-        for chat in chats_map.values():
-            items.append(
-                {
-                    "id": chat.id,
-                    "name": chat.name,
-                    "last_message_text": chat.last_message_text,
-                    "unread": chat.unread,
-                    "node_msg_id": chat.node_msg_id,
-                    "user_msg_id": chat.user_msg_id,
-                }
-            )
+        items = chat_cache.refresh_chats_sync(user_id, token)
         return {"items": items}
     except Exception as exc:
+        if cached is not None:
+            return {"items": cached}
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/chats/{chat_id}/history", dependencies=[Depends(require_admin)])
-def chat_history(chat_id: int, limit: int = 50, account=Depends(require_funpay_account)) -> dict:
+def chat_history(
+    chat_id: int,
+    request: Request,
+    limit: int = 50,
+    fast: bool = True,
+    refresh: bool = False,
+    max_age: float = CHAT_HISTORY_TTL,
+) -> dict:
+    user_id, token = require_funpay_token(request)
+    max_age = max(0.0, float(max_age))
+    limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
+
+    cached, ts = chat_cache.get_cached_history(user_id, chat_id)
+    now = time.time()
+    if fast and cached is not None:
+        if refresh or ts is None or now - ts > max_age:
+            chat_cache.refresh_history_async(user_id, chat_id, token)
+        return {"items": cached[-limit:]}
+
     try:
-        messages = account.get_chat_history(chat_id) or []
-        trimmed = messages[-limit:]
-        items = []
-        for message in trimmed:
-            items.append(
-                {
-                    "id": message.id,
-                    "text": message.text,
-                    "author": message.author,
-                    "author_id": message.author_id,
-                    "chat_id": message.chat_id,
-                    "chat_name": message.chat_name,
-                    "image_link": message.image_link,
-                    "by_bot": message.by_bot,
-                    "by_vertex": message.by_vertex,
-                    "type": message.type.name if message.type else None,
-                }
-            )
-        return {"items": items}
+        items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+        return {"items": items[-limit:]}
     except Exception as exc:
+        if cached is not None:
+            return {"items": cached[-limit:]}
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
-def chat_send(chat_id: int, payload: ChatMessage, account=Depends(require_funpay_account)) -> dict:
+def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Message text is required")
+    user_id, token = require_funpay_token(request)
     try:
-        chat = account.get_chat_by_id(chat_id, make_request=True)
-        chat_name = chat.name if chat else None
+        account = FPAccount(token).get()
+        cached_chat = chat_cache.get_chat_summary(user_id, chat_id)
+        chat_name = cached_chat.get("name") if cached_chat else None
         message = account.send_message(chat_id, payload.text, chat_name)
+        item = {
+            "id": message.id,
+            "text": message.text,
+            "author": message.author,
+            "author_id": message.author_id,
+            "chat_id": message.chat_id,
+            "chat_name": message.chat_name,
+            "image_link": message.image_link,
+            "by_bot": message.by_bot,
+            "by_vertex": message.by_vertex,
+            "type": message.type.name if message.type else None,
+        }
+        chat_cache.append_message(user_id, chat_id, item)
         return {"status": "ok", "message_id": message.id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

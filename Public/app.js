@@ -71,6 +71,14 @@ let accountsCache = [];
 let selectedId = null;
 let chatsCache = [];
 let selectedChatId = null;
+let chatHistoryCache = new Map();
+let chatPollTimer = null;
+let chatListTimer = null;
+let chatHistoryRequestId = 0;
+
+const CHAT_HISTORY_LIMIT = 60;
+const CHAT_POLL_INTERVAL = 2000;
+const CHAT_LIST_POLL_INTERVAL = 5000;
 
 const toast = (message, isError = false) => {
   ui.toast.textContent = message;
@@ -430,7 +438,12 @@ const renderChatList = (items) => {
       ui.chats.list.querySelectorAll(".chat-item").forEach((row) => {
         row.classList.toggle("active", Number(row.dataset.id) === selectedChatId);
       });
-      loadChatHistory();
+      const cached = getCachedChatHistory(selectedChatId);
+      if (cached.length) {
+        renderChatMessages(cached);
+      }
+      loadChatHistory({ refresh: true });
+      startChatPolling();
     });
   });
 };
@@ -460,26 +473,81 @@ const renderChatMessages = (items) => {
     .join("");
 };
 
-const loadChats = async () => {
-  try {
-    const data = await apiFetch("/api/chats");
-    chatsCache = data.items || [];
-    renderChatList(chatsCache);
-  } catch (error) {
-    toast(error.message || "Не удалось загрузить чаты", true);
+const getCachedChatHistory = (chatId) => chatHistoryCache.get(chatId) || [];
+
+const setCachedChatHistory = (chatId, items) => {
+  chatHistoryCache.set(chatId, items || []);
+};
+
+const stopChatPolling = () => {
+  if (chatPollTimer) {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
   }
 };
 
-const loadChatHistory = async () => {
+const startChatPolling = () => {
+  stopChatPolling();
+  if (!selectedChatId) return;
+  chatPollTimer = setInterval(() => {
+    loadChatHistory({ refresh: true, silent: true });
+  }, CHAT_POLL_INTERVAL);
+};
+
+const startChatListPolling = () => {
+  if (chatListTimer) {
+    clearInterval(chatListTimer);
+  }
+  chatListTimer = setInterval(() => {
+    loadChats({ refresh: true, silent: true });
+  }, CHAT_LIST_POLL_INTERVAL);
+};
+
+
+const loadChats = async ({ refresh = false, silent = false } = {}) => {
+  try {
+    const params = new URLSearchParams({ fast: "1" });
+    if (refresh) {
+      params.set("refresh", "1");
+    }
+    const data = await apiFetch(`/api/chats?${params.toString()}`);
+    chatsCache = data.items || [];
+    renderChatList(chatsCache);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить чаты", true);
+    }
+  }
+};
+
+const loadChatHistory = async ({ refresh = false, silent = false } = {}) => {
   if (!selectedChatId) {
     ui.chats.messages.innerHTML = "<div class=\"notice\"><h4>Выберите чат</h4><p>Выберите чат, чтобы просмотреть сообщения.</p></div>";
     return;
   }
+  const chatId = selectedChatId;
+  const requestId = ++chatHistoryRequestId;
+  const cached = getCachedChatHistory(chatId);
+  if (cached.length) {
+    renderChatMessages(cached);
+  }
   try {
-    const data = await apiFetch(`/api/chats/${selectedChatId}/history?limit=60`);
-    renderChatMessages(data.items || []);
+    const params = new URLSearchParams({
+      fast: "1",
+      limit: String(CHAT_HISTORY_LIMIT),
+    });
+    if (refresh) {
+      params.set("refresh", "1");
+    }
+    const data = await apiFetch(`/api/chats/${chatId}/history?${params.toString()}`);
+    if (requestId !== chatHistoryRequestId || chatId !== selectedChatId) return;
+    const items = data.items || [];
+    setCachedChatHistory(chatId, items);
+    renderChatMessages(items);
   } catch (error) {
-    toast(error.message || "Не удалось загрузить историю", true);
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить историю", true);
+    }
   }
 };
 
@@ -507,8 +575,8 @@ const loadAll = async () => {
       const selected = accountsCache.find((acc) => acc.id === selectedId);
       setManagePanel(selected || null);
     }
-
-    loadChats();
+    loadChats({ refresh: true });
+    startChatListPolling();
   } catch (error) {
     toast(error.message || "Не удалось загрузить данные", true);
   }
@@ -532,8 +600,8 @@ ui.search.addEventListener("input", () => renderInventory(accountsCache));
 ui.showPasswords.addEventListener("change", () => renderInventory(accountsCache));
 
 ui.chats.search.addEventListener("input", () => renderChatList(chatsCache));
-ui.chats.refresh.addEventListener("click", () => loadChats());
-ui.chats.loadHistory.addEventListener("click", () => loadChatHistory());
+ui.chats.refresh.addEventListener("click", () => loadChats({ refresh: true }));
+ui.chats.loadHistory.addEventListener("click", () => loadChatHistory({ refresh: true }));
 
 ui.chats.form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -543,18 +611,43 @@ ui.chats.form.addEventListener("submit", async (event) => {
   }
   const text = ui.chats.input.value.trim();
   if (!text) {
-    toast("Сообщение пустое.", true);
+    toast("Введите сообщение.", true);
     return;
   }
+  const chatId = selectedChatId;
+  const optimistic = {
+    id: `local-${Date.now()}`,
+    text,
+    author: "Вы",
+    author_id: null,
+    chat_id: chatId,
+    chat_name: ui.chats.title.textContent || null,
+    image_link: null,
+    by_bot: true,
+    by_vertex: false,
+    type: null,
+  };
+  const cached = getCachedChatHistory(chatId);
+  setCachedChatHistory(chatId, [...cached, optimistic]);
+  renderChatMessages(getCachedChatHistory(chatId));
+  const chat = chatsCache.find((c) => c.id === chatId);
+  if (chat) {
+    chat.last_message_text = text;
+    chat.unread = false;
+    renderChatList(chatsCache);
+  }
+  ui.chats.input.value = "";
   try {
-    await apiFetch(`/api/chats/${selectedChatId}/send`, {
+    await apiFetch(`/api/chats/${chatId}/send`, {
       method: "POST",
       body: JSON.stringify({ text }),
     });
-    ui.chats.input.value = "";
     toast("Сообщение отправлено.");
-    loadChatHistory();
+    loadChatHistory({ refresh: true, silent: true });
   } catch (error) {
+    const rollback = getCachedChatHistory(chatId).filter((msg) => msg.id !== optimistic.id);
+    setCachedChatHistory(chatId, rollback);
+    renderChatMessages(rollback);
     toast(error.message || "Не удалось отправить сообщение", true);
   }
 });
