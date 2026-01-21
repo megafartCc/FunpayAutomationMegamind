@@ -2,15 +2,8 @@ import secrets
 import bcrypt
 from datetime import datetime, timedelta
 
-from config import (
-    DATABASE_ENGINE,
-    MYSQLDATABASE,
-    MYSQLHOST,
-    MYSQLPASSWORD,
-    MYSQLPORT,
-    MYSQLUSER,
-)
-from logger import logger
+from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.logger import logger
 
 import mysql.connector as mysql_connector
 
@@ -55,9 +48,8 @@ class _CursorWrapper:
                 self._connection.close()
 
 
-class SQLiteDB:
-    def __init__(self, db_name=None):
-        self.db_name = None
+class MySQLDB:
+    def __init__(self):
         self.db_type = "mysql"
         self.conn = _NoopConnection()
         self.create_table()
@@ -95,8 +87,7 @@ class SQLiteDB:
                 use_pure=True,
             )
             return conn, _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
-        conn = sqlite3.connect(self.db_name, check_same_thread=False)
-        return conn, conn.cursor()
+        raise RuntimeError("SQLite is not supported. Configure MySQL instead.")
 
     def create_table(self):
         """Create the 'accounts' table if it does not exist."""
@@ -814,16 +805,28 @@ class SQLiteDB:
             for row in rows
         ]
 
-    def get_all_lot_accounts(self) -> list:
+    def get_all_lot_accounts(self, user_id: int | None = None) -> list:
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            ORDER BY l.lot_number
-            """
-        )
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                ORDER BY l.lot_number
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.user_id = ?
+                ORDER BY l.lot_number
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
             cursor.close()

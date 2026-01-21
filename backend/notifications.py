@@ -1,16 +1,8 @@
-import sqlite3
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from config import (
-    DATABASE_ENGINE,
-    MYSQLDATABASE,
-    MYSQLHOST,
-    MYSQLPASSWORD,
-    MYSQLPORT,
-    MYSQLUSER,
-)
-from logger import logger
+from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.logger import logger
 
 try:
     import mysql.connector as mysql_connector
@@ -19,50 +11,33 @@ except Exception:
 
 
 def _get_conn():
-    if DATABASE_ENGINE == "mysql":
-        if mysql_connector is None:
-            raise RuntimeError("mysql-connector-python is required for MySQL support.")
-        return mysql_connector.connect(
-            host=MYSQLHOST,
-            port=MYSQLPORT,
-            user=MYSQLUSER,
-            password=MYSQLPASSWORD,
-            database=MYSQLDATABASE,
-            autocommit=True,
-            use_pure=True,
-        )
-    # fallback to in-memory sqlite if misconfigured
-    return sqlite3.connect(":memory:")
+    if mysql_connector is None:
+        raise RuntimeError("mysql-connector-python is required for MySQL support.")
+    return mysql_connector.connect(
+        host=MYSQLHOST,
+        port=MYSQLPORT,
+        user=MYSQLUSER,
+        password=MYSQLPASSWORD,
+        database=MYSQLDATABASE,
+        autocommit=True,
+        use_pure=True,
+    )
 
 
 def _ensure_table(conn) -> None:
     cursor = conn.cursor()
-    if DATABASE_ENGINE == "mysql":
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notifications (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                level VARCHAR(32) NOT NULL,
-                message TEXT NOT NULL,
-                owner VARCHAR(255) DEFAULT NULL,
-                account_id INT DEFAULT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
-    else:
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                level TEXT NOT NULL,
-                message TEXT NOT NULL,
-                owner TEXT DEFAULT NULL,
-                account_id INTEGER DEFAULT NULL
-            )
-            """
-        )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            level VARCHAR(32) NOT NULL,
+            message TEXT NOT NULL,
+            owner VARCHAR(255) DEFAULT NULL,
+            account_id INT DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
     conn.commit()
     cursor.close()
 
@@ -78,9 +53,7 @@ def send_message_to_admin(
         conn = _get_conn()
         _ensure_table(conn)
         cursor = conn.cursor()
-        placeholders = (
-            "%s, %s, %s, %s, %s" if DATABASE_ENGINE == "mysql" else "?, ?, ?, ?, ?"
-        )
+        placeholders = "%s, %s, %s, %s, %s"
         cursor.execute(
             f"""
             INSERT INTO notifications (created_at, level, message, owner, account_id)
@@ -100,7 +73,7 @@ def list_notifications(limit: int = 50) -> List[Dict]:
         conn = _get_conn()
         _ensure_table(conn)
         cursor = conn.cursor()
-        limit_placeholder = "%s" if DATABASE_ENGINE == "mysql" else "?"
+        limit_placeholder = "%s"
         cursor.execute(
             f"""
             SELECT id, created_at, level, message, owner, account_id

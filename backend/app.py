@@ -11,15 +11,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from config import (
-    ADMIN_API_KEY,
-    DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
-    STEAM_BRIDGE_URL,
-)
-from DatabaseHandler.databaseSetup import SQLiteDB
+from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL
+from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
-from logger import logger
-from notifications import list_notifications
+from backend.logger import logger
+from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
@@ -29,10 +25,10 @@ from FunpayHandler.bot import FunpayBot
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR / "Public"
+PUBLIC_DIR = BASE_DIR.parent / "Public"
 
 app = FastAPI(title="FunpaySeller")
-db = SQLiteDB()
+db = MySQLDB()
 
 
 class BotManager:
@@ -48,7 +44,7 @@ class BotManager:
             if existing and existing.get("key") == golden_key and existing.get("thread") and existing["thread"].is_alive():
                 return
             try:
-                bot = FunpayBot(token=golden_key, db=db)
+                bot = FunpayBot(token=golden_key, db=db, user_id=user_id)
                 thread = Thread(target=bot.start, daemon=True)
                 thread.start()
                 self._bots[user_id] = {"bot": bot, "key": golden_key, "thread": thread}
@@ -116,12 +112,6 @@ def require_admin(request: Request) -> None:
             if user:
                 request.state.user = user
                 return
-    # fallback to legacy admin key
-    if ADMIN_API_KEY:
-        key = request.headers.get("x-admin-key")
-        if key == ADMIN_API_KEY:
-            request.state.user = {"id": 0, "username": "admin"}
-            return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -132,7 +122,7 @@ def current_user_id(request: Request) -> int | None:
 
 def require_funpay_account(request: Request):
     user = getattr(request.state, "user", None)
-    token = (user or {}).get("golden_key") or FUNPAY_GOLDEN_KEY
+    token = (user or {}).get("golden_key")
     if not token:
         raise HTTPException(status_code=503, detail="FunPay golden key not configured")
     try:
@@ -271,14 +261,42 @@ def notifications(limit: int = 50) -> dict:
 
 def _presence_for_steamid(steamid64: int | None) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
-        return {"in_game": False, "in_match": False, "lobby_info": ""}
+        return {
+            "in_game": False,
+            "in_match": False,
+            "lobby_info": "",
+            "hero_name": None,
+            "hero_token": None,
+            "presence_label": "Оффлайн",
+        }
     bridge_presence = _fetch_bridge_presence(steamid64)
     if not bridge_presence:
-        return {"in_game": False, "in_match": False, "lobby_info": ""}
+        return {
+            "in_game": False,
+            "in_match": False,
+            "lobby_info": "",
+            "hero_name": None,
+            "hero_token": None,
+            "presence_label": "Оффлайн",
+        }
+    in_match = bool(bridge_presence.get("in_match"))
+    in_game = bool(bridge_presence.get("in_game"))
+    hero_name = bridge_presence.get("hero_name") or None
+    if in_match and hero_name:
+        presence_label = f"В матче ({hero_name})"
+    elif in_match:
+        presence_label = "В матче"
+    elif in_game:
+        presence_label = "В игре"
+    else:
+        presence_label = "Оффлайн"
     return {
         "in_game": bool(bridge_presence.get("in_game")),
         "in_match": bool(bridge_presence.get("in_match")),
         "lobby_info": bridge_presence.get("lobby_info") or "",
+        "hero_name": hero_name,
+        "hero_token": bridge_presence.get("hero_token") or None,
+        "presence_label": presence_label,
     }
 
 

@@ -9,7 +9,7 @@ from lxml.html import document_fromstring
 from yarl import URL
 
 from SteamHandler.steampassword.steam import CustomSteam
-from logger import logger
+from backend.logger import logger
 
 try:  # Optional dependency (more reliable than parsing HTML).
     from playwright.async_api import async_playwright
