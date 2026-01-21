@@ -141,11 +141,11 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = time.time()
 
-        with type(self)._expiration_thread_lock:
-            if not type(self)._expiration_thread_started:
+        with self._expiration_thread_lock:
+            if not self._expiration_thread_started:
                 thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
                 thread.start()
-                type(self)._expiration_thread_started = True
+                self._expiration_thread_started = True
                 logger.info("Rental expiration checker started.")
 
         if self._runner is None:
