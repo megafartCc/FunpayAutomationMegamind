@@ -1,27 +1,36 @@
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPOOLSIZE, MYSQLPORT, MYSQLUSER
 from backend.logger import logger
 
 try:
     import mysql.connector as mysql_connector
+    from mysql.connector.pooling import MySQLConnectionPool
 except Exception:
     mysql_connector = None
+
+
+_POOL = None
 
 
 def _get_conn():
     if mysql_connector is None:
         raise RuntimeError("mysql-connector-python is required for MySQL support.")
-    return mysql_connector.connect(
-        host=MYSQLHOST,
-        port=MYSQLPORT,
-        user=MYSQLUSER,
-        password=MYSQLPASSWORD,
-        database=MYSQLDATABASE,
-        autocommit=True,
-        use_pure=True,
-    )
+    global _POOL
+    if _POOL is None:
+        _POOL = MySQLConnectionPool(
+            pool_name="funpay_notifications",
+            pool_size=MYSQLPOOLSIZE,
+            host=MYSQLHOST,
+            port=MYSQLPORT,
+            user=MYSQLUSER,
+            password=MYSQLPASSWORD,
+            database=MYSQLDATABASE,
+        )
+    conn = _POOL.get_connection()
+    conn.autocommit = True
+    return conn
 
 
 def _ensure_table(conn) -> None:
