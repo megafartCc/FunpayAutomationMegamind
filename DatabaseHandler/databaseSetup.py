@@ -2,15 +2,8 @@ import secrets
 import bcrypt
 from datetime import datetime, timedelta
 
-from config import (
-    DATABASE_ENGINE,
-    MYSQLDATABASE,
-    MYSQLHOST,
-    MYSQLPASSWORD,
-    MYSQLPORT,
-    MYSQLUSER,
-)
-from logger import logger
+from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.logger import logger
 
 import mysql.connector as mysql_connector
 
@@ -55,9 +48,8 @@ class _CursorWrapper:
                 self._connection.close()
 
 
-class SQLiteDB:
-    def __init__(self, db_name=None):
-        self.db_name = None
+class MySQLDB:
+    def __init__(self):
         self.db_type = "mysql"
         self.conn = _NoopConnection()
         self.create_table()
@@ -78,7 +70,7 @@ class SQLiteDB:
                 autocommit=True,
                 use_pure=True,
             )
-            return _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
+            return _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
         return self.conn.cursor()
 
     def open_connection(self):
@@ -94,9 +86,8 @@ class SQLiteDB:
                 autocommit=True,
                 use_pure=True,
             )
-            return conn, _CursorWrapper(conn.cursor(), self._format_sql, connection=conn)
-        conn = sqlite3.connect(self.db_name, check_same_thread=False)
-        return conn, conn.cursor()
+            return conn, _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
+        raise RuntimeError("SQLite is not supported. Configure MySQL instead.")
 
     def create_table(self):
         """Create the 'accounts' table if it does not exist."""

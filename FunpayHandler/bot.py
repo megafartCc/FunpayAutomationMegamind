@@ -10,16 +10,15 @@ from typing import Any
 
 from FunPayAPI import Account, Runner, events, types
 
-from config import (
+from backend.config import (
     AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
-    FUNPAY_GOLDEN_KEY,
     RENTAL_CHECK_INTERVAL,
 )
-from DatabaseHandler.databaseSetup import SQLiteDB
-from logger import logger
-from notifications import send_message_to_admin
+from DatabaseHandler.databaseSetup import MySQLDB
+from backend.logger import logger
+from backend.notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -50,6 +49,10 @@ class PendingLotExtend:
 
 class FunpayBot:
     def __init__(
+        self, token: str | None = None, db: MySQLDB | None = None, user_id: int | None = None
+    ) -> None:
+        self._token = token
+        self._db = db or MySQLDB()
         self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None, user_id: int | None = None
     ) -> None:
         self._token = token
@@ -131,7 +134,7 @@ class FunpayBot:
     def start(self) -> None:
         logger.info("Starting FunPay bot...")
         if not self._token:
-            logger.error("FUNPAY_GOLDEN_KEY is missing. FunPay automation stopped.")
+            logger.error("FunPay golden key is missing. FunPay automation stopped.")
             return
 
         self.refresh_session()
@@ -164,6 +167,9 @@ class FunpayBot:
             logger.error("FunPay session not initialized; cannot send message.")
             return
         chat = self._acc.get_chat_by_name(owner, True)
+        if not chat or not getattr(chat, "id", None):
+            logger.warning(f"FunPay chat not found for {owner}; cannot send message.")
+            return
         self._acc.send_message(chat.id, message)
 
     def _tick_refresh_if_needed(self) -> None:
