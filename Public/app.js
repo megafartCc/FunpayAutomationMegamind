@@ -221,6 +221,20 @@ const presenceLabel = (item) => {
   return "Offline";
 };
 
+const ensureActiveStatusHeader = () => {
+  const tbody = ui.activeTable;
+  if (!tbody) return;
+  const table = tbody.closest("table");
+  const row = table?.querySelector("thead tr");
+  if (!row) return;
+  const headers = Array.from(row.querySelectorAll("th"));
+  if (headers.some((th) => th.dataset.key === "status")) return;
+  const statusTh = document.createElement("th");
+  statusTh.textContent = "Status";
+  statusTh.dataset.key = "status";
+  row.appendChild(statusTh);
+};
+
 const ensureActiveRentalsHeader = () => {
   const tbody = ui.activeTable;
   if (!tbody) return;
@@ -278,13 +292,6 @@ const renderInventory = (items) => {
   }
 
   const showPasswords = ui.showPasswords.checked;
-  const presenceLabel = (item) => {
-    if (item.presence_state === "in_game" || item.presence_in_match) return "In game";
-    if (item.presence_state === "not_in_game") return "Not in game";
-    if (item.presence_state === "offline") return "Offline";
-    if (item.presence_display) return item.presence_display;
-    return "—";
-  };
 
   ui.inventoryTable.innerHTML = filtered
     .map(
@@ -490,6 +497,16 @@ const loadAll = async () => {
 ui.refreshAll.addEventListener("click", () => {
   loadAll();
 });
+
+let autoRefresh = null;
+const startAutoRefresh = () => {
+  if (autoRefresh) clearInterval(autoRefresh);
+  autoRefresh = setInterval(() => {
+    if (getAdminKey()) {
+      loadAll().catch(() => {});
+    }
+  }, 30000);
+};
 
 ui.search.addEventListener("input", () => renderInventory(accountsCache));
 ui.showPasswords.addEventListener("change", () => renderInventory(accountsCache));
@@ -788,6 +805,7 @@ ui.auth.registerForm.addEventListener("submit", (e) => {
       sessionStorage.setItem("adminUser", data.username);
       hideAuth();
       loadAll();
+      startAutoRefresh();
       toast("Registered and logged in.");
     })
     .catch((err) => toast(err.message || "Register failed", true));
@@ -806,6 +824,7 @@ ui.auth.loginForm.addEventListener("submit", (e) => {
       sessionStorage.setItem("adminUser", data.username);
       hideAuth();
       loadAll();
+      startAutoRefresh();
       toast("Logged in.");
     })
     .catch((err) => toast(err.message || "Login failed", true));
@@ -819,6 +838,7 @@ const init = async () => {
   }
   hideAuth();
   loadAll();
+  startAutoRefresh();
 };
 
 init();
