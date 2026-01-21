@@ -66,8 +66,8 @@ class FunpayBot:
         self._db = db or SQLiteDB()
         self._user_id = user_id
 
-        self._acc: Account | None = None
-        self._runner: Runner | None = None
+        self._acc: Optional[Account] = None
+        self._runner: Optional[Runner] = None
 
         self._pending_account_choice: dict[str, list[dict]] = {}
         self._pending_lot_extend: dict[str, PendingLotExtend] = {}
