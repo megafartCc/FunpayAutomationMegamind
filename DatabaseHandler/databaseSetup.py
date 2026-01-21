@@ -556,14 +556,14 @@ class SQLiteDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 """
             )
         else:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 WHERE user_id = ?
                 """,
@@ -582,6 +582,7 @@ class SQLiteDB:
                 "owner": row[6],
                 "rental_start": row[7],
                 "user_id": row[8] if len(row) > 8 else None,
+                "mafile_json": row[9] if len(row) > 9 else None,
             }
             for row in rows
         ]
@@ -1232,7 +1233,8 @@ class SQLiteDB:
                         rental_start,
                         rental_duration,
                         path_to_maFile,
-                        login
+                        login,
+                        mafile_json
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
@@ -1250,7 +1252,8 @@ class SQLiteDB:
                         rental_start,
                         rental_duration,
                         path_to_maFile,
-                        login
+                        login,
+                        mafile_json
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
@@ -1270,6 +1273,7 @@ class SQLiteDB:
                     "rental_duration": row[4],
                     "path_to_maFile": row[5],
                     "login": row[6],
+                    "mafile_json": row[7],
                 }
                 for row in rows
             ]

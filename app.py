@@ -22,7 +22,6 @@ from logger import logger
 from notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
-from SteamHandler.web_presence import fetch_web_presence
 from SteamHandler.presence_bot import get_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
@@ -266,25 +265,17 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
-async def _presence_for_account(account: dict) -> dict:
-    steamid64 = _steamid64_from_mafile(account.get("mafile_json"))
-    if steamid64 is None:
-        return {"presence_state": "offline", "presence_display": ""}
-    # Prefer node bridge if configured
-    bridge_presence = _fetch_bridge_presence(steamid64) if STEAM_BRIDGE_URL else {}
-    if bridge_presence:
-        in_game = bool(bridge_presence.get("in_game"))
-        in_match = bool(bridge_presence.get("in_match") or bridge_presence.get("presence_in_match"))
-        lobby_info = bridge_presence.get("lobby_info") or ""
-        return {
-            "presence_state": "in_game" if in_game else "offline",
-            "presence_display": lobby_info,
-            "presence_in_match": in_match,
-            "in_game": in_game,
-            "in_match": in_match,
-            "lobby_info": lobby_info,
-        }
-    return {"presence_state": "offline", "presence_display": ""}
+def _presence_for_steamid(steamid64: int | None) -> dict:
+    if not steamid64 or not STEAM_BRIDGE_URL:
+        return {"in_game": False, "in_match": False, "lobby_info": ""}
+    bridge_presence = _fetch_bridge_presence(steamid64)
+    if not bridge_presence:
+        return {"in_game": False, "in_match": False, "lobby_info": ""}
+    return {
+        "in_game": bool(bridge_presence.get("in_game")),
+        "in_match": bool(bridge_presence.get("in_match")),
+        "lobby_info": bridge_presence.get("lobby_info") or "",
+    }
 
 
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
@@ -295,10 +286,9 @@ async def accounts(request: Request) -> dict:
         return {"items": items}
 
     for acc in items:
-        try:
-            acc.update(await _presence_for_account(acc))
-        except Exception:
-            continue
+        steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+        acc["steamid"] = steamid64
+        acc.pop("mafile_json", None)
     return {"items": items}
 
 
@@ -479,11 +469,19 @@ def active_rentals(request: Request) -> dict:
     try:
         account = require_funpay_account(request)
     except HTTPException:
-        return {"items": items}
+        account = None
 
     for item in items:
+        mafile_json = item.get("mafile_json")
+        steamid64 = _steamid64_from_mafile(mafile_json)
+        item["steamid"] = steamid64
+        item.update(_presence_for_steamid(steamid64))
+        item.pop("mafile_json", None)
         owner = item.get("owner")
         if not owner:
+            item["chat_url"] = None
+            continue
+        if account is None:
             item["chat_url"] = None
             continue
         try:

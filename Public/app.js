@@ -215,10 +215,19 @@ const renderHealth = (status) => {
   }
 };
 
+const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
+
 const presenceLabel = (item) => {
-  if (item.in_match || item.presence_in_match) return "In match";
-  if (item.in_game || item.presence_state === "in_game") return "In game";
+  if (item?.in_match) return "In match";
+  if (item?.in_game) return "In game";
   return "Offline";
+};
+
+const presenceLink = (item) => {
+  const label = presenceLabel(item);
+  if (!item?.steamid) return label;
+  const url = `${PRESENCE_BASE_URL}/${item.steamid}`;
+  return `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`;
 };
 
 const ensureActiveStatusHeader = () => {
@@ -271,7 +280,7 @@ const renderActiveRentals = (items) => {
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, item.rental_duration)}</td>
           <td>${item.rental_duration}</td>
-          <td>${presenceLabel(item)}</td>
+          <td>${presenceLink(item)}</td>
         </tr>
       `
     )
@@ -303,7 +312,7 @@ const renderInventory = (items) => {
           <td>${showPasswords ? item.password : "******"}</td>
           <td>${item.owner || "-"}</td>
           <td>${item.rental_duration}</td>
-          <td>${presenceLabel(item)}</td>
+          <td>${item.steamid || "-"}</td>
         </tr>
       `
     )
