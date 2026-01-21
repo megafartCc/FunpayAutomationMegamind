@@ -113,6 +113,34 @@ function isInDotaMatchRaw(raw) {
   return false;
 }
 
+function toHeroDisplay(token) {
+  if (!token) return "";
+  const normalized = token.startsWith("#") ? token.slice(1) : token;
+  if (!normalized.startsWith("npc_dota_hero_")) return normalized;
+  const name = normalized.replace("npc_dota_hero_", "").replace(/_/g, " ");
+  return name.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function extractHeroToken(rp, rpRaw) {
+  const candidates = [
+    rp?.param2,
+    rp?.hero,
+    rp?.hero_name,
+    rp?.heroname,
+    rp?.npc_dota_hero,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  if (Array.isArray(rpRaw)) {
+    const entry = rpRaw.find((e) => (e.key || "").toLowerCase() === "param2");
+    if (entry && typeof entry.value === "string" && entry.value.trim()) {
+      return entry.value.trim();
+    }
+  }
+  return "";
+}
+
 function logOn() {
   if (!STEAM_BRIDGE_USERNAME || !STEAM_BRIDGE_PASSWORD) {
     console.error("[bridge] Missing STEAM_BRIDGE_USERNAME/STEAM_BRIDGE_PASSWORD");
@@ -155,13 +183,16 @@ app.get("/presence/:steamid", (req, res) => {
   );
   const in_match = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
   const in_game = !!(data.in_game || data.appid || lobbyRaw || statusHit);
+  const heroToken = extractHeroToken(rp, rpRaw);
+  const heroName = toHeroDisplay(heroToken);
   res.json({
     in_game,
     in_match,
     lobby_info: lobbyRaw || "",
+    hero_token: heroToken || null,
+    hero_name: heroName || null,
   });
 });
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`[bridge] listening on ${port}`));
-

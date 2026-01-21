@@ -1,4 +1,3 @@
-from .databaseSetup import SQLiteDB
+from .databaseSetup import MySQLDB
 
-__all__ = ["SQLiteDB"]
-
+__all__ = ["MySQLDB"]

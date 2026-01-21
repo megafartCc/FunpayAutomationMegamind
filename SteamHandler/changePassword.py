@@ -8,7 +8,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from logger import logger
+from backend.logger import logger
 from steampassword.chpassword import SteamPasswordChange
 from steampassword.steam import CustomSteam
 

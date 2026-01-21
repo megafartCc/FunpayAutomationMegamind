@@ -6,20 +6,19 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 from FunPayAPI import Account, Runner, events, types
 
-from config import (
+from backend.config import (
     AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
-    FUNPAY_GOLDEN_KEY,
     RENTAL_CHECK_INTERVAL,
 )
-from DatabaseHandler.databaseSetup import SQLiteDB
-from logger import logger
-from notifications import send_message_to_admin
+from DatabaseHandler.databaseSetup import MySQLDB
+from backend.logger import logger
+from backend.notifications import send_message_to_admin
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -49,12 +48,18 @@ class PendingLotExtend:
 
 
 class FunpayBot:
-    def __init__(self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None) -> None:
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        db: Optional[MySQLDB] = None,
+        user_id: Optional[int] = None,
+    ) -> None:
         self._token = token
-        self._db = db or SQLiteDB()
+        self._db = db or MySQLDB()
+        self._user_id = user_id
 
-        self._acc: Account | None = None
-        self._runner: Runner | None = None
+        self._acc: Optional[Account] = None
+        self._runner: Optional[Runner] = None
 
         self._pending_account_choice: dict[str, list[dict]] = {}
         self._pending_lot_extend: dict[str, PendingLotExtend] = {}
@@ -128,7 +133,7 @@ class FunpayBot:
     def start(self) -> None:
         logger.info("Starting FunPay bot...")
         if not self._token:
-            logger.error("FUNPAY_GOLDEN_KEY is missing. FunPay automation stopped.")
+            logger.error("FunPay golden key is missing. FunPay automation stopped.")
             return
 
         self.refresh_session()
@@ -161,6 +166,9 @@ class FunpayBot:
             logger.error("FunPay session not initialized; cannot send message.")
             return
         chat = self._acc.get_chat_by_name(owner, True)
+        if not chat or not getattr(chat, "id", None):
+            logger.warning(f"FunPay chat not found for {owner}; cannot send message.")
+            return
         self._acc.send_message(chat.id, message)
 
     def _tick_refresh_if_needed(self) -> None:
@@ -423,7 +431,7 @@ class FunpayBot:
                 f"Логин: {rental['login']}\n"
                 f"Пароль: {rental['password']}\n"
                 f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                "Команды: !акк, !код",
+                "Команды: !акк, !код, !сток, !продлить, !отмена",
             )
 
         send_message_to_admin(
@@ -469,7 +477,9 @@ class FunpayBot:
             "Команды:\n"
             "!акк — данные аккаунта\n"
             "!код — код Steam Guard\n"
-            "!сток — наличие\n\n"
+            "!сток — наличие\n"
+            "!продлить <часы> <номер_лота> — продлить аренду\n"
+            "!отмена <ID> — отменить аренду\n\n"
             "Если нужна помощь — напишите в чат.",
         )
 
@@ -658,7 +668,7 @@ class FunpayBot:
 
     def _handle_stock(self, acc: Account, chat_id: int) -> None:
         try:
-            available_lots = self._db.get_available_lot_accounts()
+            available_lots = self._db.get_available_lot_accounts(self._user_id)
             if available_lots:
                 lines = [USER.stock_title]
                 for account in available_lots:
@@ -671,7 +681,7 @@ class FunpayBot:
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
-            all_lots = self._db.get_all_lot_accounts()
+            all_lots = self._db.get_all_lot_accounts(self._user_id)
             if not all_lots:
                 acc.send_message(chat_id, USER.stock_no_lots_configured)
                 return
@@ -849,12 +859,9 @@ class FunpayBot:
                     self._expire_warning_sent.pop(account_id, None)
 
                 sent = self._expire_warning_sent.setdefault(account_id, set())
-                if 5 < minutes_remaining <= 10 and 10 not in sent:
+                if 0 < minutes_remaining <= 10 and 10 not in sent:
                     self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
                     sent.add(10)
-                if 0 < minutes_remaining <= 5 and 5 not in sent:
-                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 5)
-                    sent.add(5)
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
                     steam_login = login or account_name
@@ -993,13 +1000,17 @@ class FunpayBot:
             )
             self.send_message_by_owner(
                 owner,
-                f"Внимание! Ваша аренда скоро закончится (~{reminder_minutes} минут).\n\n"
+                f"Внимание! Ваша аренда скоро закончится через {reminder_minutes} минут.\n\n"
                 f"ID аккаунта: {account_id}\n"
                 f"Осталось: ~{remaining_minutes} мин\n"
-                "Если нужно продление — напишите в чат на FunPay.\n\n"
+                "Если нужно продление — используйте команду:\n"
+                "!продлить <часы> <номер_лота>\n\n"
                 "Команды:\n"
                 "!акк — данные аккаунта\n"
-                "!код — код Steam Guard\n\n"
+                "!код — код Steam Guard\n"
+                "!сток — наличие\n"
+                "!продлить <часы> <номер_лота> — продлить аренду\n"
+                "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
         except Exception as exc:
