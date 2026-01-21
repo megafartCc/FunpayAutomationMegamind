@@ -69,6 +69,24 @@ class FunpayBot:
         self._expire_warning_sent: dict[int, set[int]] = {}
         self._expire_warning_start: dict[int, str] = {}
 
+    def _has_feedback_in_chat(self, owner: str) -> bool:
+        if self._acc is None:
+            return False
+        chat = self._acc.get_chat_by_name(owner, True)
+        messages = getattr(chat, "messages", None) or []
+        for message in reversed(messages):
+            if getattr(message, "author_id", None) != 0:
+                continue
+            initiator = getattr(message, "initiator_username", None)
+            if initiator and initiator != owner:
+                continue
+            msg_type = getattr(message, "type", None)
+            if msg_type in (types.MessageTypes.NEW_FEEDBACK, types.MessageTypes.FEEDBACK_CHANGED):
+                return True
+            if msg_type is types.MessageTypes.FEEDBACK_DELETED:
+                return False
+        return False
+
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
         if base_minutes <= 0:
@@ -608,11 +626,14 @@ class FunpayBot:
                 acc.send_message(chat_id, USER.bonus_already_given)
                 return
             if owner not in self._bonus_eligible:
-                acc.send_message(
-                    chat_id,
-                    f"Оставьте отзыв и напишите !bonus, чтобы добавить +{HOURS_FOR_REVIEW} ч к вашей аренде как бонус.",
-                )
-                return
+                if self._has_feedback_in_chat(owner):
+                    self._bonus_eligible.add(owner)
+                else:
+                    acc.send_message(
+                        chat_id,
+                        f"Оставьте отзыв и напишите !bonus, чтобы добавить +{HOURS_FOR_REVIEW} ч к вашей аренде как бонус.",
+                    )
+                    return
 
             accounts = self._db.get_user_active_accounts(owner)
             if not accounts:
