@@ -15,7 +15,7 @@ from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
 from backend.logger import logger
-from backend import notifications
+from backend.notifications import close_pool as close_notifications_pool
 from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -80,9 +80,7 @@ def shutdown_services() -> None:
         db.close_pool()
     except Exception as exc:
         logger.warning(f"Failed to close DB pool: {exc}")
-    close_pool = getattr(notifications, "close_pool", None)
-    if callable(close_pool):
-        close_pool()
+    close_notifications_pool()
 
 
 def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
