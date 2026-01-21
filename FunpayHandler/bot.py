@@ -37,6 +37,7 @@ from .utils import (
 
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
+RENTAL_IDLE_REFRESH_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ class FunpayBot:
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: Dict[int, set[int]] = {}
         self._expire_warning_start: Dict[int, str] = {}
+        self._next_rental_db_refresh_ts = 0.0
+        self._next_rental_event_time: Optional[datetime] = None
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -821,6 +824,20 @@ class FunpayBot:
                 time.sleep(backoff_seconds)
 
     def _check_rental_expiration_once(self, invalid_accs: list[int]) -> Optional[float]:
+        now_ts = time.time()
+        if now_ts < self._next_rental_db_refresh_ts:
+            if self._next_rental_event_time is None:
+                return float(RENTAL_IDLE_REFRESH_SECONDS)
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            if self._next_rental_event_time <= current_time:
+                return 1.0
+            return min(
+                float(RENTAL_IDLE_REFRESH_SECONDS),
+                (self._next_rental_event_time - current_time).total_seconds(),
+            )
+
+
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> Optional[float]:
         try:
             conn, cursor = self._db.open_connection()
         except Exception as exc:
@@ -832,6 +849,7 @@ class FunpayBot:
             conn, cursor = self._db.open_connection()
         except Exception as exc:
             logger.error(f"Error in rental expiration checker: {exc}")
+            return None
             return
 
         try:
@@ -847,6 +865,10 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
+
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        next_event_time: Optional[datetime] = None
+        expired_accounts: list[dict[str, Any]] = []
             
         current_time = datetime.now(tz=MOSCOW_TZ)
         for row in accounts_data:
@@ -885,6 +907,11 @@ class FunpayBot:
                 self._expire_warning_sent.pop(account_id, None)
 
             sent = self._expire_warning_sent.setdefault(account_id, set())
+            warning_time = expiry_time - timedelta(minutes=10)
+            if minutes_remaining > 10 and 10 not in sent:
+                next_event_time = warning_time if next_event_time is None else min(next_event_time, warning_time)
+            else:
+                next_event_time = expiry_time if next_event_time is None else min(next_event_time, expiry_time)
             if 0 < minutes_remaining <= 10 and 10 not in sent:
                 self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
                 sent.add(10)
@@ -898,6 +925,55 @@ class FunpayBot:
                     mafile_json=mafile_json,
                 ):
                     continue
+                expired_accounts.append(
+                    {
+                        "account_id": account_id,
+                        "owner": owner,
+                        "mafile_json": mafile_json,
+                        "password": password,
+                        "steam_login": login or account_name,
+                        "expiry_time": expiry_time,
+                    }
+                )
+                next_event_time = current_time
+
+        accounts_to_clear: list[dict[str, Any]] = []
+        for account in expired_accounts:
+            if account["account_id"] in invalid_accs:
+                continue
+            should_clear = self._expire_rental(
+                owner=account["owner"],
+                account_id=account["account_id"],
+                mafile_json=account["mafile_json"],
+                password=account["password"],
+                steam_login=account["steam_login"],
+                expiry_time=account["expiry_time"],
+            )
+            if should_clear:
+                accounts_to_clear.append(account)
+
+        if accounts_to_clear:
+            self._clear_expired_rental_states(accounts_to_clear, invalid_accs)
+
+        if not accounts_data:
+            self._next_rental_event_time = None
+            self._next_rental_db_refresh_ts = time.time() + max(
+                float(RENTAL_CHECK_INTERVAL),
+                float(RENTAL_IDLE_REFRESH_SECONDS),
+            )
+            return float(RENTAL_IDLE_REFRESH_SECONDS)
+        if next_event_time is None:
+            self._next_rental_event_time = None
+            self._next_rental_db_refresh_ts = time.time() + float(RENTAL_CHECK_INTERVAL)
+            return float(RENTAL_CHECK_INTERVAL)
+        if next_event_time <= current_time:
+            self._next_rental_event_time = next_event_time
+            self._next_rental_db_refresh_ts = time.time()
+            return 1.0
+        delay_seconds = min(float(RENTAL_CHECK_INTERVAL), (next_event_time - current_time).total_seconds())
+        self._next_rental_event_time = next_event_time
+        self._next_rental_db_refresh_ts = time.time() + delay_seconds
+        return delay_seconds
                 self._expire_rental(
                     invalid_accs=invalid_accs,
                     owner=owner,
@@ -1034,6 +1110,15 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to send warning notification: {exc}")
 
+    def _clear_expired_rental_states(self, accounts: list[dict[str, Any]], invalid_accs: list[int]) -> None:
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Failed to clear expired rental state: {exc}")
+            invalid_accs.extend([account["account_id"] for account in accounts])
+            return
+        try:
+            cursor.executemany(
     def _clear_expired_rental_state(self, account_id: int) -> None:
         conn, cursor = self._db.open_connection()
         try:
@@ -1043,6 +1128,12 @@ class FunpayBot:
                 SET owner = NULL, rental_start = NULL, rental_duration = 1, rental_duration_minutes = 60
                 WHERE ID = ?
                 """,
+                [(account["account_id"],) for account in accounts],
+            )
+            conn.commit()
+        except Exception as exc:
+            logger.error(f"Failed to clear expired rental state: {exc}")
+            invalid_accs.extend([account["account_id"] for account in accounts])
                 (account_id,),
             )
             conn.commit()
@@ -1109,6 +1200,7 @@ class FunpayBot:
                 )
             except Exception:
                 pass
+            return True
 
             try:
                 self._clear_expired_rental_state(account_id)
