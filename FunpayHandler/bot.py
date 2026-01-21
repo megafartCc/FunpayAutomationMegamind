@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -16,7 +15,6 @@ from config import (
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
     FUNPAY_GOLDEN_KEY,
-    HOURS_FOR_REVIEW,
     RENTAL_CHECK_INTERVAL,
 )
 from DatabaseHandler.databaseSetup import SQLiteDB
@@ -58,8 +56,6 @@ class FunpayBot:
         self._acc: Account | None = None
         self._runner: Runner | None = None
 
-        self._feedback_given: set[str] = set()
-        self._bonus_eligible: set[str] = set()
         self._pending_account_choice: dict[str, list[dict]] = {}
         self._pending_lot_extend: dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
@@ -69,38 +65,6 @@ class FunpayBot:
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: dict[int, set[int]] = {}
         self._expire_warning_start: dict[int, str] = {}
-
-    def _has_feedback_in_chat(self, owner: str) -> bool:
-        if self._acc is None:
-            return False
-        chat = self._acc.get_chat_by_name(owner, True)
-        messages = getattr(chat, "messages", None) or []
-        owner_lower = owner.lower()
-        for message in reversed(messages):
-            if getattr(message, "author_id", None) != 0:
-                continue
-            initiator = getattr(message, "initiator_username", None)
-            if initiator and initiator != owner:
-                continue
-            text = (message.text or "").lower()
-            if not initiator and owner_lower not in text:
-                continue
-            msg_type = getattr(message, "type", None)
-            if msg_type in (types.MessageTypes.NEW_FEEDBACK, types.MessageTypes.FEEDBACK_CHANGED):
-                return True
-            if msg_type is types.MessageTypes.FEEDBACK_DELETED:
-                return False
-            if "удалил отзыв" in text or "has deleted their feedback" in text:
-                return False
-            if (
-                "написал отзыв" in text
-                or "оставил отзыв" in text
-                or "изменил отзыв" in text
-                or "has given feedback" in text
-                or "has edited their feedback" in text
-            ):
-                return True
-        return False
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -189,21 +153,6 @@ class FunpayBot:
                 if event.type is events.EventTypes.NEW_MESSAGE:
                     self._handle_new_message(event)
 
-                message = getattr(event, "message", None)
-                if message is not None:
-                    msg_type = getattr(message, "type", None)
-                    if msg_type in (
-                        types.MessageTypes.NEW_FEEDBACK,
-                        types.MessageTypes.FEEDBACK_CHANGED,
-                        types.MessageTypes.FEEDBACK_DELETED,
-                    ):
-                        self._handle_new_feedback(event)
-                    else:
-                        text = (message.text or "").lower()
-                        if getattr(message, "author_id", None) == 0 and (
-                            "отзыв" in text or "feedback" in text
-                        ):
-                            self._handle_new_feedback(event)
             except Exception as exc:
                 logger.error(f"An error occurred while processing event: {exc}")
 
@@ -551,10 +500,6 @@ class FunpayBot:
             self._handle_acc(acc, chat.id, event.message.author)
             return
 
-        if message_text == "!bonus":
-            self._handle_bonus(acc, chat.id, event.message.author)
-            return
-
         if message_text.startswith("!extend") or message_text.startswith("!продлить"):
             self._handle_extend(acc, chat.id, event.message.author, raw_text)
             return
@@ -646,37 +591,6 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to send account details to {owner}: {exc}")
             acc.send_message(chat_id, USER.acc_failed)
-
-    def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
-        try:
-            if owner in self._feedback_given:
-                acc.send_message(chat_id, USER.bonus_already_given)
-                return
-            if owner not in self._bonus_eligible:
-                if self._has_feedback_in_chat(owner):
-                    self._bonus_eligible.add(owner)
-                else:
-                    acc.send_message(
-                        chat_id,
-                        f"Оставьте отзыв и напишите !bonus, чтобы добавить +{HOURS_FOR_REVIEW} ч к вашей аренде как бонус.",
-                    )
-                    return
-
-            accounts = self._db.get_user_active_accounts(owner)
-            if not accounts:
-                acc.send_message(chat_id, USER.active_rentals_empty)
-                return
-
-            extended = 0
-            for account in accounts:
-                if self._db.extend_rental_duration(account["id"], HOURS_FOR_REVIEW):
-                    extended += 1
-            self._feedback_given.add(owner)
-            self._bonus_eligible.discard(owner)
-            acc.send_message(chat_id, f"Бонус начислен. +{HOURS_FOR_REVIEW} ч.\nПродлено аренд: {extended}.")
-        except Exception as exc:
-            logger.error(f"Failed to apply bonus for {owner}: {exc}")
-            acc.send_message(chat_id, USER.bonus_failed)
 
     def _handle_extend(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
@@ -873,39 +787,6 @@ class FunpayBot:
         if next_expiry and next_expiry < current_time:
             return current_time
         return next_expiry
-
-    def _handle_new_feedback(self, event: Any) -> None:
-        try:
-            message = getattr(event, "message", None)
-            owner = None
-            text = ""
-            if message is not None:
-                owner = message.initiator_username or message.author
-                text = (message.text or "")
-                if owner is None and text:
-                    match = re.search(r"(?:Покупатель|The buyer)\\s+([a-zA-Z0-9_]+)", text)
-                    if match:
-                        owner = match.group(1)
-
-            if not owner:
-                return
-
-            text_lower = text.lower()
-            if "удалил отзыв" in text_lower or "has deleted their feedback" in text_lower:
-                self._bonus_eligible.discard(owner)
-                return
-
-            if owner not in self._feedback_given:
-                self._bonus_eligible.add(owner)
-                if self._acc is None:
-                    return
-                chat = self._acc.get_chat_by_name(owner, True)
-                self._acc.send_message(
-                    chat.id,
-                    f"Спасибо за отзыв! Напишите !bonus, чтобы получить +{HOURS_FOR_REVIEW} ч.",
-                )
-        except Exception as exc:
-            logger.error(f"Error handling NEW_FEEDBACK event: {exc}")
 
     def _check_rental_expiration_loop(self) -> None:
         logger.info("Starting rental expiration checker...")
