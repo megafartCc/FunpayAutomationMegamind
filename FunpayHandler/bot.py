@@ -56,6 +56,14 @@ class FunpayBot:
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
+        self, token: str | None = None, db: MySQLDB | None = None, user_id: int | None = None
+    ) -> None:
+        self._token = token
+        self._db = db or MySQLDB()
+        self, token: str = FUNPAY_GOLDEN_KEY, db: SQLiteDB | None = None, user_id: int | None = None
+    ) -> None:
+        self._token = token
+        self._db = db or SQLiteDB()
         self._user_id = user_id
 
         self._acc: Optional[Account] = None
