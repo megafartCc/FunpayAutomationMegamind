@@ -273,7 +273,17 @@ async def _presence_for_account(account: dict) -> dict:
     # Prefer node bridge if configured
     bridge_presence = _fetch_bridge_presence(steamid64) if STEAM_BRIDGE_URL else {}
     if bridge_presence:
-        return bridge_presence
+        in_game = bool(bridge_presence.get("in_game"))
+        in_match = bool(bridge_presence.get("in_match") or bridge_presence.get("presence_in_match"))
+        lobby_info = bridge_presence.get("lobby_info") or ""
+        return {
+            "presence_state": "in_game" if in_game else "offline",
+            "presence_display": lobby_info,
+            "presence_in_match": in_match,
+            "in_game": in_game,
+            "in_match": in_match,
+            "lobby_info": lobby_info,
+        }
     return {"presence_state": "offline", "presence_display": ""}
 
 
