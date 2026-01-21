@@ -827,6 +827,13 @@ class FunpayBot:
             logger.error(f"Error in rental expiration checker: {exc}")
             return None
 
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Error in rental expiration checker: {exc}")
+            return
+
         try:
             cursor.execute(
                 """
@@ -842,7 +849,6 @@ class FunpayBot:
             conn.close()
 
         current_time = datetime.now(tz=MOSCOW_TZ)
-        next_event_time: Optional[datetime] = None
         for row in accounts_data:
             (
                 account_id,
@@ -879,11 +885,6 @@ class FunpayBot:
                 self._expire_warning_sent.pop(account_id, None)
 
             sent = self._expire_warning_sent.setdefault(account_id, set())
-            warning_time = expiry_time - timedelta(minutes=10)
-            if minutes_remaining > 10 and 10 not in sent:
-                next_event_time = warning_time if next_event_time is None else min(next_event_time, warning_time)
-            else:
-                next_event_time = expiry_time if next_event_time is None else min(next_event_time, expiry_time)
             if 0 < minutes_remaining <= 10 and 10 not in sent:
                 self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
                 sent.add(10)
@@ -906,15 +907,6 @@ class FunpayBot:
                     steam_login=steam_login,
                     expiry_time=expiry_time,
                 )
-                next_event_time = current_time
-
-        if not accounts_data:
-            return float(RENTAL_CHECK_INTERVAL)
-        if next_event_time is None:
-            return float(RENTAL_CHECK_INTERVAL)
-        if next_event_time <= current_time:
-            return 1.0
-        return min(float(RENTAL_CHECK_INTERVAL), (next_event_time - current_time).total_seconds())
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
         if not mafile_json:
