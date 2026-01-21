@@ -703,17 +703,28 @@ class MySQLDB:
         if self.db_type == "mysql":
             cursor.close()
 
-    def get_lot_mapping(self, lot_number: int):
+    def get_lot_mapping(self, lot_number: int, user_id: int | None = None):
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            WHERE l.lot_number = ?
-            """,
-            (lot_number,),
-        )
+        if user_id in (None, 0):
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ?
+                """,
+                (lot_number,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ? AND l.user_id = ?
+                """,
+                (lot_number, user_id),
+            )
         row = cursor.fetchone()
         if self.db_type == "mysql":
             cursor.close()
