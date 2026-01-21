@@ -559,9 +559,11 @@ const renderChatMessages = (items) => {
         ? `<a href="${message.image_link}" target="_blank" rel="noreferrer">Открыть изображение</a>`
         : "";
       const type = message.type ? `(${message.type})` : "";
+      const timeLabel = message.sent_time ? `• ${escapeHtml(message.sent_time)}` : "";
+      const meta = [escapeHtml(author), type, timeLabel].filter(Boolean).join(" ");
       return `
         <div class="chat-message ${message.by_bot ? "self" : ""}">
-          <h5>${escapeHtml(author)} ${type}</h5>
+          <h5>${meta}</h5>
           <p>${text || "(без текста)"}</p>
           ${image}
         </div>

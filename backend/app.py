@@ -1,5 +1,8 @@
+import html as html_module
 import json
+import re
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from threading import Lock
@@ -11,6 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from bs4 import BeautifulSoup
 
 from backend.config import (
     DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE,
@@ -38,6 +42,150 @@ BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR.parent / "Public"
 
 app = FastAPI(title="FunpaySeller")
+
+_TIME_RE = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
+_DATE_RE = re.compile(r"\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b")
+_MONTH_RE = re.compile(r"\b(\d{1,2})\s+([a-zа-я.]+)\b", re.IGNORECASE)
+_MONTHS = {
+    "янв": 1,
+    "фев": 2,
+    "мар": 3,
+    "апр": 4,
+    "май": 5,
+    "мая": 5,
+    "июн": 6,
+    "июл": 7,
+    "авг": 8,
+    "сен": 9,
+    "сент": 9,
+    "окт": 10,
+    "ноя": 11,
+    "дек": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+
+def _normalize_time_label(time_text: str) -> str:
+    parts = time_text.split(":")
+    if len(parts) not in (2, 3):
+        return time_text
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        return time_text
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+def _format_epoch_time(raw_value: str) -> str | None:
+    if not raw_value or not raw_value.isdigit():
+        return None
+    try:
+        stamp = int(raw_value)
+    except ValueError:
+        return None
+    if stamp > 1_000_000_000_000:
+        stamp = stamp // 1000
+    if stamp < 946684800:
+        return None
+    dt = datetime.fromtimestamp(stamp)
+    label = _normalize_time_label(dt.strftime("%H:%M:%S"))
+    today = datetime.now().date()
+    if dt.date() != today:
+        return f"{label} {dt:%d.%m}"
+    return label
+
+
+def _extract_message_time_from_text(text: str) -> str | None:
+    if not text:
+        return None
+    text = " ".join(text.split())
+    if not text:
+        return None
+    time_match = _TIME_RE.search(text)
+    if not time_match:
+        return None
+    time_label = _normalize_time_label(time_match.group(1))
+    lower = text.lower()
+    today = datetime.now().date()
+    date_value = None
+    if "сегодня" in lower or "today" in lower:
+        date_value = today
+    elif "вчера" in lower or "yesterday" in lower:
+        date_value = today - timedelta(days=1)
+    else:
+        date_match = _DATE_RE.search(text)
+        if date_match:
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3)) if date_match.group(3) else today.year
+            if year < 100:
+                year += 2000
+            try:
+                date_value = datetime(year, month, day).date()
+            except ValueError:
+                date_value = None
+        else:
+            month_match = _MONTH_RE.search(lower)
+            if month_match:
+                day = int(month_match.group(1))
+                raw_month = re.sub(r"[^a-zа-я]", "", month_match.group(2))
+                month_key = raw_month[:3]
+                month = _MONTHS.get(raw_month) or _MONTHS.get(month_key)
+                if month:
+                    try:
+                        date_value = datetime(today.year, month, day).date()
+                    except ValueError:
+                        date_value = None
+    if date_value and date_value != today:
+        return f"{time_label} {date_value:%d.%m}"
+    return time_label
+
+
+def _extract_message_time(html: str | None) -> str | None:
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "lxml")
+    date_el = (
+        soup.select_one(".chat-msg-date")
+        or soup.select_one(".message-date")
+        or soup.select_one(".msg-date")
+        or soup.select_one(".chat-message-date")
+        or soup.select_one(".chat-msg-time")
+        or soup.select_one(".time")
+        or soup.select_one("time")
+        or soup.select_one("[class*='date']")
+        or soup.select_one("[class*='time']")
+    )
+    candidate = None
+    if date_el:
+        candidate = (
+            date_el.get("datetime")
+            or date_el.get("title")
+            or date_el.get("data-time")
+            or date_el.get("data-date")
+            or date_el.get_text(strip=True)
+        )
+    if candidate:
+        epoch_label = _format_epoch_time(candidate)
+        if epoch_label:
+            return epoch_label
+        parsed = _extract_message_time_from_text(candidate)
+        if parsed:
+            return parsed
+    text = html_module.unescape(soup.get_text(" ", strip=True))
+    return _extract_message_time_from_text(text)
 db = MySQLDB()
 CHAT_LIST_TTL = 5.0
 CHAT_HISTORY_TTL = 3.0
@@ -188,20 +336,21 @@ class ChatCache:
         messages = account.get_chat_history(chat_id) or []
         items = []
         for message in messages:
-            items.append(
-                {
-                    "id": message.id,
-                    "text": message.text,
-                    "author": message.author,
-                    "author_id": message.author_id,
-                    "chat_id": message.chat_id,
-                    "chat_name": message.chat_name,
-                    "image_link": message.image_link,
-                    "by_bot": message.by_bot,
-                    "by_vertex": message.by_vertex,
-                    "type": message.type.name if message.type else None,
-                }
-            )
+                items.append(
+                    {
+                        "id": message.id,
+                        "text": message.text,
+                        "author": message.author,
+                        "author_id": message.author_id,
+                        "chat_id": message.chat_id,
+                        "chat_name": message.chat_name,
+                        "image_link": message.image_link,
+                        "by_bot": message.by_bot,
+                        "by_vertex": message.by_vertex,
+                        "type": message.type.name if message.type else None,
+                        "sent_time": _extract_message_time(message.html),
+                    }
+                )
         return items
 
     def refresh_chats_sync(self, user_id: int, token: str) -> list[dict]:
