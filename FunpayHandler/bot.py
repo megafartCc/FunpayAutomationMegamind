@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from FunPayAPI import Account, Runner, events, types
 
@@ -56,6 +56,8 @@ class FunpayBot:
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
+        self._token = token
+        self._db = db or MySQLDB()
         self, token: str | None = None, db: MySQLDB | None = None, user_id: int | None = None
     ) -> None:
         self._token = token
@@ -69,15 +71,15 @@ class FunpayBot:
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
 
-        self._pending_account_choice: dict[str, list[dict]] = {}
-        self._pending_lot_extend: dict[str, PendingLotExtend] = {}
+        self._pending_account_choice: Dict[str, List[Dict]] = {}
+        self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
 
         self._last_refresh_ts = 0.0
-        self._expire_delay_since: dict[int, datetime] = {}
+        self._expire_delay_since: Dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
-        self._expire_warning_sent: dict[int, set[int]] = {}
-        self._expire_warning_start: dict[int, str] = {}
+        self._expire_warning_sent: Dict[int, set[int]] = {}
+        self._expire_warning_start: Dict[int, str] = {}
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -129,7 +131,7 @@ class FunpayBot:
             conn.close()
 
     @property
-    def account(self) -> Account | None:
+    def account(self) -> Optional[Account]:
         return self._acc
 
     def refresh_session(self) -> None:
@@ -776,7 +778,7 @@ class FunpayBot:
             logger.error(f"Failed to cancel rental for {owner}: {exc}")
             acc.send_message(chat_id, USER.extend_failed)
 
-    def _find_next_expiry(self, all_lots: list[dict]) -> datetime | None:
+    def _find_next_expiry(self, all_lots: List[Dict]) -> Optional[datetime]:
         current_time = datetime.now(tz=MOSCOW_TZ)
         next_expiry = None
         for account in all_lots:
@@ -898,7 +900,7 @@ class FunpayBot:
             cursor.close()
             conn.close()
 
-    def _steamid64_from_mafile(self, mafile_json: str | None) -> int | None:
+    def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
         if not mafile_json:
             return None
         try:
@@ -918,7 +920,7 @@ class FunpayBot:
         account_id: int,
         owner: str,
         current_time: datetime,
-        mafile_json: str | None,
+        mafile_json: Optional[str],
     ) -> bool:
         if not DOTA_MATCH_DELAY_EXPIRE:
             return False
@@ -978,7 +980,7 @@ class FunpayBot:
 
         return True
 
-    def _should_delay_expire_due_to_in_game(self, mafile_json: str | None) -> bool:
+    def _should_delay_expire_due_to_in_game(self, mafile_json: Optional[str]) -> bool:
         steamid64 = self._steamid64_from_mafile(mafile_json)
         if steamid64 is None:
             return False
