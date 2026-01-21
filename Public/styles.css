@@ -398,6 +398,31 @@ select:focus {
   align-items: center;
 }
 
+.chat-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-item-time {
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.chat-item-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
 .chat-item h4 {
   font-size: 0.95rem;
   line-height: 1.2;

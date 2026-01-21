@@ -513,17 +513,25 @@ const renderChatList = (items) => {
   }
 
   ui.chats.list.innerHTML = filtered
-    .map(
-      (chat) => `
+    .map((chat) => {
+      const timeLabel = chat.last_message_time || chat.time || "";
+      const timeHtml = timeLabel
+        ? `<span class="chat-item-time">${escapeHtml(timeLabel)}</span>`
+        : "";
+      const badge = chat.unread ? '<span class="badge">новое</span>' : "";
+      return `
         <button class="chat-item ${chat.id === selectedChatId ? "active" : ""}" data-id="${chat.id}">
-          <div>
-            <h4>${escapeHtml(chat.name || "Без имени")}</h4>
+          <div class="chat-item-main">
+            <div class="chat-item-head">
+              <h4>${escapeHtml(chat.name || "Без имени")}</h4>
+              ${timeHtml}
+            </div>
             <p>${escapeHtml(chat.last_message_text || "")}</p>
           </div>
-          ${chat.unread ? '<span class="badge">новое</span>' : ''}
+          <div class="chat-item-meta">${badge}</div>
         </button>
-      `
-    )
+      `;
+    })
     .join("");
 
   document.querySelectorAll(".chat-item").forEach((item) => {

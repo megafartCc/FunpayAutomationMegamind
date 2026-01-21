@@ -310,6 +310,8 @@ class ChatCache:
                 for chat in chats_entry["items"]:
                     if chat.get("id") == chat_id:
                         chat["last_message_text"] = item.get("text") or ""
+                        if item.get("sent_time"):
+                            chat["last_message_time"] = item.get("sent_time")
                         chat["unread"] = False
                         break
                 chats_entry["ts"] = now
@@ -319,11 +321,13 @@ class ChatCache:
         chats_map = account.get_chats(update=True)
         items = []
         for chat in chats_map.values():
+            last_message_time = _extract_message_time(getattr(chat, "html", None))
             items.append(
                 {
                     "id": chat.id,
                     "name": chat.name,
                     "last_message_text": chat.last_message_text,
+                    "last_message_time": last_message_time,
                     "unread": chat.unread,
                     "node_msg_id": chat.node_msg_id,
                     "user_msg_id": chat.user_msg_id,
@@ -1107,6 +1111,9 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         cached_chat = chat_cache.get_chat_summary(user_id, chat_id)
         chat_name = cached_chat.get("name") if cached_chat else None
         message = account.send_message(chat_id, payload.text, chat_name)
+        sent_time = _extract_message_time(getattr(message, "html", None))
+        if not sent_time:
+            sent_time = _normalize_time_label(datetime.now().strftime("%H:%M:%S"))
         item = {
             "id": message.id,
             "text": message.text,
@@ -1118,6 +1125,7 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
             "by_bot": message.by_bot,
             "by_vertex": message.by_vertex,
             "type": message.type.name if message.type else None,
+            "sent_time": sent_time,
         }
         chat_cache.append_message(user_id, chat_id, item)
         return {"status": "ok", "message_id": message.id}
