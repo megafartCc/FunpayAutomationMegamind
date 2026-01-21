@@ -1,6 +1,6 @@
 import secrets
 import bcrypt
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from backend.config import (
     MYSQLDATABASE,
@@ -1678,7 +1678,7 @@ class MySQLDB:
             return False
 
     def _token_expiry(self) -> datetime:
-        return datetime.now(timezone.utc) + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
+        return datetime.utcnow() + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
 
     def create_user(self, username: str, password: str, golden_key: str) -> str | None:
         cursor = self._cursor()
@@ -1736,9 +1736,7 @@ class MySQLDB:
                     expires_at = datetime.fromisoformat(expires_at)
                 except ValueError:
                     expires_at = None
-            if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at and expires_at < datetime.now(timezone.utc):
+            if expires_at and expires_at < datetime.utcnow():
                 self.logout_token(token)
                 return None
             return {"id": row[0], "username": row[1], "golden_key": row[2], "session_token": token}
