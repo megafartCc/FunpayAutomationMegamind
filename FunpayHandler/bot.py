@@ -828,7 +828,10 @@ class FunpayBot:
 
     def _handle_new_feedback(self, event: Any) -> None:
         try:
-            owner = event.message.author
+            message = getattr(event, "message", None)
+            owner = None
+            if message is not None:
+                owner = message.initiator_username or message.author
             if owner and owner not in self._feedback_given:
                 self._bonus_eligible.add(owner)
                 if self._acc is None:
