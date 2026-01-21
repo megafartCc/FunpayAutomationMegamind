@@ -806,12 +806,26 @@ class FunpayBot:
     def _check_rental_expiration_loop(self) -> None:
         logger.info("Starting rental expiration checker...")
         invalid_accs: list[int] = []
+        backoff_seconds = RENTAL_CHECK_INTERVAL
         while True:
             try:
-                self._check_rental_expiration_once(invalid_accs)
+                suggested_delay = self._check_rental_expiration_once(invalid_accs)
+                if suggested_delay is None:
+                    backoff_seconds = min(backoff_seconds * 2, 15 * 60)
+                    time.sleep(backoff_seconds)
+                    continue
+                backoff_seconds = RENTAL_CHECK_INTERVAL
+                time.sleep(max(1.0, suggested_delay))
             except Exception as exc:
                 logger.error(f"Error in rental expiration checker: {exc}")
-            time.sleep(RENTAL_CHECK_INTERVAL)
+                time.sleep(backoff_seconds)
+
+    def _check_rental_expiration_once(self, invalid_accs: list[int]) -> Optional[float]:
+        try:
+            conn, cursor = self._db.open_connection()
+        except Exception as exc:
+            logger.error(f"Error in rental expiration checker: {exc}")
+            return None
 
     def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
         try:
