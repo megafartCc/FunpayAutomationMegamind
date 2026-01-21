@@ -29,6 +29,7 @@ class _CursorWrapper:
         self._cursor = cursor
         self._formatter = formatter
         self._connection = connection
+        self._closed = False
 
     def execute(self, sql, params=None):
         if params is None:
@@ -49,11 +50,27 @@ class _CursorWrapper:
         return self._cursor.rowcount
 
     def close(self):
+        if self._closed:
+            return None
+        self._closed = True
         try:
             return self._cursor.close()
         finally:
             if self._connection is not None:
                 self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class MySQLDB:

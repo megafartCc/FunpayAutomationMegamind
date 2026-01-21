@@ -47,6 +47,9 @@ class PendingLotExtend:
 
 
 class FunpayBot:
+    _expiration_thread_started = False
+    _expiration_thread_lock = threading.Lock()
+
     def __init__(
         self,
         token: Optional[str] = None,
@@ -138,9 +141,12 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = time.time()
 
-        thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
-        thread.start()
-        logger.info("Rental expiration checker started.")
+        with self._expiration_thread_lock:
+            if not self._expiration_thread_started:
+                thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
+                thread.start()
+                self._expiration_thread_started = True
+                logger.info("Rental expiration checker started.")
 
         if self._runner is None:
             raise RuntimeError("Runner not initialized")
