@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 from FunPayAPI import Account, Runner, events, types
 
@@ -49,6 +49,13 @@ class PendingLotExtend:
 
 class FunpayBot:
     def __init__(
+        self,
+        token: Optional[str] = None,
+        db: Optional[MySQLDB] = None,
+        user_id: Optional[int] = None,
+    ) -> None:
+        self._token = token
+        self._db = db or MySQLDB()
         self, token: str | None = None, db: MySQLDB | None = None, user_id: int | None = None
     ) -> None:
         self._token = token
