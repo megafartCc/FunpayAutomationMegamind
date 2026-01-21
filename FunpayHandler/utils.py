@@ -107,3 +107,15 @@ def get_duration_minutes(account: dict) -> int:
         return int(hours) * 60
     except Exception:
         return 0
+
+
+def format_duration_minutes(total_minutes: int) -> str:
+    if total_minutes <= 0:
+        return "0 мин"
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    if hours and minutes:
+        return f"{hours} ч {minutes} мин"
+    if hours:
+        return f"{hours} ч"
+    return f"{minutes} мин"

@@ -29,6 +29,7 @@ from SteamHandler.presence_bot import get_presence_bot
 from .messages import USER
 from .utils import (
     MOSCOW_TZ,
+    format_duration_minutes,
     get_duration_minutes,
     get_remaining_time,
     match_account_choice,
@@ -65,6 +66,55 @@ class FunpayBot:
         self._last_refresh_ts = 0.0
         self._expire_delay_since: dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
+
+    def _get_unit_minutes(self, account: dict) -> int:
+        base_minutes = get_duration_minutes(account)
+        if base_minutes <= 0:
+            return 0
+        if account.get("owner"):
+            units = int(account.get("rental_duration") or 0)
+            if units > 0 and base_minutes % units == 0:
+                per_unit = base_minutes // units
+                return max(per_unit, 1)
+        return max(base_minutes, 1)
+
+    def _set_rental_duration_for_order(self, account_id: int, units: int, unit_minutes: int) -> None:
+        total_minutes = int(units) * int(unit_minutes)
+        conn, cursor = self._db.open_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET rental_duration = ?, rental_duration_minutes = ?
+                WHERE ID = ?
+                """,
+                (int(units), total_minutes, account_id),
+            )
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+
+    def _extend_rental_for_order(self, account_id: int, owner: str, units: int, unit_minutes: int) -> bool:
+        total_minutes = int(units) * int(unit_minutes)
+        if total_minutes <= 0:
+            return False
+        conn, cursor = self._db.open_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET rental_duration_minutes = COALESCE(rental_duration_minutes, rental_duration * 60) + ?,
+                    rental_duration = COALESCE(rental_duration, 0) + ?
+                WHERE ID = ? AND owner = ?
+                """,
+                (total_minutes, int(units), account_id, owner),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            cursor.close()
+            conn.close()
 
     @property
     def account(self) -> Account | None:
@@ -226,7 +276,8 @@ class FunpayBot:
             return
 
         if account.get("owner") == buyer:
-            success = self._db.extend_rental_duration_for_owner(account["id"], buyer, amount)
+            unit_minutes = self._get_unit_minutes(account)
+            success = self._extend_rental_for_order(account["id"], buyer, amount, unit_minutes)
             if not success:
                 acc.send_message(chat_id, USER.extend_failed)
                 return
@@ -234,14 +285,19 @@ class FunpayBot:
             refreshed = self._db.get_account_by_id(account["id"])
             current_time = datetime.now(tz=MOSCOW_TZ)
             _, expiry_str, remaining_str = get_remaining_time(refreshed, current_time)
+            duration_label = format_duration_minutes(unit_minutes * amount)
 
             note = ""
             if is_requested_extend and pending and pending.hours != amount:
-                note = f"\n\nПримечание: вы запросили {pending.hours} ч, но оплатили {amount} шт (будет продлено на {amount} ч)."
+                pending_label = format_duration_minutes(unit_minutes * pending.hours)
+                note = (
+                    f"\n\nПримечание: вы запросили {pending_label}, "
+                    f"но оплатили {duration_label} (будет продлено на {amount} шт)."
+                )
 
             acc.send_message(
                 chat_id,
-                f"Продлено на {amount} ч.\n"
+                f"Продлено на {duration_label}.\n"
                 f"Лот: №{lot_number}\n"
                 f"ID: {account['id']}\n"
                 f"Аккаунт: {account['account_name']}\n"
@@ -284,14 +340,6 @@ class FunpayBot:
             logger.info(f"Item '{account_name}' not found in rentals; skipping.")
             return
 
-        if amount > 1:
-            acc.send_message(
-                chat_id,
-                f"Вы оплатили {amount} шт. '{account_name}'.\n"
-                f"Система выдаёт 1 аккаунт на {amount} часов (1 шт = 1 час).\n\n"
-                "Если нужен другой вариант — напишите в чат.",
-            )
-
         specific_account = self._db.get_account_by_name(account_name)
         if not specific_account:
             logger.error(f"Account with name '{account_name}' not found in database")
@@ -311,6 +359,17 @@ class FunpayBot:
             )
             return
 
+        if amount > 1:
+            unit_minutes = self._get_unit_minutes(specific_account)
+            unit_label = format_duration_minutes(unit_minutes)
+            total_label = format_duration_minutes(unit_minutes * amount)
+            acc.send_message(
+                chat_id,
+                f"Вы оплатили {amount} шт. '{account_name}'.\n"
+                f"Продление будет на {total_label} (1 шт = {unit_label}).\n\n"
+                "Если нужен другой вариант — напишите в чат.",
+            )
+
         existing_rentals = self._db.get_user_accounts_by_name(buyer, account_name)
         if existing_rentals:
             self._extend_existing_rental(acc, chat_id, event, existing_rentals[0], account_name, amount)
@@ -327,18 +386,28 @@ class FunpayBot:
         event: Any,
         rental: dict,
         order_name: str,
-        hours: int,
+        units: int,
     ) -> None:
+        unit_minutes = self._get_unit_minutes(rental)
+        duration_label = format_duration_minutes(unit_minutes * units)
         logger.info(
-            f"User {event.order.buyer_username} already has active rental for {order_name}, extending by {hours} hours..."
+            f"User {event.order.buyer_username} already has active rental for {order_name}, extending by {duration_label}..."
         )
-        self._db.extend_rental_duration(rental["id"], hours)
+        success = self._extend_rental_for_order(
+            rental["id"],
+            event.order.buyer_username,
+            units,
+            unit_minutes,
+        )
+        if not success:
+            acc.send_message(chat_id, USER.extend_failed)
+            return
 
         acc.send_message(
             chat_id,
             "Аренда продлена!\n\n"
             f"Тип аккаунта: {order_name}\n"
-            f"Продление: +{hours} ч\n"
+            f"Продление: +{duration_label}\n"
             f"ID: {rental['id']}\n\n"
             "Данные аккаунта ниже.",
         )
@@ -365,7 +434,7 @@ class FunpayBot:
             "RENTAL EXTENDED\n\n"
             f"User: {event.order.buyer_username}\n"
             f"Account type: {order_name}\n"
-            f"Extension: +{hours} hours\n"
+            f"Extension: +{duration_label}\n"
             f"Price: {event.order.price} RUB\n"
             f"Account ID: {rental['id']}\n"
             "Note: user already had an active rental",
@@ -373,24 +442,12 @@ class FunpayBot:
 
         acc.confirm(event.order.id)
 
-    def _issue_new_account(self, acc: Account, chat_id: int, event: Any, account: dict, hours: int) -> None:
+    def _issue_new_account(self, acc: Account, chat_id: int, event: Any, account: dict, units: int) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
         self._db.set_account_owner(account["id"], event.order.buyer_username)
-
-        conn, cursor = self._db.open_connection()
-        try:
-            cursor.execute(
-                """
-                UPDATE accounts
-                SET rental_duration = ?, rental_duration_minutes = ?
-                WHERE ID = ?
-                """,
-                (hours, hours * 60, account["id"]),
-            )
-            conn.commit()
-        finally:
-            cursor.close()
-            conn.close()
+        unit_minutes = self._get_unit_minutes(account)
+        duration_label = format_duration_minutes(unit_minutes * units)
+        self._set_rental_duration_for_order(account["id"], units, unit_minutes)
 
         send_message_to_admin(
             "NEW ACCOUNT ISSUED\n\n"
@@ -400,9 +457,9 @@ class FunpayBot:
             f"Login: {account['login']}\n"
             f"Password: {account['password']}\n"
             f"Price: {event.order.price} RUB\n"
-            f"Ordered: {hours} pcs.\n"
-            f"Rental time: {hours} hours\n"
-            f"Note: specific account '{account['account_name']}' issued for {hours} hours",
+            f"Ordered: {units} pcs.\n"
+            f"Rental time: {duration_label}\n"
+            f"Note: specific account '{account['account_name']}' issued for {duration_label}",
         )
 
         acc.send_message(
@@ -412,7 +469,7 @@ class FunpayBot:
             f"Название: {account['account_name']}\n"
             f"Логин: {account['login']}\n"
             f"Пароль: {account['password']}\n"
-            f"Аренда: {hours} ч\n\n"
+            f"Аренда: {duration_label}\n\n"
             "Команды:\n"
             "!акк — данные аккаунта\n"
             "!код — код Steam Guard\n"
