@@ -42,6 +42,7 @@ db = MySQLDB()
 CHAT_LIST_TTL = 5.0
 CHAT_HISTORY_TTL = 3.0
 CHAT_HISTORY_MAX = 200
+PRESENCE_TTL = 10.0
 
 
 class BotManager:
@@ -116,6 +117,21 @@ class ChatCache:
                 if chat.get("id") == chat_id:
                     return dict(chat)
         return None
+
+    def get_chat_id_by_name(self, user_id: int, name: str) -> int | None:
+        if not name:
+            return None
+        with self._lock:
+            entry = self._chats.get(user_id)
+            if not entry:
+                return None
+            for chat in entry["items"]:
+                if chat.get("name") == name:
+                    return chat.get("id")
+        return None
+
+    def set_chats(self, user_id: int, items: list[dict]) -> None:
+        self._set_chats(user_id, items)
 
     def _set_chats(self, user_id: int, items: list[dict]) -> None:
         with self._lock:
@@ -237,6 +253,45 @@ class ChatCache:
 
 
 chat_cache = ChatCache()
+
+
+class PresenceCache:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._entries: dict[int, dict[str, Any]] = {}
+        self._refreshing: set[int] = set()
+
+    def get_cached(self, steamid64: int) -> tuple[dict | None, float | None]:
+        with self._lock:
+            entry = self._entries.get(steamid64)
+            if not entry:
+                return None, None
+            return dict(entry["data"]), entry["ts"]
+
+    def set_cached(self, steamid64: int, data: dict) -> None:
+        with self._lock:
+            self._entries[steamid64] = {"data": dict(data), "ts": time.time()}
+
+    def refresh_async(self, steamid64: int, fetcher) -> None:
+        with self._lock:
+            if steamid64 in self._refreshing:
+                return
+            self._refreshing.add(steamid64)
+
+        def runner() -> None:
+            try:
+                data = fetcher()
+                self.set_cached(steamid64, data)
+            except Exception as exc:
+                logger.warning(f"Failed to refresh presence cache for {steamid64}: {exc}")
+            finally:
+                with self._lock:
+                    self._refreshing.discard(steamid64)
+
+        Thread(target=runner, daemon=True).start()
+
+
+presence_cache = PresenceCache()
 
 app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
@@ -491,16 +546,38 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
     }
 
 
+def _presence_for_steamid_cached(
+    steamid64: int | None,
+    max_age: float = PRESENCE_TTL,
+    fast: bool = True,
+) -> dict:
+    if not steamid64 or not STEAM_BRIDGE_URL:
+        return _presence_for_steamid(steamid64)
+
+    cached, ts = presence_cache.get_cached(steamid64)
+    now = time.time()
+    if cached is not None and ts is not None and now - ts <= max_age:
+        return cached
+    if cached is not None and fast:
+        presence_cache.refresh_async(steamid64, lambda: _presence_for_steamid(steamid64))
+        return cached
+
+    data = _presence_for_steamid(steamid64)
+    presence_cache.set_cached(steamid64, data)
+    return data
+
+
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
-async def accounts(request: Request) -> dict:
+async def accounts(request: Request, include_steamid: bool = False) -> dict:
     uid = current_user_id(request)
     items = db.get_all_accounts(uid)
     if not items:
         return {"items": items}
 
     for acc in items:
-        steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
-        acc["steamid"] = str(steamid64) if steamid64 is not None else None
+        if include_steamid:
+            steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+            acc["steamid"] = str(steamid64) if steamid64 is not None else None
         acc.pop("mafile_json", None)
     return {"items": items}
 
@@ -703,34 +780,64 @@ async def steam_change_password(account_id: int, payload: SteamPasswordRequest, 
 
 
 @app.get("/api/rentals/active", dependencies=[Depends(require_admin)])
-def active_rentals(request: Request) -> dict:
+def active_rentals(
+    request: Request,
+    expand: str = "",
+    fast: bool = True,
+    max_age: float = PRESENCE_TTL,
+) -> dict:
     uid = current_user_id(request)
-    items = db.get_active_users(uid)
-    try:
-        account = require_funpay_account(request)
-    except HTTPException:
-        account = None
+    expand_set = {part.strip().lower() for part in (expand or "").split(",") if part.strip()}
+    include_presence = "presence" in expand_set or "all" in expand_set
+    include_chat = "chat" in expand_set or "all" in expand_set
+    max_age = max(0.0, float(max_age))
+
+    items = db.get_active_users(uid, include_mafile=include_presence)
+    token = (getattr(request.state, "user", None) or {}).get("golden_key")
+
+    chat_map = {}
+    if include_chat and token:
+        cached_chats, ts = chat_cache.get_cached_chats(uid)
+        if cached_chats:
+            chat_map = {
+                chat.get("name"): chat.get("id")
+                for chat in cached_chats
+                if chat.get("name")
+            }
+            if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
+                chat_cache.refresh_chats_async(uid, token)
+        else:
+            if fast:
+                chat_cache.refresh_chats_async(uid, token)
+            else:
+                try:
+                    chats = chat_cache.refresh_chats_sync(uid, token)
+                    chat_map = {
+                        chat.get("name"): chat.get("id")
+                        for chat in chats
+                        if chat.get("name")
+                    }
+                except Exception:
+                    chat_map = {}
 
     for item in items:
-        mafile_json = item.get("mafile_json")
-        steamid64 = _steamid64_from_mafile(mafile_json)
-        item["steamid"] = str(steamid64) if steamid64 is not None else None
-        item.update(_presence_for_steamid(steamid64))
+        if include_presence:
+            steamid64 = _steamid64_from_mafile(item.get("mafile_json"))
+            item["steamid"] = str(steamid64) if steamid64 is not None else None
+            item.update(_presence_for_steamid_cached(steamid64, max_age=max_age, fast=fast))
+        else:
+            item["steamid"] = None
+
         item.pop("mafile_json", None)
-        owner = item.get("owner")
-        if not owner:
-            item["chat_url"] = None
-            continue
-        if account is None:
-            item["chat_url"] = None
-            continue
-        try:
-            chat = account.get_chat_by_name(owner, True)
-            if chat:
-                item["chat_url"] = f"https://funpay.com/chat/?node={quote(str(chat.id))}"
+
+        if include_chat:
+            owner = item.get("owner")
+            chat_id = chat_map.get(owner)
+            if chat_id:
+                item["chat_url"] = f"https://funpay.com/chat/?node={quote(str(chat_id))}"
             else:
                 item["chat_url"] = None
-        except Exception:
+        else:
             item["chat_url"] = None
 
     return {"items": items}

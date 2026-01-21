@@ -1401,7 +1401,7 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def get_active_users(self, user_id: int | None = None):
+    def get_active_users(self, user_id: int | None = None, include_mafile: bool = True):
         """
         Retrieve all active users from the database along with their account details.
         An active user is one who has a non-null owner and rental_start time.
@@ -1464,7 +1464,7 @@ class MySQLDB:
                     "rental_duration_minutes": row[5],
                     "path_to_maFile": row[6],
                     "login": row[7],
-                    "mafile_json": self._decrypt_value(row[8]),
+                    "mafile_json": self._decrypt_value(row[8]) if include_mafile else None,
                 }
                 for row in rows
             ]

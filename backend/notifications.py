@@ -1,4 +1,5 @@
 from datetime import datetime
+from threading import Lock
 from typing import Optional, List, Dict
 
 from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
@@ -24,7 +25,17 @@ def _get_conn():
     )
 
 
+_TABLE_LOCK = Lock()
+_TABLE_READY = False
+
+
 def _ensure_table(conn) -> None:
+    global _TABLE_READY
+    if _TABLE_READY:
+        return
+    with _TABLE_LOCK:
+        if _TABLE_READY:
+            return
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -40,6 +51,7 @@ def _ensure_table(conn) -> None:
     )
     conn.commit()
     cursor.close()
+    _TABLE_READY = True
 
 
 def send_message_to_admin(

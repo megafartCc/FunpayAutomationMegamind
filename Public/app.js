@@ -75,6 +75,9 @@ let chatHistoryCache = new Map();
 let chatPollTimer = null;
 let chatListTimer = null;
 let chatHistoryRequestId = 0;
+let chatListInFlight = false;
+const chatHistoryInFlight = new Set();
+const rentalsInFlight = new Set();
 
 const CHAT_HISTORY_LIMIT = 60;
 const CHAT_POLL_INTERVAL = 2000;
@@ -473,6 +476,15 @@ const renderChatMessages = (items) => {
     .join("");
 };
 
+const renderChatLoading = (label = "Загружаем историю чата...") => {
+  ui.chats.messages.innerHTML = `
+    <div class="notice">
+      <h4>Загрузка</h4>
+      <p>${escapeHtml(label)}</p>
+    </div>
+  `;
+};
+
 const getCachedChatHistory = (chatId) => chatHistoryCache.get(chatId) || [];
 
 const setCachedChatHistory = (chatId, items) => {
@@ -505,6 +517,8 @@ const startChatListPolling = () => {
 
 
 const loadChats = async ({ refresh = false, silent = false } = {}) => {
+  if (chatListInFlight) return;
+  chatListInFlight = true;
   try {
     const params = new URLSearchParams({ fast: "1" });
     if (refresh) {
@@ -517,6 +531,8 @@ const loadChats = async ({ refresh = false, silent = false } = {}) => {
     if (!silent) {
       toast(error.message || "Не удалось загрузить чаты", true);
     }
+  } finally {
+    chatListInFlight = false;
   }
 };
 
@@ -526,10 +542,19 @@ const loadChatHistory = async ({ refresh = false, silent = false } = {}) => {
     return;
   }
   const chatId = selectedChatId;
-  const requestId = ++chatHistoryRequestId;
   const cached = getCachedChatHistory(chatId);
+  if (chatHistoryInFlight.has(chatId)) {
+    if (!cached.length) {
+      renderChatLoading();
+    }
+    return;
+  }
+  chatHistoryInFlight.add(chatId);
+  const requestId = ++chatHistoryRequestId;
   if (cached.length) {
     renderChatMessages(cached);
+  } else {
+    renderChatLoading();
   }
   try {
     const params = new URLSearchParams({
@@ -540,46 +565,115 @@ const loadChatHistory = async ({ refresh = false, silent = false } = {}) => {
       params.set("refresh", "1");
     }
     const data = await apiFetch(`/api/chats/${chatId}/history?${params.toString()}`);
-    if (requestId !== chatHistoryRequestId || chatId !== selectedChatId) return;
     const items = data.items || [];
     setCachedChatHistory(chatId, items);
+    if (requestId !== chatHistoryRequestId || chatId !== selectedChatId) return;
     renderChatMessages(items);
   } catch (error) {
     if (!silent) {
       toast(error.message || "Не удалось загрузить историю", true);
     }
+  } finally {
+    chatHistoryInFlight.delete(chatId);
   }
 };
 
-const loadAll = async () => {
+const loadHealth = async ({ silent = false } = {}) => {
   try {
-    const [health, stats, accounts, rentals, notices, lots] = await Promise.all([
-      apiFetch("/api/health"),
-      apiFetch("/api/stats"),
-      apiFetch("/api/accounts"),
-      apiFetch("/api/rentals/active"),
-      apiFetch("/api/notifications"),
-      apiFetch("/api/lots"),
-    ]);
+    const data = await apiFetch("/api/health");
+    renderHealth(data);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось обновить статус", true);
+    }
+  }
+};
 
-    renderHealth(health);
-    renderStats(stats);
-    accountsCache = accounts.items || [];
+const loadStats = async ({ silent = false } = {}) => {
+  try {
+    const data = await apiFetch("/api/stats");
+    renderStats(data);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить статистику", true);
+    }
+  }
+};
+
+const loadNotifications = async ({ silent = false, limit = 50 } = {}) => {
+  try {
+    const data = await apiFetch(`/api/notifications?limit=${limit}`);
+    renderNotifications(data.items || []);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить уведомления", true);
+    }
+  }
+};
+
+const loadLots = async ({ silent = false } = {}) => {
+  try {
+    const data = await apiFetch("/api/lots");
+    renderLots(data.items || []);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить лоты", true);
+    }
+  }
+};
+
+const loadAccounts = async ({ silent = false } = {}) => {
+  try {
+    const data = await apiFetch("/api/accounts");
+    accountsCache = data.items || [];
     renderInventory(accountsCache);
     renderLotSelect(accountsCache);
-    renderLots(lots.items || []);
-    renderActiveRentals(rentals.items || []);
-    renderNotifications(notices.items || []);
-
     if (selectedId) {
       const selected = accountsCache.find((acc) => acc.id === selectedId);
       setManagePanel(selected || null);
     }
-    loadChats({ refresh: true });
-    startChatListPolling();
   } catch (error) {
-    toast(error.message || "Не удалось загрузить данные", true);
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить инвентарь", true);
+    }
   }
+};
+
+const loadActiveRentals = async ({ expand = false, silent = false } = {}) => {
+  const mode = expand ? "full" : "fast";
+  if (rentalsInFlight.has(mode)) return;
+  rentalsInFlight.add(mode);
+  try {
+    const params = new URLSearchParams();
+    if (expand) {
+      params.set("expand", "presence,chat");
+      params.set("fast", "0");
+    } else {
+      params.set("fast", "1");
+    }
+    const data = await apiFetch(`/api/rentals/active?${params.toString()}`);
+    renderActiveRentals(data.items || []);
+  } catch (error) {
+    if (!silent) {
+      toast(error.message || "Не удалось загрузить активные аренды", true);
+    }
+  } finally {
+    rentalsInFlight.delete(mode);
+  }
+};
+
+const loadAll = async () => {
+  loadHealth();
+  loadStats();
+  loadNotifications();
+  loadLots();
+  loadAccounts();
+  loadActiveRentals({ expand: false });
+  setTimeout(() => {
+    loadActiveRentals({ expand: true, silent: true });
+  }, 200);
+  loadChats({ refresh: true });
+  startChatListPolling();
 };
 
 ui.refreshAll.addEventListener("click", () => {
