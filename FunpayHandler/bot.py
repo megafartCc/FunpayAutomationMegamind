@@ -705,25 +705,31 @@ class FunpayBot:
                 return
 
             acc.send_message(chat_id, "Отмена аренды... Это может занять некоторое время.")
-            conn, cursor = self._db.open_connection()
+            deauth_ok = False
             try:
-                self._expire_rental(
-                    cursor,
-                    conn,
-                    [],
-                    owner,
-                    account_id,
-                    account.get("path_to_maFile") or "",
-                    account.get("mafile_json") or "",
-                    account.get("password") or "",
-                    account.get("login") or account.get("account_name") or "",
-                    datetime.now(tz=MOSCOW_TZ),
+                deauth_ok = asyncio.run(
+                    logout_all_steam_sessions(
+                        steam_login=account.get("login") or account.get("account_name") or "",
+                        steam_password=account.get("password") or "",
+                        mafile_json=account.get("mafile_json") or "",
+                    )
                 )
-            finally:
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
+            except Exception as exc:
+                logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
+
+            self._db.release_account(account_id)
+            self._db.update_account(
+                account_id,
+                {"rental_duration": 1, "rental_duration_minutes": 60},
+            )
+
+            send_message_to_admin(
+                "RENTAL CANCELLED\n\n"
+                f"Account ID: {account_id}\n"
+                f"Owner: {owner}\n"
+                f"Deauthorize: {'ok' if deauth_ok else 'failed'}\n"
+            )
+            acc.send_message(chat_id, "Аренда отменена. Доступ закрыт.")
         except Exception as exc:
             logger.error(f"Failed to cancel rental for {owner}: {exc}")
             acc.send_message(chat_id, USER.extend_failed)

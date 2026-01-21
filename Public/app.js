@@ -318,12 +318,12 @@ const renderInventory = (items) => {
   const query = ui.search.value.trim().toLowerCase();
   const filtered = items.filter((item) => {
     const name = item.account_name?.toLowerCase() || "";
-    const owner = item.owner?.toLowerCase() || "";
-    return !query || name.includes(query) || owner.includes(query);
+    const login = item.login?.toLowerCase() || "";
+    return !query || name.includes(query) || login.includes(query);
   });
 
   if (!filtered.length) {
-    ui.inventoryTable.innerHTML = "<tr><td colspan=\"7\">No accounts found.</td></tr>";
+    ui.inventoryTable.innerHTML = "<tr><td colspan=\"5\">No accounts found.</td></tr>";
     return;
   }
 
@@ -337,8 +337,6 @@ const renderInventory = (items) => {
           <td>${item.account_name}</td>
           <td>${item.login}</td>
           <td>${showPasswords ? item.password : "******"}</td>
-          <td>${item.owner || "-"}</td>
-          <td>${formatDuration(item)}</td>
           <td>${item.steamid || "-"}</td>
         </tr>
       `
@@ -371,7 +369,7 @@ const renderLotSelect = (accounts) => {
 const renderLots = (lots) => {
   if (!ui.lots.table) return;
   if (!lots.length) {
-    ui.lots.table.innerHTML = "<tr><td colspan=\"5\">Лоты не настроены.</td></tr>";
+    ui.lots.table.innerHTML = "<tr><td colspan=\"4\">Лоты не настроены.</td></tr>";
     return;
   }
   ui.lots.table.innerHTML = lots
@@ -382,7 +380,6 @@ const renderLots = (lots) => {
         <tr>
           <td>№${lot.lot_number}</td>
           <td>${escapeHtml(lot.account_name)} (ID ${lot.account_id})</td>
-          <td>${escapeHtml(lot.owner || "-")}</td>
           <td>${link}</td>
           <td>
             <button class="btn ghost" data-lot="${lot.lot_number}">Удалить</button>
