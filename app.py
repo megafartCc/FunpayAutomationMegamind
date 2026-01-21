@@ -261,14 +261,28 @@ def notifications(limit: int = 50) -> dict:
 
 def _presence_for_steamid(steamid64: int | None) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
-        return {"in_game": False, "in_match": False, "lobby_info": ""}
+        return {
+            "in_game": False,
+            "in_match": False,
+            "lobby_info": "",
+            "hero_name": None,
+            "hero_token": None,
+        }
     bridge_presence = _fetch_bridge_presence(steamid64)
     if not bridge_presence:
-        return {"in_game": False, "in_match": False, "lobby_info": ""}
+        return {
+            "in_game": False,
+            "in_match": False,
+            "lobby_info": "",
+            "hero_name": None,
+            "hero_token": None,
+        }
     return {
         "in_game": bool(bridge_presence.get("in_game")),
         "in_match": bool(bridge_presence.get("in_match")),
         "lobby_info": bridge_presence.get("lobby_info") or "",
+        "hero_name": bridge_presence.get("hero_name") or None,
+        "hero_token": bridge_presence.get("hero_token") or None,
     }
 
 

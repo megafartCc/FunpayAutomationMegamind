@@ -245,13 +245,14 @@ const renderHealth = (status) => {
 const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
 const presenceLabel = (item) => {
+  if (item?.in_match && item?.hero_name) return `В матче (${item.hero_name})`;
   if (item?.in_match) return "В матче";
   if (item?.in_game) return "В игре";
   return "Оффлайн";
 };
 
 const presenceLink = (item) => {
-  const label = presenceLabel(item);
+  const label = escapeHtml(presenceLabel(item));
   if (!item?.steamid) return label;
   const url = `${PRESENCE_BASE_URL}/${item.steamid}`;
   return `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`;
@@ -953,7 +954,6 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   sessionStorage.removeItem("adminUser");
   showAuth();
 });
-
 
 
 

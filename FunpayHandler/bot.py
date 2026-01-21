@@ -426,7 +426,7 @@ class FunpayBot:
                 f"Логин: {rental['login']}\n"
                 f"Пароль: {rental['password']}\n"
                 f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                "Команды: !акк, !код",
+                "Команды: !акк, !код, !сток, !продлить, !отмена",
             )
 
         send_message_to_admin(
@@ -472,7 +472,9 @@ class FunpayBot:
             "Команды:\n"
             "!акк — данные аккаунта\n"
             "!код — код Steam Guard\n"
-            "!сток — наличие\n\n"
+            "!сток — наличие\n"
+            "!продлить <часы> <номер_лота> — продлить аренду\n"
+            "!отмена <ID> — отменить аренду\n\n"
             "Если нужна помощь — напишите в чат.",
         )
 
@@ -852,12 +854,9 @@ class FunpayBot:
                     self._expire_warning_sent.pop(account_id, None)
 
                 sent = self._expire_warning_sent.setdefault(account_id, set())
-                if 5 < minutes_remaining <= 10 and 10 not in sent:
+                if 0 < minutes_remaining <= 10 and 10 not in sent:
                     self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
                     sent.add(10)
-                if 0 < minutes_remaining <= 5 and 5 not in sent:
-                    self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 5)
-                    sent.add(5)
 
                 if current_time >= expiry_time and account_id not in invalid_accs:
                     steam_login = login or account_name
@@ -996,13 +995,17 @@ class FunpayBot:
             )
             self.send_message_by_owner(
                 owner,
-                f"Внимание! Ваша аренда скоро закончится (~{reminder_minutes} минут).\n\n"
+                f"Внимание! Ваша аренда скоро закончится через {reminder_minutes} минут.\n\n"
                 f"ID аккаунта: {account_id}\n"
                 f"Осталось: ~{remaining_minutes} мин\n"
-                "Если нужно продление — напишите в чат на FunPay.\n\n"
+                "Если нужно продление — используйте команду:\n"
+                "!продлить <часы> <номер_лота>\n\n"
                 "Команды:\n"
                 "!акк — данные аккаунта\n"
-                "!код — код Steam Guard\n\n"
+                "!код — код Steam Guard\n"
+                "!сток — наличие\n"
+                "!продлить <часы> <номер_лота> — продлить аренду\n"
+                "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
         except Exception as exc:
