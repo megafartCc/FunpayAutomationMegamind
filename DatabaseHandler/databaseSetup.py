@@ -1,11 +1,20 @@
 import secrets
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from backend.config import MYSQLDATABASE, MYSQLHOST, MYSQLPASSWORD, MYSQLPORT, MYSQLUSER
+from backend.config import (
+    MYSQLDATABASE,
+    MYSQLHOST,
+    MYSQLPASSWORD,
+    MYSQLPOOLSIZE,
+    MYSQLPORT,
+    MYSQLUSER,
+    SESSION_TOKEN_TTL_HOURS,
+)
 from backend.logger import logger
 
 import mysql.connector as mysql_connector
+from mysql.connector.pooling import MySQLConnectionPool
 
 
 class _NoopConnection:
@@ -52,6 +61,15 @@ class MySQLDB:
     def __init__(self):
         self.db_type = "mysql"
         self.conn = _NoopConnection()
+        self._pool = MySQLConnectionPool(
+            pool_name="funpay_pool",
+            pool_size=MYSQLPOOLSIZE,
+            host=MYSQLHOST,
+            port=MYSQLPORT,
+            user=MYSQLUSER,
+            password=MYSQLPASSWORD,
+            database=MYSQLDATABASE,
+        )
         self.create_table()
 
     def _format_sql(self, sql: str) -> str:
@@ -59,17 +77,16 @@ class MySQLDB:
             return sql.replace("?", "%s")
         return sql
 
+    def _get_connection(self, *, autocommit: bool = True):
+        if self.db_type != "mysql":
+            return self.conn
+        conn = self._pool.get_connection()
+        conn.autocommit = autocommit
+        return conn
+
     def _cursor(self):
         if self.db_type == "mysql":
-            conn = mysql_connector.connect(
-                host=MYSQLHOST,
-                port=MYSQLPORT,
-                user=MYSQLUSER,
-                password=MYSQLPASSWORD,
-                database=MYSQLDATABASE,
-                autocommit=True,
-                use_pure=True,
-            )
+            conn = self._get_connection(autocommit=True)
             return _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
         return self.conn.cursor()
 
@@ -77,15 +94,7 @@ class MySQLDB:
         if self.db_type == "mysql":
             if mysql_connector is None:
                 raise RuntimeError("mysql-connector-python is required for MySQL support.")
-            conn = mysql_connector.connect(
-                host=MYSQLHOST,
-                port=MYSQLPORT,
-                user=MYSQLUSER,
-                password=MYSQLPASSWORD,
-                database=MYSQLDATABASE,
-                autocommit=True,
-                use_pure=True,
-            )
+            conn = self._get_connection(autocommit=False)
             return conn, _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
         raise RuntimeError("SQLite is not supported. Configure MySQL instead.")
 
@@ -136,6 +145,7 @@ class MySQLDB:
                     password_hash VARCHAR(255) NOT NULL,
                     golden_key TEXT NOT NULL,
                     session_token VARCHAR(255),
+                    session_token_expires_at DATETIME NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
@@ -184,6 +194,7 @@ class MySQLDB:
                     password_hash TEXT NOT NULL,
                     golden_key TEXT NOT NULL,
                     session_token TEXT,
+                    session_token_expires_at TIMESTAMP NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -194,6 +205,7 @@ class MySQLDB:
         self._ensure_rental_duration_minutes_column()
         self._ensure_lot_url_column()
         self._ensure_users_table()
+        self._ensure_session_token_expiry_column()
         self._ensure_user_owner_columns()
         self._migrate_lots_schema()
 
@@ -258,6 +270,7 @@ class MySQLDB:
                         password_hash VARCHAR(255) NOT NULL,
                         golden_key TEXT NOT NULL,
                         session_token VARCHAR(255),
+                        session_token_expires_at DATETIME NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """
@@ -276,6 +289,7 @@ class MySQLDB:
                     "password_hash": "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL",
                     "golden_key": "ALTER TABLE users ADD COLUMN golden_key TEXT NOT NULL",
                     "session_token": "ALTER TABLE users ADD COLUMN session_token VARCHAR(255)",
+                    "session_token_expires_at": "ALTER TABLE users ADD COLUMN session_token_expires_at DATETIME NULL",
                     "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
                 }
                 for col, stmt in needed.items():
@@ -291,6 +305,7 @@ class MySQLDB:
                         password_hash TEXT NOT NULL,
                         golden_key TEXT NOT NULL,
                         session_token TEXT,
+                        session_token_expires_at TIMESTAMP NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                     """
@@ -302,6 +317,7 @@ class MySQLDB:
                     "password_hash": "ALTER TABLE users ADD COLUMN password_hash TEXT",
                     "golden_key": "ALTER TABLE users ADD COLUMN golden_key TEXT",
                     "session_token": "ALTER TABLE users ADD COLUMN session_token TEXT",
+                    "session_token_expires_at": "ALTER TABLE users ADD COLUMN session_token_expires_at TIMESTAMP NULL",
                     "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
                 }
                 for col, stmt in alter.items():
@@ -310,6 +326,30 @@ class MySQLDB:
                 self.conn.commit()
         except Exception:
             # best effort; ignore if cannot migrate
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_session_token_expiry_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'users' AND column_name = 'session_token_expires_at'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE users ADD COLUMN session_token_expires_at DATETIME NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE users ADD COLUMN session_token_expires_at TIMESTAMP NULL")
+                self.conn.commit()
+        except Exception:
             pass
         finally:
             cursor.close()
@@ -435,15 +475,41 @@ class MySQLDB:
         Also marks all accounts with the same login as 'OTHER_ACCOUNT'.
         """
         try:
-            cursor = self._cursor()
+            conn = self._get_connection(autocommit=False)
+            cursor = _CursorWrapper(conn.cursor(buffered=True), self._format_sql, connection=conn)
             rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            # Update owner and set rental start time
             if user_id in (None, 0):
                 cursor.execute(
                     """
-                    UPDATE accounts 
+                    SELECT owner, login
+                    FROM accounts
+                    WHERE ID = ?
+                    FOR UPDATE
+                    """,
+                    (account_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT owner, login
+                    FROM accounts
+                    WHERE ID = ? AND user_id = ?
+                    FOR UPDATE
+                    """,
+                    (account_id, user_id),
+                )
+            row = cursor.fetchone()
+            if not row or row[0] is not None:
+                conn.rollback()
+                return False
+
+            login = row[1]
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    UPDATE accounts
                     SET owner = ?, rental_start = ?
                     WHERE ID = ? AND owner IS NULL
                     """,
@@ -452,41 +518,21 @@ class MySQLDB:
             else:
                 cursor.execute(
                     """
-                    UPDATE accounts 
+                    UPDATE accounts
                     SET owner = ?, rental_start = ?
                     WHERE ID = ? AND owner IS NULL AND user_id = ?
                     """,
                     (owner_id, rental_start, account_id, user_id),
                 )
             if cursor.rowcount == 0:
+                conn.rollback()
                 return False
             # Get the login of the updated account
-            if user_id in (None, 0):
-                cursor.execute(
-                    """
-                    SELECT login 
-                    FROM accounts 
-                    WHERE ID = ?
-                    """,
-                    (account_id,),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT login 
-                    FROM accounts 
-                    WHERE ID = ? AND user_id = ?
-                    """,
-                    (account_id, user_id),
-                )
-            login_row = cursor.fetchone()
-            if login_row:
-                login = login_row[0]
-                # Mark all accounts with the same login as 'OTHER_ACCOUNT'
+            if login:
                 if user_id in (None, 0):
                     cursor.execute(
                         """
-                        UPDATE accounts 
+                        UPDATE accounts
                         SET owner = 'OTHER_ACCOUNT'
                         WHERE login = ? AND owner IS NULL
                         """,
@@ -495,16 +541,20 @@ class MySQLDB:
                 else:
                     cursor.execute(
                         """
-                        UPDATE accounts 
+                        UPDATE accounts
                         SET owner = 'OTHER_ACCOUNT'
                         WHERE login = ? AND owner IS NULL AND user_id = ?
                         """,
                         (login, user_id),
                     )
-            self.conn.commit()
+            conn.commit()
             return True
         except Exception as e:
             logger.error(f"Error setting account owner: {str(e)}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
         finally:
             cursor.close()
@@ -703,17 +753,28 @@ class MySQLDB:
         if self.db_type == "mysql":
             cursor.close()
 
-    def get_lot_mapping(self, lot_number: int):
+    def get_lot_mapping(self, lot_number: int, user_id: int | None = None):
         cursor = self._cursor()
-        cursor.execute(
-            """
-            SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
-            FROM lots l
-            JOIN accounts a ON a.ID = l.account_id
-            WHERE l.lot_number = ?
-            """,
-            (lot_number,),
-        )
+        if user_id in (None, 0):
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ?
+                """,
+                (lot_number,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT l.lot_number, l.account_id, l.lot_url, a.account_name
+                FROM lots l
+                JOIN accounts a ON a.ID = l.account_id
+                WHERE l.lot_number = ? AND l.user_id = ?
+                """,
+                (lot_number, user_id),
+            )
         row = cursor.fetchone()
         if self.db_type == "mysql":
             cursor.close()
@@ -1595,6 +1656,16 @@ class MySQLDB:
         """Close the persistent database connection."""
         self.conn.close()
 
+    def close_pool(self):
+        if self.db_type != "mysql":
+            return
+        try:
+            for _ in range(MYSQLPOOLSIZE):
+                conn = self._pool.get_connection()
+                conn.close()
+        except Exception as exc:
+            logger.warning(f"Failed to close MySQL pool: {exc}")
+
     # ---- User auth helpers ----
 
     def _hash_password(self, password: str) -> str:
@@ -1606,16 +1677,20 @@ class MySQLDB:
         except Exception:
             return False
 
+    def _token_expiry(self) -> datetime:
+        return datetime.now(timezone.utc) + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
+
     def create_user(self, username: str, password: str, golden_key: str) -> str | None:
         cursor = self._cursor()
         token = secrets.token_urlsafe(32)
+        expires_at = self._token_expiry()
         try:
             cursor.execute(
                 """
-                INSERT INTO users (username, password_hash, golden_key, session_token)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (username, password_hash, golden_key, session_token, session_token_expires_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (username, self._hash_password(password), golden_key, token),
+                (username, self._hash_password(password), golden_key, token, expires_at),
             )
             self.conn.commit()
             return token
@@ -1649,11 +1724,22 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute(
-                "SELECT id, username, golden_key FROM users WHERE session_token = ?",
+                "SELECT id, username, golden_key, session_token_expires_at FROM users WHERE session_token = ?",
                 (token,),
             )
             row = cursor.fetchone()
             if not row:
+                return None
+            expires_at = row[3]
+            if isinstance(expires_at, str):
+                try:
+                    expires_at = datetime.fromisoformat(expires_at)
+                except ValueError:
+                    expires_at = None
+            if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at and expires_at < datetime.now(timezone.utc):
+                self.logout_token(token)
                 return None
             return {"id": row[0], "username": row[1], "golden_key": row[2], "session_token": token}
         finally:
@@ -1662,7 +1748,11 @@ class MySQLDB:
     def update_session_token(self, user_id: int, token: str) -> None:
         cursor = self._cursor()
         try:
-            cursor.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user_id))
+            expires_at = self._token_expiry()
+            cursor.execute(
+                "UPDATE users SET session_token = ?, session_token_expires_at = ? WHERE id = ?",
+                (token, expires_at, user_id),
+            )
             self.conn.commit()
         finally:
             cursor.close()
@@ -1704,7 +1794,10 @@ class MySQLDB:
     def logout_token(self, token: str) -> None:
         cursor = self._cursor()
         try:
-            cursor.execute("UPDATE users SET session_token = NULL WHERE session_token = ?", (token,))
+            cursor.execute(
+                "UPDATE users SET session_token = NULL, session_token_expires_at = NULL WHERE session_token = ?",
+                (token,),
+            )
             self.conn.commit()
         finally:
             cursor.close()

@@ -46,3 +46,23 @@ MYSQLUSER = os.getenv("MYSQLUSER", "").strip()
 MYSQLPASSWORD = os.getenv("MYSQLPASSWORD", "").strip()
 MYSQLDATABASE = os.getenv("MYSQLDATABASE", "").strip()
 DATABASE_PATH = None
+MYSQLPOOLSIZE = _get_int("MYSQLPOOLSIZE", 5)
+SESSION_TOKEN_TTL_HOURS = _get_int("SESSION_TOKEN_TTL_HOURS", 24)
+
+
+def validate_config() -> None:
+    missing = []
+    for key, value in {
+        "MYSQLHOST": MYSQLHOST,
+        "MYSQLUSER": MYSQLUSER,
+        "MYSQLPASSWORD": MYSQLPASSWORD,
+        "MYSQLDATABASE": MYSQLDATABASE,
+    }.items():
+        if not value:
+            missing.append(key)
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+    if SESSION_TOKEN_TTL_HOURS <= 0:
+        raise RuntimeError("SESSION_TOKEN_TTL_HOURS must be greater than 0")
+    if MYSQLPOOLSIZE <= 0:
+        raise RuntimeError("MYSQLPOOLSIZE must be greater than 0")

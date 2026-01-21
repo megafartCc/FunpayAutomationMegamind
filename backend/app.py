@@ -11,10 +11,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL
+from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL, validate_config
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
 from backend.logger import logger
+from backend import notifications
 from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -26,6 +27,8 @@ from FunpayHandler.bot import FunpayBot
 
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR.parent / "Public"
+
+validate_config()
 
 app = FastAPI(title="FunpaySeller")
 db = MySQLDB()
@@ -68,14 +71,18 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 @app.on_event("startup")
 def start_background_services() -> None:
     bot_manager.start_all()
-    # One-shot presence check for debugging a specific SteamID
-    try:
-        test_sid = 76561198749779076
-        presence = _fetch_bridge_presence(test_sid)
-        logger.info(f"Test bridge presence for {test_sid}: {presence or 'no data'}")
-    except Exception as exc:
-        logger.warning(f"Test bridge presence check failed: {exc}")
     logger.info("Startup complete (per-user FunPay bots initialized if keys are present).")
+
+
+@app.on_event("shutdown")
+def shutdown_services() -> None:
+    try:
+        db.close_pool()
+    except Exception as exc:
+        logger.warning(f"Failed to close DB pool: {exc}")
+    close_pool = getattr(notifications, "close_pool", None)
+    if callable(close_pool):
+        close_pool()
 
 
 def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
