@@ -1,6 +1,6 @@
 import secrets
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.config import (
     MYSQLDATABASE,
@@ -1656,6 +1656,16 @@ class MySQLDB:
         """Close the persistent database connection."""
         self.conn.close()
 
+    def close_pool(self):
+        if self.db_type != "mysql":
+            return
+        try:
+            for _ in range(MYSQLPOOLSIZE):
+                conn = self._pool.get_connection()
+                conn.close()
+        except Exception as exc:
+            logger.warning(f"Failed to close MySQL pool: {exc}")
+
     # ---- User auth helpers ----
 
     def _hash_password(self, password: str) -> str:
@@ -1668,7 +1678,7 @@ class MySQLDB:
             return False
 
     def _token_expiry(self) -> datetime:
-        return datetime.utcnow() + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
+        return datetime.now(timezone.utc) + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
 
     def create_user(self, username: str, password: str, golden_key: str) -> str | None:
         cursor = self._cursor()
@@ -1726,7 +1736,9 @@ class MySQLDB:
                     expires_at = datetime.fromisoformat(expires_at)
                 except ValueError:
                     expires_at = None
-            if expires_at and expires_at < datetime.utcnow():
+            if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at and expires_at < datetime.now(timezone.utc):
                 self.logout_token(token)
                 return None
             return {"id": row[0], "username": row[1], "golden_key": row[2], "session_token": token}

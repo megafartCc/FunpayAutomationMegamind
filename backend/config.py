@@ -62,3 +62,7 @@ def validate_config() -> None:
             missing.append(key)
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+    if SESSION_TOKEN_TTL_HOURS <= 0:
+        raise RuntimeError("SESSION_TOKEN_TTL_HOURS must be greater than 0")
+    if MYSQLPOOLSIZE <= 0:
+        raise RuntimeError("MYSQLPOOLSIZE must be greater than 0")

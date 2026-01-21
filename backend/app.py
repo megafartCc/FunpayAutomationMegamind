@@ -15,6 +15,7 @@ from backend.config import DOTA_MATCH_BLOCK_MANUAL_DEAUTHORIZE, STEAM_BRIDGE_URL
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
 from backend.logger import logger
+from backend.notifications import close_pool as close_notifications_pool
 from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -71,6 +72,15 @@ app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 def start_background_services() -> None:
     bot_manager.start_all()
     logger.info("Startup complete (per-user FunPay bots initialized if keys are present).")
+
+
+@app.on_event("shutdown")
+def shutdown_services() -> None:
+    try:
+        db.close_pool()
+    except Exception as exc:
+        logger.warning(f"Failed to close DB pool: {exc}")
+    close_notifications_pool()
 
 
 def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
