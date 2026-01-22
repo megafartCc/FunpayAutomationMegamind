@@ -50,12 +50,11 @@ COMMANDS_HELP = (
     "!code / !\u043a\u043e\u0434 \u2014 \u043a\u043e\u0434 Steam Guard\n"
     "!stock / !\u0441\u0442\u043e\u043a \u2014 \u043d\u0430\u043b\u0438\u0447\u0438\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432\n"
     "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <\u043d\u043e\u043c\u0435\u0440_\u043b\u043e\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
-    "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
-    "!bonus / !\u0431\u043e\u043d\u0443\u0441 \u2014 \u0431\u043e\u043d\u0443\u0441 \u0437\u0430 \u043e\u0442\u0437\u044b\u0432 (5\u2605)"
+    "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443"
 )
 COMMANDS_INLINE = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b: !acc/!\u0430\u043a\u043a, !code/!\u043a\u043e\u0434, !stock/!\u0441\u0442\u043e\u043a, !extend/!\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, "
-    "!cancel/!\u043e\u0442\u043c\u0435\u043d\u0430, !bonus/!\u0431\u043e\u043d\u0443\u0441"
+    "!cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
 )
 
 
@@ -886,10 +885,6 @@ class FunpayBot:
             self._handle_cancel(acc, chat_id, event.message.author, raw_text)
             return
 
-        if message_text in ("!bonus", "!бонус"):
-            self._handle_bonus(acc, chat_id, event.message.author)
-            return
-
         if not raw_text:
             return
 
@@ -937,8 +932,53 @@ class FunpayBot:
         owner = review.author or getattr(order, "buyer_username", None) or event.message.author
         if not owner:
             return
+        rating = int(review.stars)
         review_text = review.text or ""
-        self._db.upsert_feedback_reward(order_id, owner, int(review.stars), review_text)
+        self._db.upsert_feedback_reward(order_id, owner, rating, review_text)
+        if rating < 5:
+            return
+        reward = self._db.get_feedback_reward(order_id)
+        if reward and reward.get("claimed_at"):
+            return
+        if reward and reward.get("revoked_at"):
+            return
+        accounts = self._db.get_user_active_accounts(owner, self._user_id)
+        if not accounts:
+            send_message_to_admin(
+                "BONUS SKIPPED\n\n"
+                f"Order: {order_id}\n"
+                f"Owner: {owner}\n"
+                "Reason: no active rental to extend.",
+            )
+            return
+
+        target = accounts[0]
+        account_id = target["id"]
+        if not self._db.extend_rental_duration_for_owner(account_id, owner, HOURS_FOR_REVIEW, 0):
+            send_message_to_admin(
+                "BONUS APPLY FAILED\n\n"
+                f"Order: {order_id}\n"
+                f"Owner: {owner}\n"
+                f"Account ID: {account_id}",
+            )
+            return
+
+        if not self._db.mark_feedback_reward_claimed(order_id, account_id):
+            logger.warning(f"Failed to mark feedback reward claimed for order {order_id}.")
+
+        updated = self._db.get_account_by_id(account_id, self._user_id)
+        total_minutes = get_duration_minutes(updated or {})
+        if total_minutes <= 0:
+            total_minutes = get_duration_minutes(target) + HOURS_FOR_REVIEW * 60
+        total_label = format_duration_minutes(total_minutes)
+        chat = acc.get_chat_by_name(owner, True)
+        chat_id = getattr(chat, "id", None) or getattr(event.message, "chat_id", None)
+        if chat_id:
+            acc.send_message(
+                chat_id,
+                f"\u0411\u043e\u043d\u0443\u0441 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d: +{HOURS_FOR_REVIEW} \u0447. \u0437\u0430 \u043e\u0442\u0437\u044b\u0432 5\u2605. \u0417\u0430\u043a\u0430\u0437 #{order_id}.\n"
+                f"\u041e\u0431\u0449\u0435\u0435 \u0432\u0440\u0435\u043c\u044f \u0430\u0440\u0435\u043d\u0434\u044b: {total_label}.",
+            )
 
     def _handle_feedback_deleted(self, acc: Account, event: Any, chat_id: int | None = None) -> None:
         order_id = self._extract_order_id(event.message.text or "")
@@ -1014,48 +1054,6 @@ class FunpayBot:
             f"Owner: {reward_owner}\n"
             f"Account ID: {target_account['id']}\n"
             f"Removed: {duration_label}",
-        )
-
-    def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
-        reward = self._db.get_unclaimed_feedback_reward(owner, min_rating=5)
-        if not reward:
-            acc.send_message(chat_id, "Не найдено 5★ отзыва без бонуса.")
-            return
-
-        order_id = reward["order_id"]
-        try:
-            order = acc.get_order(order_id)
-        except Exception as exc:
-            logger.warning(f"Failed to fetch order {order_id} for bonus: {exc}")
-            acc.send_message(chat_id, "Не удалось проверить отзыв. Попробуйте позже.")
-            return
-
-        review = getattr(order, "review", None)
-        if not review or review.stars is None or int(review.stars) < 5:
-            acc.send_message(chat_id, "Отзыв не соответствует требованию 5★.")
-            return
-
-        accounts = self._db.get_user_active_accounts(owner)
-        if not accounts:
-            acc.send_message(chat_id, "Нет активных аренд для начисления бонуса.")
-            return
-
-        target = accounts[0]
-        account_id = target["id"]
-        if not self._db.extend_rental_duration_for_owner(account_id, owner, HOURS_FOR_REVIEW, 0):
-            acc.send_message(chat_id, "Не удалось начислить бонус. Попробуйте позже.")
-            return
-
-        self._db.mark_feedback_reward_claimed(order_id, account_id)
-        updated = self._db.get_account_by_id(account_id, self._user_id)
-        total_minutes = get_duration_minutes(updated or {})
-        if total_minutes <= 0:
-            total_minutes = get_duration_minutes(target) + HOURS_FOR_REVIEW * 60
-        total_label = format_duration_minutes(total_minutes)
-        acc.send_message(
-            chat_id,
-            f"\u0411\u043e\u043d\u0443\u0441 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d: +{HOURS_FOR_REVIEW} \u0447. \u0437\u0430 \u043e\u0442\u0437\u044b\u0432 5\u2605. \u0417\u0430\u043a\u0430\u0437 #{order_id}.\n"
-            f"\u041e\u0431\u0449\u0435\u0435 \u0432\u0440\u0435\u043c\u044f \u0430\u0440\u0435\u043d\u0434\u044b: {total_label}.",
         )
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
