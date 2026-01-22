@@ -1,19 +1,16 @@
 import html as html_module
 import json
-import os
 import re
-import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Thread
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Optional
 from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -41,8 +38,8 @@ from FunpayHandler.bot import FunpayBot
 
 
 BASE_DIR = Path(__file__).resolve().parent
-FRONTEND_DIST_DIR = BASE_DIR.parent / "Public" / "dist"
-FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+FRONTEND_DIST_DIR = BASE_DIR.parent / "Public"
+FRONTEND_STATIC_DIR = FRONTEND_DIST_DIR
 
 app = FastAPI(title="FunpaySeller")
 
@@ -452,37 +449,12 @@ class PresenceCache:
 
 presence_cache = PresenceCache()
 
-if FRONTEND_ASSETS_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
-
-
-def _frontend_assets_mounted() -> bool:
-    return any(getattr(route, "path", None) == "/assets" for route in app.router.routes)
-
-
-def _maybe_build_frontend() -> None:
-    if FRONTEND_DIST_DIR.exists():
-        return
-    if os.getenv("FRONTEND_AUTO_BUILD", "true").lower() not in ("1", "true", "yes", "on"):
-        return
-    frontend_dir = BASE_DIR.parent / "Public"
-    package_json = frontend_dir / "package.json"
-    if not package_json.exists():
-        logger.warning("Frontend package.json not found; skipping auto build.")
-        return
-    logger.info("Frontend build missing; attempting auto-build.")
-    try:
-        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
-        subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
-    except Exception as exc:
-        logger.warning(f"Frontend auto-build failed: {exc}")
+if FRONTEND_STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=FRONTEND_STATIC_DIR), name="static")
 
 
 @app.on_event("startup")
 def start_background_services() -> None:
-    _maybe_build_frontend()
-    if FRONTEND_ASSETS_DIR.exists() and not _frontend_assets_mounted():
-        app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
     try:
         init_presence_bot(
             enabled=STEAM_PRESENCE_ENABLED,
@@ -1202,42 +1174,19 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def _frontend_build_missing_response() -> HTMLResponse:
-    message = """<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Frontend build missing</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 40px; color: #1f2937; }
-      code, pre { background: #f3f4f6; padding: 12px; border-radius: 6px; display: block; }
-      h1 { font-size: 24px; margin-bottom: 12px; }
-    </style>
-  </head>
-  <body>
-    <h1>Frontend build not found</h1>
-    <p>The React frontend has not been built yet. Build it and redeploy:</p>
-    <pre>cd Public
-npm install
-npm run build</pre>
-  </body>
-</html>"""
-    return HTMLResponse(message, status_code=503)
-
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return _frontend_build_missing_response()
+    raise HTTPException(status_code=404, detail="Frontend build not found")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa_fallback(path: str) -> FileResponse:
-    if path.startswith(("api", "assets")):
+    if path.startswith(("api", "static")):
         raise HTTPException(status_code=404)
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return _frontend_build_missing_response()
+    raise HTTPException(status_code=404, detail="Frontend build not found")
