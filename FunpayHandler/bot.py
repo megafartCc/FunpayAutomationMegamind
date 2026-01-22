@@ -1365,14 +1365,20 @@ class FunpayBot:
     def _check_rental_expiration_once(self, invalid_accs: list[int]) -> None:
         conn, cursor = self._db.open_connection()
         try:
-            cursor.execute(
-                """
+            query = """
                 SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
-                """
-            )
+            """
+            params: tuple[int, ...] = ()
+            # When running multiple bots (one per dashboard user), do NOT leak expiration
+            # notifications across users. Older versions queried all rows.
+            if self._user_id not in (None, 0):
+                query += " AND a.user_id = ?"
+                params = (int(self._user_id),)
+
+            cursor.execute(query, params)
             accounts_data = cursor.fetchall()
         finally:
             cursor.close()
@@ -1392,7 +1398,7 @@ class FunpayBot:
                 login,
                 account_name,
             ) = row
-            if not owner:
+            if not owner or owner == "OTHER_ACCOUNT":
                 continue
 
             if isinstance(start_time, datetime):
