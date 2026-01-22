@@ -121,6 +121,23 @@ const NAV_ITEMS = [
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
 
+const navIdToPath: Record<string, string> = {
+  overview: "/dashboard",
+  rentals: "/rentals",
+  inventory: "/inventory",
+  lots: "/lots",
+  chats: "/chats",
+  add: "/add",
+  notifications: "/notifications",
+  settings: "/settings",
+};
+
+const pathToNavId = (path: string): string => {
+  const clean = path.toLowerCase();
+  const found = Object.entries(navIdToPath).find(([, p]) => p === clean);
+  return found?.[0] || "overview";
+};
+
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
   const [pathname, setPathname] = useState(() => window.location.pathname);
@@ -143,8 +160,10 @@ const App: React.FC = () => {
   const apiFetch = api.apiFetch;
 
   useEffect(() => {
+    const targetNav = pathToNavId(pathname);
+    setActiveNav(targetNav);
     const desired = token
-      ? "/"
+      ? navIdToPath[targetNav]
       : pathname === "/login" || pathname === "/authentication" || pathname === "/authencation"
         ? pathname
         : "/authencation";
@@ -217,10 +236,15 @@ const App: React.FC = () => {
                       const isActive = activeNav === item.id;
                       return (
                         <motion.button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setActiveNav(item.id)}
-                          className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveNav(item.id);
+                        const nextPath = navIdToPath[item.id] || "/dashboard";
+                        window.history.replaceState(null, "", nextPath);
+                        setPathname(nextPath);
+                      }}
+                      className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
                           whileHover={{ scale: 1.01 }}
                           transition={{ type: "spring", stiffness: 320, damping: 30 }}
                         >
@@ -245,10 +269,10 @@ const App: React.FC = () => {
               </aside>
               <main className="relative flex-1 bg-white">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
-                <div className="px-10 py-8">
-                  <div className="mb-8 flex items-center justify-between">
+                <div className="pl-10 pr-10 pt-6">
+                  <div className="mb-6 flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-neutral-700">Скоро тут будет контент</h2>
-                    <label className="relative flex h-11 w-72 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
+                    <label className="relative flex h-11 w-80 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path
                           d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z"
@@ -266,6 +290,7 @@ const App: React.FC = () => {
                       />
                     </label>
                   </div>
+                  <div className="h-px w-full bg-neutral-200" />
                 </div>
               </main>
             </div>
