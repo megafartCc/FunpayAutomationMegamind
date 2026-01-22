@@ -42,7 +42,6 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
-STOCK_LIST_LIMIT = 20
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
 RENTAL_STATUS_RE = re.compile(
     r"(сколько|остал|врем|час).*(аренд|врем)|аренд.*(есть|остал)|time left|rental time|hours left",
