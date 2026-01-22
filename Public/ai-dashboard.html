@@ -100,6 +100,37 @@
         font-size: 0.85rem;
       }
 
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+      }
+
+      input {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.6);
+        color: var(--text);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.9rem;
+      }
+
+      button {
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: linear-gradient(120deg, rgba(34, 211, 238, 0.3), rgba(56, 189, 248, 0.15));
+        color: var(--text);
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
       .row {
         display: flex;
         justify-content: space-between;
@@ -139,6 +170,22 @@
       <div class="subtitle">Live snapshot of AI routing, latency, and errors.</div>
     </header>
     <main>
+      <div class="card" id="login-card">
+        <h2>Login</h2>
+        <div class="list">
+          <label>
+            Username
+            <input id="login-username" type="text" autocomplete="username" />
+          </label>
+          <label>
+            Password
+            <input id="login-password" type="password" autocomplete="current-password" />
+          </label>
+          <button id="login-button" type="button">Sign in</button>
+          <button id="logout-button" type="button">Sign out</button>
+          <div class="subtitle" id="login-status"></div>
+        </div>
+      </div>
       <div class="grid">
         <div class="card">
           <h2>Requests</h2>
@@ -182,8 +229,15 @@
     </main>
 
     <script>
-      const token = new URLSearchParams(window.location.search).get("token");
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const TOKEN_KEY = "aiDashboardToken";
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get("token");
+      if (urlToken) {
+        localStorage.setItem(TOKEN_KEY, urlToken);
+      }
+      const getToken = () => localStorage.getItem(TOKEN_KEY);
+      const headersForToken = (token) =>
+        token ? { Authorization: `Bearer ${token}` } : {};
 
       const fmt = (value, suffix = "") =>
         value === null || value === undefined ? "-" : `${value}${suffix}`;
@@ -222,9 +276,18 @@
           });
       };
 
+      const updateLoginStatus = (text, isError = false) => {
+        const el = document.getElementById("login-status");
+        el.textContent = text || "";
+        el.style.color = isError ? "var(--danger)" : "var(--muted)";
+      };
+
       const loadMetrics = async () => {
         try {
-          const resp = await fetch("/api/ai/metrics", { headers });
+          const token = getToken();
+          const resp = await fetch("/api/ai/metrics", {
+            headers: headersForToken(token),
+          });
           if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
           }
@@ -246,11 +309,53 @@
           renderList(document.getElementById("actions"), data?.actions);
           renderList(document.getElementById("errors"), data?.errors);
           renderEvents(document.getElementById("events"), data?.events);
+          updateLoginStatus("Authenticated.");
         } catch (err) {
           document.getElementById("requests").textContent = "Auth required";
           document.getElementById("error-rate").textContent = "-";
+          document.getElementById("error-budget").textContent = "-";
+          updateLoginStatus("Not authenticated. Please sign in.", true);
         }
       };
+
+      const login = async () => {
+        const username = document.getElementById("login-username").value.trim();
+        const password = document.getElementById("login-password").value;
+        if (!username || !password) {
+          updateLoginStatus("Enter username and password.", true);
+          return;
+        }
+        updateLoginStatus("Signing in...");
+        try {
+          const resp = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          const data = await resp.json();
+          if (data?.token) {
+            localStorage.setItem(TOKEN_KEY, data.token);
+            updateLoginStatus("Signed in.");
+            loadMetrics();
+          } else {
+            updateLoginStatus("Login failed: no token.", true);
+          }
+        } catch (err) {
+          updateLoginStatus("Login failed.", true);
+        }
+      };
+
+      const logout = () => {
+        localStorage.removeItem(TOKEN_KEY);
+        updateLoginStatus("Signed out.");
+        loadMetrics();
+      };
+
+      document.getElementById("login-button").addEventListener("click", login);
+      document.getElementById("logout-button").addEventListener("click", logout);
 
       loadMetrics();
       setInterval(loadMetrics, 5000);
