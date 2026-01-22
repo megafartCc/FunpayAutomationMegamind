@@ -387,6 +387,7 @@ const App: React.FC = () => {
                       />
                     </label>
                   </div>
+                  <div className="-mx-10 mt-4 h-px bg-neutral-200" />
                   <div className="mt-6">
                     <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -420,6 +421,67 @@ const App: React.FC = () => {
                           </motion.div>
                         );
                       })}
+                    </div>
+                  </div>
+                  <div className="mt-8 grid gap-6 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="text-lg font-semibold text-neutral-900">Project summary</h3>
+                        <div className="flex gap-2">
+                          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Project</div>
+                          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 text-sm font-semibold text-neutral-500">
+                        <span>Name</span>
+                        <span className="text-center">Due date</span>
+                        <span className="text-right">Status</span>
+                      </div>
+                      <div className="mt-3 space-y-3 text-sm text-neutral-800">
+                        {["Nelsa web development", "Datascale AI app", "Media channel branding", "Corlax iOS app", "Website builder"].map(
+                          (name, idx) => (
+                            <div
+                              key={name}
+                              className="grid grid-cols-3 items-center gap-3 rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-3"
+                            >
+                              <span className="truncate">{name}</span>
+                              <span className="text-center text-neutral-500">25.01.24</span>
+                              <span
+                                className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${
+                                  idx % 2 === 0 ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
+                                }`}
+                              >
+                                {idx % 2 === 0 ? "Completed" : "On going"}
+                              </span>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="text-lg font-semibold text-neutral-900">Overall progress</h3>
+                        <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">All</button>
+                      </div>
+                      <div className="flex items-end justify-between gap-3">
+                        {[65, 87, 20, 25].map((val, idx) => (
+                          <div key={val} className="flex flex-1 flex-col items-center">
+                            <div
+                              className={`w-full rounded-lg bg-neutral-100`}
+                              style={{ height: "170px", position: "relative" }}
+                            >
+                              <div
+                                className="absolute bottom-0 left-0 right-0 rounded-lg bg-gradient-to-t from-orange-400 to-orange-300"
+                                style={{ height: `${val}%` }}
+                              />
+                            </div>
+                            <div className="mt-2 text-sm font-semibold text-neutral-800">{val}%</div>
+                            <div className="text-xs text-neutral-500">
+                              {idx === 0 ? "Completed" : idx === 1 ? "On going" : idx === 2 ? "At risk" : "Delayed"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
