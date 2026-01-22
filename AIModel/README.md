@@ -17,6 +17,8 @@ Notes:
 - Actions are gated by active rentals; if there is no active rental, the bot
   will not send accounts or codes. Extend/cancel/stock are safe actions and
   still validate inputs on the server.
-- The bot stores full chat history and keeps a rolling summary to stay within
-  token limits. Tune with AI_CONTEXT_MESSAGES / AI_SUMMARY_* env vars.
+- The bot stores chat history and memory facts locally in AI_MEMORY_DIR
+  (default: data/chat_memory) and keeps a rolling summary to stay within token
+  limits. Tune with AI_CONTEXT_MESSAGES / AI_SUMMARY_* / AI_MEMORY_* env vars.
+- Users can say "remember this - ..." and later ask "what do you remember".
 - REQUIRE_PAID_ORDER=true ensures accounts are issued only after ORDER_PAID.

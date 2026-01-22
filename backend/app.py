@@ -36,6 +36,7 @@ from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
+from AIModel.memory_store import get_memory_store
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1139,6 +1140,26 @@ def chat_history(
         if cached is not None:
             return {"items": cached[-limit:]}
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/memory/{owner}", dependencies=[Depends(require_admin)])
+def ai_memory(owner: str, request: Request, limit: int = 20) -> dict:
+    if not owner:
+        raise HTTPException(status_code=400, detail="Owner is required")
+    uid = current_user_id(request)
+    try:
+        limit_value = max(1, min(int(limit), 200))
+    except Exception:
+        limit_value = 20
+    store = get_memory_store()
+    state = store.get_summary_state(owner, uid)
+    return {
+        "owner": owner,
+        "summary": state.get("summary"),
+        "last_message_time": state.get("last_seen_at"),
+        "facts": store.get_facts(owner, uid),
+        "messages": store.get_recent_messages(owner, limit_value, uid),
+    }
 
 
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])

@@ -35,6 +35,7 @@ from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
 from AIModel.agent import get_ai_responder
+from AIModel.memory_store import get_memory_store
 
 from .messages import USER
 from .utils import (
@@ -66,6 +67,14 @@ SENSITIVE_KEYWORDS = (
     "steamguard",
     "код steam",
 )
+MEMORY_REMEMBER_RE = re.compile(
+    r"^(?:remember(?: this)?|save)\s*[:\-]?\s*(.+)$",
+    re.IGNORECASE,
+)
+MEMORY_RECALL_RE = re.compile(
+    r"\b(what did (?:i )?say to remember|what do you remember|remind me|recall)\b",
+    re.IGNORECASE,
+)
 ISSUE_KEYWORDS = (
     "не работает",
     "нерабоч",
@@ -87,6 +96,41 @@ ISSUE_KEYWORDS = (
     "code",
     "код",
 )
+
+CODE_REQUEST_KEYWORDS = (
+    "!code",
+    "!???",
+    "???",
+    "code",
+    "2fa",
+    "otp",
+    "steam guard",
+    "steamguard",
+    "guard code",
+    "steamguard code",
+    "???? ????",
+)
+ACCOUNT_REQUEST_KEYWORDS = (
+    "!acc",
+    "!???",
+    "!account",
+    "?????",
+    "??????",
+    "??????",
+    "??????",
+    "credentials",
+    "details",
+)
+ACCOUNT_ACTION_KEYWORDS = (
+    "???",
+    "?????",
+    "??????",
+    "??????",
+    "?????",
+    "??????",
+    "?????",
+)
+
 ISSUE_REPLY = (
     "\u041f\u043e\u043d\u044f\u043b, \u0441\u0435\u0439\u0447\u0430\u0441 "
     "\u043f\u0440\u043e\u0432\u0435\u0440\u044e. \u041f\u0440\u0438\u0448\u043b\u044e "
@@ -139,6 +183,7 @@ class FunpayBot:
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
         self._ai = get_ai_responder()
+        self._memory = get_memory_store()
 
         self._pending_account_choice: Dict[str, List[Dict]] = {}
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
@@ -453,7 +498,10 @@ class FunpayBot:
     def _log_chat_message(self, owner: str, role: str, message: str) -> None:
         if not owner or not message:
             return
-        self._db.log_chat_message(owner, role, message, self._user_id)
+        if self._is_sensitive_message(message):
+            return
+        created_at = datetime.now(tz=MOSCOW_TZ).isoformat()
+        self._memory.log_message(owner, role, message, self._user_id, created_at)
 
     def _is_sensitive_message(self, text: str) -> bool:
         lowered = text.lower()
@@ -462,6 +510,81 @@ class FunpayBot:
     def _is_issue_message(self, text: str) -> bool:
         lowered = text.lower()
         return any(keyword in lowered for keyword in ISSUE_KEYWORDS)
+
+    def _is_code_request(self, text: str) -> bool:
+        lowered = text.lower()
+        if any(keyword in lowered for keyword in CODE_REQUEST_KEYWORDS):
+            return True
+        return self._is_issue_message(text)
+
+    def _is_account_request(self, text: str) -> bool:
+        lowered = text.lower()
+        if any(keyword in lowered for keyword in ACCOUNT_REQUEST_KEYWORDS):
+            return True
+        if any(k in lowered for k in ("???", "???????", "account")) and any(
+            keyword in lowered for keyword in ACCOUNT_ACTION_KEYWORDS
+        ):
+            return True
+        return False
+
+    def _extract_memory_fact(self, text: str) -> Optional[str]:
+        match = MEMORY_REMEMBER_RE.search(text.strip())
+        if not match:
+            return None
+        fact = match.group(1).strip()
+        return fact or None
+
+    def _is_memory_recall(self, text: str) -> bool:
+        return bool(MEMORY_RECALL_RE.search(text.lower()))
+
+    def _handle_memory_command(
+        self, acc: Account, chat_id: int, owner: str, raw_text: str
+    ) -> bool:
+        fact = self._extract_memory_fact(raw_text)
+        if fact:
+            created_at = datetime.now(tz=MOSCOW_TZ).isoformat()
+            self._memory.add_fact(owner, fact, self._user_id, created_at)
+            acc.send_message(chat_id, f"Got it. I'll remember: {fact}")
+            return True
+        if self._is_memory_recall(raw_text):
+            facts = self._memory.get_facts(owner, self._user_id)
+            if not facts:
+                acc.send_message(chat_id, "I don't have anything saved yet.")
+                return True
+            lines = ["You asked me to remember:"]
+            for item in facts[-10:]:
+                label = (item.get("text") or "").strip()
+                if not label:
+                    continue
+                created_at = item.get("created_at")
+                if created_at:
+                    lines.append(f"- {label} ({created_at})")
+                else:
+                    lines.append(f"- {label}")
+            acc.send_message(chat_id, "\n".join(lines))
+            return True
+        return False
+
+    def _is_stock_request(self, text: str) -> bool:
+        lowered = text.lower()
+        if "stock" in lowered or "list accounts" in lowered or "account list" in lowered:
+            return True
+        if "available" in lowered and ("account" in lowered or "lot" in lowered):
+            return True
+        if "rent" in lowered and "account" in lowered:
+            return True
+        return False
+
+    def _is_cancel_request(self, text: str) -> bool:
+        lowered = text.lower()
+        if "cancel" in lowered:
+            return True
+        if "stop" in lowered and ("rent" in lowered or "rental" in lowered):
+            return True
+        if "end" in lowered and "rental" in lowered:
+            return True
+        return False
+
 
     def _redact_mmr_label(self, text: Optional[str]) -> str:
         if not text:
@@ -474,10 +597,10 @@ class FunpayBot:
         cleaned = self._redact_mmr_label(name or "")
         return cleaned or "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
 
-    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        sanitized: List[Dict[str, str]] = []
+    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        sanitized: List[Dict[str, Any]] = []
         for item in messages:
-            text = (item.get("message") or "").strip()
+            text = (item.get("message") or item.get("text") or "").strip()
             if not text:
                 continue
             if self._is_sensitive_message(text):
@@ -487,7 +610,11 @@ class FunpayBot:
             role = (item.get("role") or "user").strip().lower()
             if role not in ("user", "bot"):
                 role = "user"
-            sanitized.append({"role": role, "text": text})
+            payload = {"role": role, "text": text}
+            created_at = item.get("created_at") or item.get("time")
+            if created_at:
+                payload["time"] = str(created_at)
+            sanitized.append(payload)
         return sanitized
 
     def _format_datetime(self, value: Any) -> Optional[str]:
@@ -498,18 +625,25 @@ class FunpayBot:
         return str(value)
 
     def _refresh_chat_summary(self, owner: str) -> str:
-        summary_entry = self._db.get_chat_summary(owner, self._user_id)
-        summary_text = summary_entry["summary"] if summary_entry else ""
-        last_message_id = summary_entry["last_message_id"] if summary_entry else 0
+        summary_state = self._memory.get_summary_state(owner, self._user_id)
+        summary_text = summary_state.get("summary") or ""
+        last_message_id = summary_state.get("last_summary_id") or 0
 
         if not AI_SUMMARY_ENABLED or not self._ai or not self._ai.enabled:
             return summary_text
 
-        pending = self._db.get_chat_messages_after(owner, last_message_id, self._user_id)
-        if len(pending) < AI_SUMMARY_TRIGGER:
+        pending = self._memory.get_messages_after(owner, last_message_id, self._user_id)
+        if not pending:
             return summary_text
 
-        chunk = pending[:AI_SUMMARY_TRIGGER]
+        if not summary_text and int(last_message_id or 0) == 0:
+            bootstrap_limit = min(AI_CONTEXT_MESSAGES, len(pending))
+            chunk = pending[-bootstrap_limit:]
+        else:
+            if len(pending) < AI_SUMMARY_TRIGGER:
+                return summary_text
+            chunk = pending[:AI_SUMMARY_TRIGGER]
+
         sanitized = self._sanitize_messages(chunk)
         if not sanitized:
             return summary_text
@@ -518,15 +652,38 @@ class FunpayBot:
         if not updated:
             return summary_text
 
-        self._db.upsert_chat_summary(owner, updated, chunk[-1]["id"], self._user_id)
+        last_id = chunk[-1].get("id") if chunk else last_message_id
+        try:
+            last_id = int(last_id or 0)
+        except Exception:
+            last_id = int(last_message_id or 0)
+        self._memory.set_summary(owner, updated, last_id, self._user_id)
         return updated
 
     def _build_ai_context(self, owner: str) -> Dict[str, Any]:
         active_accounts = self._db.get_user_active_accounts(owner, self._user_id)
         available_lots = self._db.get_available_lot_accounts(self._user_id)
         summary_text = self._refresh_chat_summary(owner)
-        recent_messages = self._db.get_chat_messages(owner, AI_CONTEXT_MESSAGES, self._user_id)
+        recent_messages = self._memory.get_recent_messages(
+            owner, AI_CONTEXT_MESSAGES, self._user_id
+        )
         recent_messages = self._sanitize_messages(recent_messages)
+        facts = self._memory.get_facts(owner, self._user_id)
+        safe_facts: List[Dict[str, Any]] = []
+        for item in facts:
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            if self._is_sensitive_message(text):
+                continue
+            entry = {"text": text}
+            created_at = item.get("created_at")
+            if created_at:
+                entry["created_at"] = str(created_at)
+            safe_facts.append(entry)
+        last_message_time = self._memory.get_last_seen_at(owner, self._user_id)
+        if not last_message_time and recent_messages:
+            last_message_time = recent_messages[-1].get("time")
 
         safe_lots: List[Dict[str, Any]] = []
         for item in available_lots[:AI_STOCK_LIMIT]:
@@ -590,6 +747,8 @@ class FunpayBot:
             "available_lots": safe_lots,
             "recent_messages": recent_messages,
             "history_summary": summary_text,
+            "memory_facts": safe_facts,
+            "last_message_time": last_message_time,
             "rental_history": safe_rentals,
             "order_history": safe_orders,
         }
@@ -1071,18 +1230,33 @@ class FunpayBot:
         if not raw_text:
             return
 
-        if not self._ai or not self._ai.enabled:
+        if self._handle_memory_command(acc, chat_id, owner, raw_text):
             return
 
-        context = self._build_ai_context(event.message.author)
         if self._is_issue_message(raw_text):
-            if context.get("active_rental_count"):
+            has_active = bool(
+                self._db.get_user_active_accounts(owner, self._user_id)
+            )
+            if has_active:
                 acc.send_message(chat_id, ISSUE_REPLY)
-                self._handle_code(acc, chat_id, event.message.author)
+                self._handle_code(acc, chat_id, owner)
             else:
                 stock_message = self._build_stock_message()
                 acc.send_message(chat_id, f"{ISSUE_NO_RENTAL_REPLY}\n\n{stock_message}")
             return
+
+        if self._is_stock_request(raw_text):
+            self._handle_stock(acc, chat_id)
+            return
+
+        if self._is_cancel_request(raw_text):
+            self._handle_cancel(acc, chat_id, owner, raw_text)
+            return
+
+        if not self._ai or not self._ai.enabled:
+            return
+
+        context = self._build_ai_context(owner)
         response = self._ai.respond(raw_text, context)
         if not response:
             return
