@@ -85,18 +85,20 @@ export const formatMatchTimeSeconds = (seconds?: number | null) => {
 export const buildMatchLabel = (heroName?: string | null, matchSeconds?: number | null, matchTime?: string | null) => {
   const extras: string[] = [];
   if (heroName) extras.push(heroName);
-  const display = Number.isFinite(matchSeconds)
-    ? formatMatchTimeSeconds(matchSeconds)
-    : matchTime;
+  const display =
+    typeof matchSeconds === "number" && Number.isFinite(matchSeconds)
+      ? formatMatchTimeSeconds(matchSeconds)
+      : matchTime;
   if (display) extras.push(display);
   return extras.length ? `В матче(${extras.join(")(")})` : "В матче";
 };
 
 export const presenceLabel = (item: Rental, matchSecondsOverride?: number | null) => {
   if (item?.in_match) {
-    const rawSeconds = Number.isFinite(matchSecondsOverride)
-      ? matchSecondsOverride
-      : Number(item?.match_seconds);
+    const rawSeconds =
+      typeof matchSecondsOverride === "number" && Number.isFinite(matchSecondsOverride)
+        ? matchSecondsOverride
+        : Number(item?.match_seconds);
     const matchSeconds = Number.isFinite(rawSeconds)
       ? Math.floor(rawSeconds)
       : parseMatchTimeSeconds(item?.match_time || undefined);

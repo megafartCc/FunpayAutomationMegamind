@@ -10,8 +10,8 @@ import ManageAccountPanel from "./components/manage/ManageAccountPanel";
 import AddAccountForm from "./components/account/AddAccountForm";
 import NotificationsPanel from "./components/notifications/NotificationsPanel";
 import SettingsPanel from "./components/settings/SettingsPanel";
-import AuthOverlay from "./components/auth/AuthOverlay";
 import Toast from "./components/common/Toast";
+import LoginPage from "./pages/LoginPage";
 import { createApiClient } from "./services/api";
 import { useInterval } from "./hooks/useInterval";
 import { useToast } from "./hooks/useToast";
@@ -44,7 +44,7 @@ const App: React.FC = () => {
   const [chatTitle, setChatTitle] = useState("Выберите чат");
   const [chatSubtitle, setChatSubtitle] = useState("Загрузите историю.");
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
-  const [authVisible, setAuthVisible] = useState(!sessionStorage.getItem("adminToken"));
+  const [pathname, setPathname] = useState(() => window.location.pathname);
   const [tick, setTick] = useState(0);
 
   const matchStartCache = useRef<Map<string, number>>(new Map());
@@ -61,7 +61,6 @@ const App: React.FC = () => {
           sessionStorage.removeItem("adminToken");
           sessionStorage.removeItem("adminUser");
           setToken("");
-          setAuthVisible(true);
         },
       }),
     [token]
@@ -168,11 +167,27 @@ const App: React.FC = () => {
   }, [loadHealth, loadStats, loadNotifications, loadLots, loadAccounts, loadActiveRentals, loadChats]);
 
   useEffect(() => {
+    const handlePopState = () => setPathname(window.location.pathname);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const desired = token
+      ? "/"
+      : pathname === "/login" || pathname === "/authentication" || pathname === "/authencation"
+        ? pathname
+        : "/authencation";
+    if (pathname !== desired) {
+      window.history.replaceState(null, "", desired);
+      setPathname(desired);
+    }
+  }, [token, pathname]);
+
+  useEffect(() => {
     if (!token) {
-      setAuthVisible(true);
       return;
     }
-    setAuthVisible(false);
     loadAll().catch((error) => showToast((error as Error).message || "Не удалось загрузить данные", "error"));
   }, [token, loadAll, showToast]);
 
@@ -189,10 +204,10 @@ const App: React.FC = () => {
   }, token ? 5000 : null);
 
   useInterval(() => {
-    if (selectedChatId) {
+    if (token && selectedChatId) {
       loadChatHistory(true, true);
     }
-  }, selectedChatId ? 2000 : null);
+  }, token && selectedChatId ? 2000 : null);
 
   useInterval(() => setTick((prev) => prev + 1), 1000);
 
@@ -359,7 +374,6 @@ const App: React.FC = () => {
     sessionStorage.removeItem("adminToken");
     sessionStorage.removeItem("adminUser");
     setToken("");
-    setAuthVisible(true);
   };
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
@@ -371,7 +385,6 @@ const App: React.FC = () => {
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      setAuthVisible(false);
       showToast("Регистрация выполнена, вы вошли.");
     } catch (error) {
       showToast((error as Error).message || "Не удалось зарегистрироваться", "error");
@@ -387,12 +400,23 @@ const App: React.FC = () => {
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      setAuthVisible(false);
       showToast("Вход выполнен.");
     } catch (error) {
       showToast((error as Error).message || "Не удалось войти", "error");
     }
   };
+
+  if (!token) {
+    return (
+      <>
+        <LoginPage
+          onLogin={handleLogin}
+          onToast={(message, isError) => showToast(message, isError ? "error" : "success")}
+        />
+        <Toast toast={toast} />
+      </>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
@@ -497,13 +521,6 @@ const App: React.FC = () => {
           />
         </Section>
       </main>
-
-      <AuthOverlay
-        visible={authVisible}
-        onRegister={handleRegister}
-        onLogin={handleLogin}
-        onToast={(message, isError) => showToast(message, isError ? "error" : "success")}
-      />
 
       <Toast toast={toast} />
     </div>
