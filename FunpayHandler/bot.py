@@ -1626,7 +1626,10 @@ class FunpayBot:
                 value = (data or {}).get("steamid") or (data or {}).get("SteamID")
             if value is None:
                 return None
-            return int(value)
+            steamid64 = int(value)
+            if steamid64 < 70_000_000_000_000_000:
+                return None
+            return steamid64
         except Exception:
             return None
 

@@ -381,6 +381,50 @@ const ensureActiveRentalsHeader = () => {
   row.insertBefore(th, insertBefore);
 };
 
+const ensureInventoryHeader = () => {
+  const tbody = ui.inventoryTable;
+  if (!tbody) return;
+  const table = tbody.closest("table");
+  const row = table?.querySelector("thead tr");
+  if (!row) return;
+
+  const headers = Array.from(row.querySelectorAll("th"));
+  const mmrHeader = headers.find(
+    (th) => th.textContent?.trim().toLowerCase() === "mmr"
+  );
+  const steamHeader = headers.find(
+    (th) => th.textContent?.trim().toLowerCase() === "steamid"
+  );
+
+  if (!mmrHeader && steamHeader) {
+    const mmrTh = document.createElement("th");
+    mmrTh.textContent = "MMR";
+    row.insertBefore(mmrTh, steamHeader);
+  } else if (mmrHeader && !steamHeader) {
+    const steamTh = document.createElement("th");
+    steamTh.textContent = "SteamID";
+    row.appendChild(steamTh);
+  } else if (!mmrHeader && !steamHeader && headers.length >= 4) {
+    const mmrTh = document.createElement("th");
+    mmrTh.textContent = "MMR";
+    const steamTh = document.createElement("th");
+    steamTh.textContent = "SteamID";
+    row.appendChild(mmrTh);
+    row.appendChild(steamTh);
+  }
+
+  const refreshed = Array.from(row.querySelectorAll("th"));
+  if (refreshed.length >= 6) {
+    const lastTwo = refreshed.slice(-2);
+    if (lastTwo[0].textContent?.trim().toLowerCase() !== "mmr") {
+      lastTwo[0].textContent = "MMR";
+    }
+    if (lastTwo[1].textContent?.trim().toLowerCase() !== "steamid") {
+      lastTwo[1].textContent = "SteamID";
+    }
+  }
+};
+
 let presenceTicker = null;
 
 const updatePresenceTick = () => {
@@ -475,6 +519,7 @@ const renderActiveRentals = (items) => {
 };
 
 const renderInventory = (items) => {
+  ensureInventoryHeader();
   const query = ui.search.value.trim().toLowerCase();
   const filtered = items.filter((item) => {
     const name = item.account_name?.toLowerCase() || "";
