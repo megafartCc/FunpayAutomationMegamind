@@ -1402,7 +1402,7 @@ class FunpayBot:
         available_lots = self._get_available_lots()
         if available_lots:
             lines = [USER.stock_title]
-            for account in available_lots:
+            for account in available_lots[:STOCK_LIST_LIMIT]:
                 display_name = self._display_account_name(account.get("account_name"))
                 if display_name == "\u0430\u043a\u043a\u0430\u0443\u043d\u0442":
                     lot_number = account.get("lot_number")
@@ -1413,6 +1413,9 @@ class FunpayBot:
                     lines.append(f"{display_name} - {lot_url}")
                 else:
                     lines.append(f"{display_name}")
+            remaining = len(available_lots) - STOCK_LIST_LIMIT
+            if remaining > 0:
+                lines.append(f"...и еще {remaining} лотов. Напишите !сток позже для остального.")
             return "\n".join(lines)
 
         all_lots = self._db.get_all_lot_accounts(self._user_id)
