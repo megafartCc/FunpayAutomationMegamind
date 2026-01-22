@@ -432,7 +432,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
                     />
                     <motion.button
                       type="button"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 inline-flex h-11 w-11 items-center justify-center rounded-full p-0 text-neutral-400 transition hover:text-neutral-600 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-neutral-300 focus-visible:outline-offset-2"
+                      className="absolute inset-y-0 right-3 inline-flex h-full w-11 items-center justify-center rounded-full p-0 text-neutral-400 transition hover:text-neutral-600 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-neutral-300 focus-visible:outline-offset-2"
                       aria-label={showPassword ? "Hide password" : "Show password"}
                       onClick={() => setShowPassword((prev) => !prev)}
                       animate={{ rotate: showPassword ? 45 : 0, opacity: 1, scale: 1 }}
