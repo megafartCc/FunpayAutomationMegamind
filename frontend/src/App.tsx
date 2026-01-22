@@ -7,7 +7,7 @@ import InventoryTable from "./components/inventory/InventoryTable";
 import LotsPanel from "./components/lots/LotsPanel";
 import ChatPanel from "./components/chats/ChatPanel";
 import ManageAccountPanel from "./components/manage/ManageAccountPanel";
-import AddAccountForm from "./components/accounts/AddAccountForm";
+import AddAccountForm from "./components/account/AddAccountForm";
 import NotificationsPanel from "./components/notifications/NotificationsPanel";
 import SettingsPanel from "./components/settings/SettingsPanel";
 import AuthOverlay from "./components/auth/AuthOverlay";
