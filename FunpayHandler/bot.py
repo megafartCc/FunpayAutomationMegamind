@@ -41,6 +41,19 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
+COMMANDS_HELP = (
+    "Команды:\n"
+    "!acc / !акк — данные аккаунта\n"
+    "!code / !код — код Steam Guard\n"
+    "!stock / !сток — наличие аккаунтов\n"
+    "!extend / !продлить <часы> <номер_лота> — продлить аренду\n"
+    "!cancel / !отмена <ID> — отменить аренду\n"
+    "!bonus / !бонус — бонус за отзыв (5★)"
+)
+COMMANDS_INLINE = (
+    "Команды: !acc/!акк, !code/!код, !stock/!сток, !extend/!продлить, "
+    "!cancel/!отмена, !bonus/!бонус"
+)
 
 
 @dataclass(frozen=True)
@@ -532,7 +545,7 @@ class FunpayBot:
                 f"Логин: {rental['login']}\n"
                 f"Пароль: {rental['password']}\n"
                 f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                "Команды: !акк, !код, !сток, !продлить, !отмена, !бонус",
+                f"{COMMANDS_INLINE}",
             )
 
         send_message_to_admin(
@@ -575,12 +588,7 @@ class FunpayBot:
             f"Логин: {account['login']}\n"
             f"Пароль: {account['password']}\n"
             f"Аренда: {duration_label}\n\n"
-            "Команды:\n"
-            "!акк — данные аккаунта\n"
-            "!код — код Steam Guard\n"
-            "!сток — наличие\n"
-            "!продлить <часы> <номер_лота> — продлить аренду\n"
-            "!отмена <ID> — отменить аренду\n!бонус — бонус за отзыв\n\n"
+            f"{COMMANDS_HELP}\n\n"
             "Если нужна помощь — напишите в чат.",
         )
 
@@ -661,7 +669,7 @@ class FunpayBot:
     def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
         reward = self._db.get_unclaimed_feedback_reward(owner, min_rating=5)
         if not reward:
-            acc.send_message(chat_id, "No unclaimed 5-star review found.")
+            acc.send_message(chat_id, "Не найдено 5★ отзыва без бонуса.")
             return
 
         order_id = reward["order_id"]
@@ -669,29 +677,29 @@ class FunpayBot:
             order = acc.get_order(order_id)
         except Exception as exc:
             logger.warning(f"Failed to fetch order {order_id} for bonus: {exc}")
-            acc.send_message(chat_id, "Failed to verify review. Try again later.")
+            acc.send_message(chat_id, "Не удалось проверить отзыв. Попробуйте позже.")
             return
 
         review = getattr(order, "review", None)
         if not review or review.stars is None or int(review.stars) < 5:
-            acc.send_message(chat_id, "Review does not meet the 5-star requirement.")
+            acc.send_message(chat_id, "Отзыв не соответствует требованию 5★.")
             return
 
         accounts = self._db.get_user_active_accounts(owner)
         if not accounts:
-            acc.send_message(chat_id, "No active rentals found to apply the bonus.")
+            acc.send_message(chat_id, "Нет активных аренд для начисления бонуса.")
             return
 
         target = accounts[0]
         account_id = target["id"]
         if not self._db.extend_rental_duration_for_owner(account_id, owner, HOURS_FOR_REVIEW, 0):
-            acc.send_message(chat_id, "Failed to apply bonus. Try again later.")
+            acc.send_message(chat_id, "Не удалось начислить бонус. Попробуйте позже.")
             return
 
         self._db.mark_feedback_reward_claimed(order_id, account_id)
         acc.send_message(
             chat_id,
-            f"Bonus applied: +{HOURS_FOR_REVIEW} hour(s) for your 5-star review. Order #{order_id}.",
+            f"Бонус начислен: +{HOURS_FOR_REVIEW} ч. за отзыв 5★. Заказ #{order_id}.",
         )
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:

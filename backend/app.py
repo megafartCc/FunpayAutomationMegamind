@@ -191,6 +191,7 @@ CHAT_LIST_TTL = 5.0
 CHAT_HISTORY_TTL = 3.0
 CHAT_HISTORY_MAX = 200
 PRESENCE_TTL = 10.0
+PRESENCE_OFFLINE_GRACE = 45.0
 
 
 class BotManager:
@@ -754,11 +755,24 @@ def _presence_for_steamid_cached(
     now = time.time()
     if cached is not None and ts is not None and now - ts <= max_age:
         return cached
+
+    def should_keep_cached(data: dict) -> bool:
+        if cached is None or ts is None:
+            return False
+        if time.time() - ts > PRESENCE_OFFLINE_GRACE:
+            return False
+        if not (cached.get("in_game") or cached.get("in_match")):
+            return False
+        return not data.get("in_game") and not data.get("in_match")
+
     def fetch_presence() -> dict | None:
         bridge_presence = _fetch_bridge_presence(steamid64)
         if not bridge_presence:
             return None
-        return _presence_for_steamid(steamid64, bridge_presence=bridge_presence)
+        data = _presence_for_steamid(steamid64, bridge_presence=bridge_presence)
+        if should_keep_cached(data):
+            return None
+        return data
 
     if cached is not None and fast:
         presence_cache.refresh_async(steamid64, fetch_presence)
@@ -768,6 +782,8 @@ def _presence_for_steamid_cached(
     if not bridge_presence:
         return cached if cached is not None else _presence_for_steamid(steamid64)
     data = _presence_for_steamid(steamid64, bridge_presence=bridge_presence)
+    if should_keep_cached(data):
+        return cached
     presence_cache.set_cached(steamid64, data)
     return data
 

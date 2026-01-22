@@ -219,6 +219,36 @@ td {
   border-bottom: 1px solid var(--line);
 }
 
+th[data-key="status"],
+td.presence-cell {
+  min-width: 220px;
+  max-width: 260px;
+}
+
+th[data-key="remaining"],
+td.rental-remaining {
+  min-width: 110px;
+}
+
+.presence-cell,
+.rental-remaining {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+td.presence-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+td.presence-cell a {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 tbody tr:hover {
   background: rgba(255, 255, 255, 0.03);
   cursor: pointer;

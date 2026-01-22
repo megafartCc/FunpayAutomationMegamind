@@ -79,6 +79,7 @@ let chatHistoryRequestId = 0;
 let chatListInFlight = false;
 const chatHistoryInFlight = new Set();
 const rentalsInFlight = new Set();
+const matchStartCache = new Map();
 
 const CHAT_HISTORY_LIMIT = 60;
 const CHAT_POLL_INTERVAL = 2000;
@@ -186,6 +187,51 @@ const formatRentalEnd = (start, durationMinutes) => {
   return parsed.toLocaleString();
 };
 
+const formatRemainingSeconds = (seconds) => {
+  if (!Number.isFinite(seconds)) return "-";
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+};
+
+const getRentalEndTimestamp = (item) => {
+  if (!item) return null;
+  const durationMinutes = getDurationMinutes(item);
+  const start = item.rental_start;
+  if (!start || !durationMinutes) return null;
+  const parsed = new Date(start.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getTime() + Number(durationMinutes) * 60 * 1000;
+};
+
+const getMatchCacheKey = (item) => {
+  if (!item) return null;
+  if (item.steamid) return `steam-${item.steamid}`;
+  if (Number.isFinite(Number(item.id))) return `acc-${item.id}`;
+  return null;
+};
+
+const getMatchSecondsForItem = (item) => {
+  const key = getMatchCacheKey(item);
+  if (!item?.in_match) {
+    if (key) matchStartCache.delete(key);
+    return null;
+  }
+  if (!key) return null;
+  const now = Date.now();
+  const rawSeconds = Number(item?.match_seconds);
+  if (Number.isFinite(rawSeconds) && rawSeconds > 0) {
+    matchStartCache.set(key, now - rawSeconds * 1000);
+  } else if (!matchStartCache.has(key)) {
+    matchStartCache.set(key, now);
+  }
+  const startAt = matchStartCache.get(key);
+  if (!Number.isFinite(startAt)) return null;
+  return Math.max(0, Math.floor((now - startAt) / 1000));
+};
+
 const escapeHtml = (value) => {
   if (!value) return "";
   return value
@@ -282,9 +328,11 @@ const buildMatchLabel = (heroName, matchSeconds, matchTime) => {
   return extras.length ? `В матче(${extras.join(")(")})` : "В матче";
 };
 
-const presenceLabel = (item) => {
+const presenceLabel = (item, matchSecondsOverride = null) => {
   if (item?.in_match) {
-    const rawSeconds = Number(item?.match_seconds);
+    const rawSeconds = Number.isFinite(matchSecondsOverride)
+      ? matchSecondsOverride
+      : Number(item?.match_seconds);
     const matchSeconds = Number.isFinite(rawSeconds)
       ? Math.floor(rawSeconds)
       : parseMatchTimeSeconds(item?.match_time);
@@ -295,8 +343,8 @@ const presenceLabel = (item) => {
   return "Оффлайн";
 };
 
-const presenceLink = (item) => {
-  const label = escapeHtml(presenceLabel(item));
+const presenceLink = (item, labelOverride = null) => {
+  const label = escapeHtml(labelOverride ?? presenceLabel(item));
   if (!item?.steamid) return label;
   const url = `${PRESENCE_BASE_URL}/${item.steamid}`;
   return `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`;
@@ -337,10 +385,9 @@ let presenceTicker = null;
 
 const updatePresenceTick = () => {
   if (document.hidden) return;
-  const cells = document.querySelectorAll(".presence-cell");
-  if (!cells.length) return;
   const now = Date.now();
   let hasLive = false;
+  const cells = document.querySelectorAll(".presence-cell");
   cells.forEach((cell) => {
     const inMatch = cell.dataset.inMatch === "1";
     if (!inMatch) return;
@@ -357,6 +404,15 @@ const updatePresenceTick = () => {
       cell.textContent = label;
     }
   });
+  const remainingCells = document.querySelectorAll(".rental-remaining");
+  remainingCells.forEach((cell) => {
+    const endAt = Number.parseInt(cell.dataset.rentalEnd || "", 10);
+    if (!Number.isFinite(endAt)) return;
+    hasLive = true;
+    const remainingSeconds = Math.max(0, Math.floor((endAt - now) / 1000));
+    const label = formatRemainingSeconds(remainingSeconds);
+    if (cell.textContent !== label) cell.textContent = label;
+  });
   if (!hasLive && presenceTicker) {
     clearInterval(presenceTicker);
     presenceTicker = null;
@@ -365,10 +421,10 @@ const updatePresenceTick = () => {
 
 const ensurePresenceTicker = () => {
   if (presenceTicker) return;
-  const hasMatchCells = document.querySelector(
-    ".presence-cell[data-in-match=\"1\"][data-match-seconds]"
+  const hasLiveCells = document.querySelector(
+    ".presence-cell[data-in-match=\"1\"][data-match-seconds], .rental-remaining[data-rental-end]"
   );
-  if (!hasMatchCells) return;
+  if (!hasLiveCells) return;
   presenceTicker = setInterval(updatePresenceTick, 1000);
 };
 
@@ -376,13 +432,20 @@ const renderActiveRentals = (items) => {
   ensureActiveRentalsHeader();
   ensureActiveStatusHeader?.();
   if (!items.length) {
-    ui.activeTable.innerHTML = "<tr><td colspan=\"9\">Нет активных аренд.</td></tr>";
+    ui.activeTable.innerHTML = "<tr><td colspan=\"10\">Нет активных аренд.</td></tr>";
     return;
   }
   const now = Date.now();
   ui.activeTable.innerHTML = items
     .map(
-      (item) => `
+      (item) => {
+        const matchSeconds = getMatchSecondsForItem(item);
+        const matchLabel = presenceLabel(item, matchSeconds);
+        const rentalEnd = getRentalEndTimestamp(item);
+        const remainingSeconds = Number.isFinite(rentalEnd)
+          ? Math.max(0, Math.floor((rentalEnd - now) / 1000))
+          : null;
+        return `
         <tr>
           <td>${item.id}</td>
           <td>${item.account_name}</td>
@@ -391,18 +454,20 @@ const renderActiveRentals = (items) => {
           <td>${item.login}</td>
           <td>${formatDate(item.rental_start)}</td>
           <td>${formatRentalEnd(item.rental_start, getDurationMinutes(item))}</td>
+          <td class="rental-remaining" data-rental-end="${Number.isFinite(rentalEnd) ? rentalEnd : ""}">${formatRemainingSeconds(remainingSeconds)}</td>
           <td>${formatDuration(item)}</td>
           <td class="presence-cell"
               data-steamid="${escapeHtml(String(item.steamid || ""))}"
               data-in-match="${item.in_match ? "1" : ""}"
               data-in-game="${item.in_game ? "1" : ""}"
               data-hero-name="${escapeHtml(item.hero_name || "")}"
-              data-match-seconds="${Number.isFinite(Number(item.match_seconds)) ? Math.floor(Number(item.match_seconds)) : ""}"
-              data-match-at="${Number.isFinite(Number(item.match_seconds)) ? now : ""}">
-            ${presenceLink(item)}
+              data-match-seconds="${Number.isFinite(matchSeconds) ? Math.floor(matchSeconds) : ""}"
+              data-match-at="${Number.isFinite(matchSeconds) ? now : ""}">
+            ${presenceLink(item, matchLabel)}
           </td>
         </tr>
       `
+      }
     )
     .join("");
   ensurePresenceTicker();
