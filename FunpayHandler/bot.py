@@ -7,7 +7,6 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -18,16 +17,6 @@ from backend.config import (
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
     HOURS_FOR_REVIEW,
-    AI_CONTEXT_MESSAGES,
-    AI_MESSAGE_MAX_CHARS,
-    AI_ORDER_HISTORY_LIMIT,
-    AI_RENTAL_HISTORY_LIMIT,
-    AI_ALLOW_USERID_FALLBACK,
-    AI_RATE_LIMIT_REPLY,
-    AI_RATE_LIMIT_SECONDS,
-    AI_SUMMARY_ENABLED,
-    AI_SUMMARY_MAX_CHARS,
-    AI_SUMMARY_TRIGGER,
     RENTAL_CHECK_INTERVAL,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
@@ -37,9 +26,6 @@ from FunPayAPI.common.utils import RegularExpressions
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
-from AIModel.agent import get_ai_responder
-from AIModel.memory_store import get_memory_store
-from AIModel.telemetry import get_telemetry
 
 from .messages import USER
 from .utils import (
@@ -56,30 +42,8 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
-AI_STOCK_LIMIT = 10
-MMR_REDACTION_REGEX = re.compile(
-    r"(?:\b(?:mmr|\u043c\u043c\u0440)\s*\d+(?:\s*-\s*\d+)?\b|\b\d+(?:\s*-\s*\d+)?\s*(?:mmr|\u043c\u043c\u0440)\b)",
-    re.IGNORECASE,
-)
+STOCK_LIST_LIMIT = 20
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
-SENSITIVE_KEYWORDS = (
-    "password",
-    "пароль",
-    "login",
-    "логин",
-    "steam guard",
-    "guard code",
-    "steamguard",
-    "код steam",
-)
-MEMORY_REMEMBER_RE = re.compile(
-    r"^(?:remember(?: this)?|save)\s*[:\-]?\s*(.+)$",
-    re.IGNORECASE,
-)
-MEMORY_RECALL_RE = re.compile(
-    r"\b(what did (?:i )?say to remember|what do you remember|remind me|recall)\b",
-    re.IGNORECASE,
-)
 RENTAL_STATUS_RE = re.compile(
     r"(сколько|остал|врем|час).*(аренд|врем)|аренд.*(есть|остал)|time left|rental time|hours left",
     re.IGNORECASE,
@@ -193,15 +157,10 @@ class FunpayBot:
 
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
-        self._ai = get_ai_responder()
-        self._memory = get_memory_store()
-        self._telemetry = get_telemetry()
-
         self._pending_account_choice: Dict[str, List[Dict]] = {}
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
         self._processed_order_statuses: set[tuple[str, str]] = set()
-        self._ai_last_request_at: Dict[str, float] = {}
 
         self._last_refresh_ts = 0.0
         self._token_lock = threading.Lock()
@@ -498,27 +457,6 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = now
 
-    def _normalize_message_text(self, message: Any) -> str:
-        if message is None:
-            return ""
-        text = (getattr(message, "text", None) or "").strip()
-        if text:
-            return text
-        if getattr(message, "image_link", None):
-            return "[image]"
-        return ""
-
-    def _log_chat_message(self, owner: str, role: str, message: str) -> None:
-        if not owner or not message:
-            return
-        if self._is_sensitive_message(message):
-            return
-        created_at = datetime.now(tz=MOSCOW_TZ).isoformat()
-        self._memory.log_message(owner, role, message, self._user_id, created_at)
-
-    def _is_sensitive_message(self, text: str) -> bool:
-        lowered = text.lower()
-        return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
 
     def _is_issue_message(self, text: str) -> bool:
         lowered = text.lower()
@@ -540,43 +478,6 @@ class FunpayBot:
             return True
         return False
 
-    def _extract_memory_fact(self, text: str) -> Optional[str]:
-        match = MEMORY_REMEMBER_RE.search(text.strip())
-        if not match:
-            return None
-        fact = match.group(1).strip()
-        return fact or None
-
-    def _is_memory_recall(self, text: str) -> bool:
-        return bool(MEMORY_RECALL_RE.search(text.lower()))
-
-    def _handle_memory_command(
-        self, acc: Account, chat_id: int, owner: str, raw_text: str
-    ) -> bool:
-        fact = self._extract_memory_fact(raw_text)
-        if fact:
-            created_at = datetime.now(tz=MOSCOW_TZ).isoformat()
-            self._memory.add_fact(owner, fact, self._user_id, created_at)
-            acc.send_message(chat_id, f"Got it. I'll remember: {fact}")
-            return True
-        if self._is_memory_recall(raw_text):
-            facts = self._memory.get_facts(owner, self._user_id)
-            if not facts:
-                acc.send_message(chat_id, "I don't have anything saved yet.")
-                return True
-            lines = ["You asked me to remember:"]
-            for item in facts[-10:]:
-                label = (item.get("text") or "").strip()
-                if not label:
-                    continue
-                created_at = item.get("created_at")
-                if created_at:
-                    lines.append(f"- {label} ({created_at})")
-                else:
-                    lines.append(f"- {label}")
-            acc.send_message(chat_id, "\n".join(lines))
-            return True
-        return False
 
     def _is_stock_request(self, text: str) -> bool:
         lowered = text.lower()
@@ -598,22 +499,10 @@ class FunpayBot:
             return True
         return False
 
-    def _should_rate_limit_ai(self, owner: str) -> bool:
-        if AI_RATE_LIMIT_SECONDS <= 0 or not owner:
-            return False
-        now = time.time()
-        last_seen = self._ai_last_request_at.get(owner)
-        if last_seen is not None and now - last_seen < AI_RATE_LIMIT_SECONDS:
-            return True
-        self._ai_last_request_at[owner] = now
-        return False
-
     def _get_active_accounts_for_owner(self, owner: str) -> list[dict]:
         accounts = self._db.get_user_active_accounts(owner, self._user_id)
         if accounts:
             return accounts
-        if not AI_ALLOW_USERID_FALLBACK:
-            return []
         if self._user_id in (None, 0):
             return []
         fallback = self._db.get_user_active_accounts(owner)
@@ -629,8 +518,6 @@ class FunpayBot:
         lots = self._db.get_available_lot_accounts(self._user_id)
         if lots:
             return lots
-        if not AI_ALLOW_USERID_FALLBACK:
-            return []
         if self._user_id in (None, 0):
             return lots
         fallback = self._db.get_available_lot_accounts(None)
@@ -641,16 +528,6 @@ class FunpayBot:
             )
         return fallback
 
-    def _get_order_history_for_owner(self, owner: str) -> list[dict]:
-        history = self._db.get_order_history(owner, AI_ORDER_HISTORY_LIMIT, self._user_id)
-        if history:
-            return history
-        if not AI_ALLOW_USERID_FALLBACK:
-            return []
-        if self._user_id in (None, 0):
-            return history
-        return self._db.get_order_history(owner, AI_ORDER_HISTORY_LIMIT, None)
-
     def _handle_rental_status_query(
         self, acc: Account, chat_id: int, owner: str, raw_text: str
     ) -> bool:
@@ -658,11 +535,7 @@ class FunpayBot:
             return False
         accounts = self._get_active_accounts_for_owner(owner)
         if not accounts:
-            no_rental_reply = (
-                self._ai.payment_required_reply
-                if self._ai
-                else ISSUE_NO_RENTAL_REPLY
-            )
+            no_rental_reply = ISSUE_NO_RENTAL_REPLY
             stock_message = self._build_stock_message()
             acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return True
@@ -687,36 +560,6 @@ class FunpayBot:
         acc.send_message(chat_id, "\n".join(lines))
         return True
 
-    def _record_ai_decision(
-        self,
-        owner: str,
-        action: str,
-        latency_ms: float | None,
-        status: str,
-        reason: str | None = None,
-        variant: str | None = None,
-    ) -> None:
-        provider = getattr(self._ai, "provider", None) if self._ai else None
-        model = getattr(self._ai, "model", None) if self._ai else None
-        self._telemetry.record_action(
-            owner=owner,
-            action=action,
-            latency_ms=latency_ms,
-            status=status,
-            reason=reason,
-            provider=provider,
-            model=model,
-            variant=variant,
-        )
-
-
-    def _redact_mmr_label(self, text: Optional[str]) -> str:
-        if not text:
-            return ""
-        cleaned = MMR_REDACTION_REGEX.sub("", text)
-        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-        return cleaned.strip(" -\u2014")
-
     def _clean_account_label(self, text: Optional[str]) -> str:
         if not text:
             return ""
@@ -732,173 +575,6 @@ class FunpayBot:
     def _display_account_name(self, name: Optional[str]) -> str:
         cleaned = self._clean_account_label(name or "")
         return cleaned or "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
-
-    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        sanitized: List[Dict[str, Any]] = []
-        for item in messages:
-            text = (item.get("message") or item.get("text") or "").strip()
-            if not text:
-                continue
-            if self._is_sensitive_message(text):
-                continue
-            if len(text) > AI_MESSAGE_MAX_CHARS:
-                text = text[:AI_MESSAGE_MAX_CHARS].rstrip() + "..."
-            role = (item.get("role") or "user").strip().lower()
-            if role not in ("user", "bot"):
-                role = "user"
-            payload = {"role": role, "text": text}
-            created_at = item.get("created_at") or item.get("time")
-            if created_at:
-                payload["time"] = str(created_at)
-            sanitized.append(payload)
-        return sanitized
-
-    def _format_datetime(self, value: Any) -> Optional[str]:
-        if isinstance(value, datetime):
-            return value.isoformat()
-        if value is None:
-            return None
-        return str(value)
-
-    def _refresh_chat_summary(self, owner: str) -> str:
-        summary_state = self._memory.get_summary_state(owner, self._user_id)
-        summary_text = summary_state.get("summary") or ""
-        last_message_id = summary_state.get("last_summary_id") or 0
-
-        if not AI_SUMMARY_ENABLED or not self._ai or not self._ai.enabled:
-            return summary_text
-
-        pending = self._memory.get_messages_after(owner, last_message_id, self._user_id)
-        if not pending:
-            return summary_text
-
-        if not summary_text and int(last_message_id or 0) == 0:
-            bootstrap_limit = min(AI_CONTEXT_MESSAGES, len(pending))
-            chunk = pending[-bootstrap_limit:]
-        else:
-            if len(pending) < AI_SUMMARY_TRIGGER:
-                return summary_text
-            chunk = pending[:AI_SUMMARY_TRIGGER]
-
-        sanitized = self._sanitize_messages(chunk)
-        if not sanitized:
-            return summary_text
-
-        updated = self._ai.summarize(summary_text, sanitized, AI_SUMMARY_MAX_CHARS)
-        if not updated:
-            return summary_text
-
-        last_id = chunk[-1].get("id") if chunk else last_message_id
-        try:
-            last_id = int(last_id or 0)
-        except Exception:
-            last_id = int(last_message_id or 0)
-        self._memory.set_summary(owner, updated, last_id, self._user_id)
-        return updated
-
-    def _build_ai_context(self, owner: str) -> Dict[str, Any]:
-        active_accounts = self._get_active_accounts_for_owner(owner)
-        available_lots = self._get_available_lots()
-        summary_text = self._refresh_chat_summary(owner)
-        recent_messages = self._memory.get_recent_messages(
-            owner, AI_CONTEXT_MESSAGES, self._user_id
-        )
-        recent_messages = self._sanitize_messages(recent_messages)
-        facts = self._memory.get_facts(owner, self._user_id)
-        safe_facts: List[Dict[str, Any]] = []
-        for item in facts:
-            text = (item.get("text") or "").strip()
-            if not text:
-                continue
-            if self._is_sensitive_message(text):
-                continue
-            entry = {"text": text}
-            created_at = item.get("created_at")
-            if created_at:
-                entry["created_at"] = str(created_at)
-            safe_facts.append(entry)
-        last_message_time = self._memory.get_last_seen_at(owner, self._user_id)
-        if not last_message_time and recent_messages:
-            last_message_time = recent_messages[-1].get("time")
-
-        safe_lots: List[Dict[str, Any]] = []
-        for item in available_lots[:AI_STOCK_LIMIT]:
-            safe_lots.append(
-                {
-                    "lot_number": item.get("lot_number"),
-                    "account_name": self._redact_mmr_label(item.get("account_name")),
-                    "lot_url": item.get("lot_url"),
-                }
-            )
-
-        rental_history = self._db.get_user_rental_history(owner)
-        safe_rentals: List[Dict[str, Any]] = []
-        for item in rental_history[:AI_RENTAL_HISTORY_LIMIT]:
-            safe_rentals.append(
-                {
-                    "account_name": self._redact_mmr_label(item.get("account_name")),
-                    "rental_start": self._format_datetime(item.get("rental_start")),
-                    "rental_duration_minutes": item.get("rental_duration_minutes"),
-                }
-            )
-
-        order_history = self._get_order_history_for_owner(owner)
-        safe_orders: List[Dict[str, Any]] = []
-        for item in order_history:
-            amount = item.get("amount")
-            price = item.get("price")
-            if isinstance(amount, Decimal):
-                amount = int(amount)
-            if isinstance(price, Decimal):
-                price = float(price)
-            safe_orders.append(
-                {
-                    "order_id": item.get("order_id"),
-                    "account_name": self._redact_mmr_label(item.get("account_name")),
-                    "lot_number": item.get("lot_number"),
-                    "amount": amount,
-                    "price": price,
-                    "action": item.get("action"),
-                    "created_at": self._format_datetime(item.get("created_at")),
-                }
-            )
-
-        active_account_names: List[str] = []
-        active_rentals: List[Dict[str, Any]] = []
-        current_time = datetime.now(tz=MOSCOW_TZ)
-        for item in active_accounts:
-            name = self._redact_mmr_label(item.get("account_name"))
-            if name:
-                active_account_names.append(name)
-            expiry_time, expiry_str, remaining_str = get_remaining_time(item, current_time)
-            active_rentals.append(
-                {
-                    "id": item.get("id"),
-                    "account_name": name,
-                    "expiry_time": self._format_datetime(expiry_time),
-                    "expiry_label": expiry_str,
-                    "remaining_label": remaining_str,
-                }
-            )
-
-        return {
-            "active_rental_count": len(active_accounts),
-            "active_account_ids": [
-                item.get("id")
-                for item in active_accounts
-                if item.get("id") is not None
-            ],
-            "active_account_names": active_account_names,
-            "available_lot_count": len(available_lots),
-            "available_lots": safe_lots,
-            "recent_messages": recent_messages,
-            "history_summary": summary_text,
-            "memory_facts": safe_facts,
-            "last_message_time": last_message_time,
-            "active_rentals": active_rentals,
-            "rental_history": safe_rentals,
-            "order_history": safe_orders,
-        }
 
     def _handle_new_order(self, event: Any) -> None:
         self._process_order(event, source="NEW_ORDER")
@@ -1293,17 +969,9 @@ class FunpayBot:
             return
 
         if event.message.author_id == acc.id:
-            target = getattr(event.message, "chat_name", None) or event.message.author
-            text = self._normalize_message_text(event.message)
-            if target and text:
-                self._log_chat_message(target, "bot", text)
             return
 
         owner = event.message.author
-        text = self._normalize_message_text(event.message)
-        if owner and text:
-            self._log_chat_message(owner, "user", text)
-
         if event.message.type in (
             types.MessageTypes.NEW_FEEDBACK,
             types.MessageTypes.FEEDBACK_CHANGED,
@@ -1377,9 +1045,6 @@ class FunpayBot:
         if not raw_text:
             return
 
-        if self._handle_memory_command(acc, chat_id, owner, raw_text):
-            return
-
         if self._is_issue_message(raw_text):
             has_active = bool(
                 self._db.get_user_active_accounts(owner, self._user_id)
@@ -1409,248 +1074,9 @@ class FunpayBot:
                 self._handle_acc(acc, chat_id, owner)
             else:
                 stock_message = self._build_stock_message()
-                no_rental_reply = (
-                    self._ai.payment_required_reply
-                    if self._ai
-                    else ISSUE_NO_RENTAL_REPLY
-                )
+                no_rental_reply = ISSUE_NO_RENTAL_REPLY
                 acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
-
-        if self._should_rate_limit_ai(owner):
-            self._record_ai_decision(
-                owner=owner,
-                action="none",
-                latency_ms=None,
-                status="rate_limited",
-                reason="rate_limited",
-            )
-            if AI_RATE_LIMIT_REPLY:
-                acc.send_message(chat_id, AI_RATE_LIMIT_REPLY)
-            return
-
-        if not self._ai or not self._ai.enabled:
-            return
-
-        context = self._build_ai_context(owner)
-        system_prompt, variant = self._ai.select_prompt_variant(owner)
-        self._telemetry.record_request(owner)
-        start_ts = time.time()
-        response = self._ai.respond(raw_text, context, system_prompt_override=system_prompt)
-        latency_ms = (time.time() - start_ts) * 1000.0
-        error_reason = self._ai.last_error_reason()
-        if not response:
-            self._record_ai_decision(
-                owner=owner,
-                action="none",
-                latency_ms=latency_ms,
-                status="empty",
-                reason=error_reason,
-                variant=variant,
-            )
-            return
-        has_active_rental = bool(context.get("active_rental_count"))
-        no_rental_reply = self._ai.payment_required_reply or ISSUE_NO_RENTAL_REPLY
-
-        if response.action == "send_code":
-            if has_active_rental:
-                self._handle_code(acc, chat_id, event.message.author)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="send_code",
-                    latency_ms=latency_ms,
-                    status="ok",
-                    variant=variant,
-                )
-            else:
-                stock_message = self._build_stock_message()
-                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
-                self._record_ai_decision(
-                    owner=owner,
-                    action="send_code",
-                    latency_ms=latency_ms,
-                    status="no_rental",
-                    variant=variant,
-                )
-            return
-
-        if response.action == "send_account":
-            if has_active_rental:
-                self._handle_acc(acc, chat_id, event.message.author)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="send_account",
-                    latency_ms=latency_ms,
-                    status="ok",
-                    variant=variant,
-                )
-            else:
-                stock_message = self._build_stock_message()
-                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
-                self._record_ai_decision(
-                    owner=owner,
-                    action="send_account",
-                    latency_ms=latency_ms,
-                    status="no_rental",
-                    variant=variant,
-                )
-            return
-
-        if response.action == "handoff":
-            if response.reply:
-                acc.send_message(chat_id, response.reply)
-            send_message_to_admin(
-                f"AI handoff requested for {event.message.author}: {raw_text}"
-            )
-            self._record_ai_decision(
-                owner=owner,
-                action="handoff",
-                latency_ms=latency_ms,
-                status="ok",
-                variant=variant,
-            )
-            return
-
-        if response.action == "stock":
-            stock_message = self._build_stock_message()
-            if has_active_rental:
-                if response.reply:
-                    acc.send_message(chat_id, f"{response.reply}\n\n{stock_message}")
-                else:
-                    acc.send_message(chat_id, stock_message)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="stock",
-                    latency_ms=latency_ms,
-                    status="ok",
-                    variant=variant,
-                )
-            else:
-                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
-                self._record_ai_decision(
-                    owner=owner,
-                    action="stock",
-                    latency_ms=latency_ms,
-                    status="no_rental",
-                    variant=variant,
-                )
-            return
-
-        if response.action == "extend":
-            hours = response.args.get("hours")
-            lot_number = response.args.get("lot_number")
-            try:
-                hours = int(hours)
-                lot_number = int(lot_number)
-            except (TypeError, ValueError):
-                hours = None
-                lot_number = None
-
-            if hours and lot_number:
-                self._handle_extend(
-                    acc,
-                    chat_id,
-                    event.message.author,
-                    f"extend {hours} {lot_number}",
-                )
-                self._record_ai_decision(
-                    owner=owner,
-                    action="extend",
-                    latency_ms=latency_ms,
-                    status="ok",
-                    variant=variant,
-                )
-            elif response.reply:
-                acc.send_message(chat_id, response.reply)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="extend",
-                    latency_ms=latency_ms,
-                    status="invalid_args",
-                    variant=variant,
-                )
-            else:
-                self._handle_extend(acc, chat_id, event.message.author, raw_text)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="extend",
-                    latency_ms=latency_ms,
-                    status="fallback",
-                    variant=variant,
-                )
-            return
-
-        if response.action == "cancel":
-            account_id = response.args.get("account_id")
-            try:
-                account_id = int(account_id)
-            except (TypeError, ValueError):
-                account_id = None
-
-            if account_id:
-                self._handle_cancel(
-                    acc,
-                    chat_id,
-                    event.message.author,
-                    f"cancel {account_id}",
-                )
-                self._record_ai_decision(
-                    owner=owner,
-                    action="cancel",
-                    latency_ms=latency_ms,
-                    status="ok",
-                    variant=variant,
-                )
-            elif response.reply:
-                acc.send_message(chat_id, response.reply)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="cancel",
-                    latency_ms=latency_ms,
-                    status="invalid_args",
-                    variant=variant,
-                )
-            else:
-                self._handle_cancel(acc, chat_id, event.message.author, raw_text)
-                self._record_ai_decision(
-                    owner=owner,
-                    action="cancel",
-                    latency_ms=latency_ms,
-                    status="fallback",
-                    variant=variant,
-                )
-            return
-
-        if response.action == "none" and not has_active_rental:
-            stock_message = self._build_stock_message()
-            acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
-            self._record_ai_decision(
-                owner=owner,
-                action="none",
-                latency_ms=latency_ms,
-                status="no_rental",
-                variant=variant,
-            )
-            return
-
-        if response.reply:
-            acc.send_message(chat_id, response.reply)
-            self._record_ai_decision(
-                owner=owner,
-                action=response.action or "none",
-                latency_ms=latency_ms,
-                status="ok",
-                variant=variant,
-            )
-            return
-
-        self._record_ai_decision(
-            owner=owner,
-            action=response.action or "none",
-            latency_ms=latency_ms,
-            status="empty",
-            variant=variant,
-        )
 
     def _extract_order_id(self, text: str) -> Optional[str]:
         match = RegularExpressions().ORDER_ID.search(text or "")
@@ -1977,7 +1403,7 @@ class FunpayBot:
         available_lots = self._get_available_lots()
         if available_lots:
             lines = [USER.stock_title]
-            for account in available_lots:
+            for account in available_lots[:STOCK_LIST_LIMIT]:
                 display_name = self._display_account_name(account.get("account_name"))
                 if display_name == "\u0430\u043a\u043a\u0430\u0443\u043d\u0442":
                     lot_number = account.get("lot_number")
@@ -1988,6 +1414,9 @@ class FunpayBot:
                     lines.append(f"{display_name} - {lot_url}")
                 else:
                     lines.append(f"{display_name}")
+            remaining = len(available_lots) - STOCK_LIST_LIMIT
+            if remaining > 0:
+                lines.append(f"...и еще {remaining} лотов. Напишите !сток позже для остального.")
             return "\n".join(lines)
 
         all_lots = self._db.get_all_lot_accounts(self._user_id)
