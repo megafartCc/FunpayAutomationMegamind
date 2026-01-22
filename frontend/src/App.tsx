@@ -316,7 +316,13 @@ const App: React.FC = () => {
           setAccountsTable(
             (accounts.items as any[]).map((a, idx) => ({
               id: a.id ?? idx,
-              name: a.name ?? a.login ?? `Account ${idx + 1}`,
+              name:
+                a.account ??
+                a.acc_name ??
+                a.title ??
+                (a.name && a.name !== a.login ? a.name : null) ??
+                a.login ??
+                `Account ${idx + 1}`,
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
               steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.id ?? "",
