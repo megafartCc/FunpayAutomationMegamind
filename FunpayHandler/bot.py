@@ -267,6 +267,83 @@ class FunpayBot:
         )
         return "\n".join(lines)
 
+    def _select_replacement_account(self, account: dict) -> dict | None:
+        try:
+            target_mmr = int(account.get("mmr"))
+        except Exception:
+            return None
+
+        candidates = self._db.get_lot_accounts_by_mmr_range(
+            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id
+        )
+        available: list[dict] = []
+        for item in candidates:
+            if item.get("owner"):
+                continue
+            if item.get("id") == account.get("id"):
+                continue
+            if item.get("mmr") is None:
+                continue
+            available.append(item)
+        if not available:
+            return None
+
+        def sort_key(item: dict) -> tuple[int, int, int]:
+            try:
+                diff = abs(int(item.get("mmr")) - target_mmr)
+            except Exception:
+                diff = 999999
+            lot_number = item.get("lot_number")
+            lot_sort = int(lot_number) if isinstance(lot_number, int) else 999999
+            account_id = int(item.get("id") or 0)
+            return (diff, lot_sort, account_id)
+
+        available.sort(key=sort_key)
+        return available[0]
+
+    def _try_auto_replacement(
+        self,
+        acc: Account,
+        chat_id: int,
+        event: Any,
+        account: dict,
+        amount: int,
+        original_lot: int | None = None,
+    ) -> bool:
+        replacement = self._select_replacement_account(account)
+        if not replacement:
+            return False
+
+        display_name = self._display_account_name(replacement.get("account_name"))
+        lot_number = replacement.get("lot_number")
+        mmr_label = (
+            f"{replacement.get('mmr')} MMR"
+            if replacement.get("mmr") is not None
+            else "MMR"
+        )
+        lot_label = f"\u2116{lot_number}" if lot_number else "\u043b\u043e\u0442"
+        lot_url = replacement.get("lot_url")
+        link_line = f"\n\u0421\u0441\u044b\u043b\u043a\u0430: {lot_url}" if lot_url else ""
+        acc.send_message(
+            chat_id,
+            "\u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, \u043b\u043e\u0442 \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442. "
+            f"\u0412\u044b\u0434\u0430\u043b\u0438 \u0437\u0430\u043c\u0435\u043d\u0443: {lot_label} \u2014 {display_name} ({mmr_label})."
+            f"{link_line}",
+        )
+        self._issue_new_account(acc, chat_id, event, replacement, amount, lot_number)
+        self._mark_order_processed(event)
+
+        target_mmr = account.get("mmr")
+        send_message_to_admin(
+            "AUTO REPLACEMENT ISSUED\n\n"
+            f"Buyer: {event.order.buyer_username}\n"
+            f"Original lot: {original_lot}\n"
+            f"Original account: {account.get('account_name')} (ID {account.get('id')})\n"
+            f"Replacement: {replacement.get('account_name')} (ID {replacement.get('id')}, lot {lot_number})\n"
+            f"MMR target: {target_mmr} \u00b1 {MMR_RANGE_DEFAULT}",
+        )
+        return True
+
     def _extend_rental_for_order(self, account_id: int, owner: str, units: int, unit_minutes: int) -> bool:
         total_minutes = int(units) * int(unit_minutes)
         if total_minutes <= 0:
@@ -694,6 +771,8 @@ class FunpayBot:
             self._mark_order_processed(event)
             return
 
+        if self._try_auto_replacement(acc, chat_id, event, account, amount, original_lot=lot_number):
+            return
         acc.send_message(chat_id, self._build_replacement_message(account, lot_number))
         send_message_to_admin(
             "КОНФЛИКТ ПО ЛОТУ\n\n"
@@ -736,6 +815,8 @@ class FunpayBot:
 
         if specific_account.get("owner") is not None:
             logger.warning(f"Account '{account_name}' is already rented by {specific_account['owner']}")
+            if self._try_auto_replacement(acc, chat_id, event, specific_account, amount):
+                return
             acc.send_message(chat_id, self._build_replacement_message(specific_account))
             return
 
@@ -987,32 +1068,29 @@ class FunpayBot:
                 acc.send_message(chat_id, ISSUE_REPLY)
                 self._handle_code(acc, chat_id, event.message.author)
             else:
-                acc.send_message(chat_id, ISSUE_NO_RENTAL_REPLY)
-                self._handle_stock(acc, chat_id)
+                stock_message = self._build_stock_message()
+                acc.send_message(chat_id, f"{ISSUE_NO_RENTAL_REPLY}\n\n{stock_message}")
             return
         response = self._ai.respond(raw_text, context)
         if not response:
             return
         has_active_rental = bool(context.get("active_rental_count"))
+        no_rental_reply = self._ai.payment_required_reply or ISSUE_NO_RENTAL_REPLY
 
         if response.action == "send_code":
             if has_active_rental:
                 self._handle_code(acc, chat_id, event.message.author)
             else:
-                if response.reply:
-                    acc.send_message(chat_id, response.reply)
-                else:
-                    self._handle_stock(acc, chat_id)
+                stock_message = self._build_stock_message()
+                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
 
         if response.action == "send_account":
             if has_active_rental:
                 self._handle_acc(acc, chat_id, event.message.author)
             else:
-                if response.reply:
-                    acc.send_message(chat_id, response.reply)
-                else:
-                    self._handle_stock(acc, chat_id)
+                stock_message = self._build_stock_message()
+                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
 
         if response.action == "handoff":
@@ -1024,9 +1102,14 @@ class FunpayBot:
             return
 
         if response.action == "stock":
-            if response.reply:
-                acc.send_message(chat_id, response.reply)
-            self._handle_stock(acc, chat_id)
+            stock_message = self._build_stock_message()
+            if has_active_rental:
+                if response.reply:
+                    acc.send_message(chat_id, f"{response.reply}\n\n{stock_message}")
+                else:
+                    acc.send_message(chat_id, stock_message)
+            else:
+                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
 
         if response.action == "extend":
@@ -1070,6 +1153,11 @@ class FunpayBot:
                 acc.send_message(chat_id, response.reply)
             else:
                 self._handle_cancel(acc, chat_id, event.message.author, raw_text)
+            return
+
+        if response.action == "none" and not has_active_rental:
+            stock_message = self._build_stock_message()
+            acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
 
         if response.reply:
@@ -1309,44 +1397,43 @@ class FunpayBot:
 
     def _handle_stock(self, acc: Account, chat_id: int) -> None:
         try:
-            available_lots = self._db.get_available_lot_accounts(self._user_id)
-            if available_lots:
-                lines = [USER.stock_title]
-                for account in available_lots:
-                    lot_label = f"№{account['lot_number']}"
-                    display_name = self._display_account_name(account.get("account_name"))
-                    lot_url = account.get("lot_url")
-                    if lot_url:
-                        lines.append(f"{display_name} - {lot_label} - {lot_url}")
-                    else:
-                        lines.append(f"{display_name} - {lot_label}")
-                acc.send_message(chat_id, "\n".join(lines))
-                return
-
-            all_lots = self._db.get_all_lot_accounts(self._user_id)
-            if not all_lots:
-                acc.send_message(chat_id, USER.stock_no_lots_configured)
-                return
-
-            current_time = datetime.now(tz=MOSCOW_TZ)
-            next_expiry = self._find_next_expiry(all_lots)
-            if not next_expiry:
-                acc.send_message(chat_id, "Свободных лотов нет. Не удалось определить время освобождения.")
-                return
-
-            remaining = next_expiry - current_time
-            if remaining.total_seconds() < 0:
-                remaining = timedelta(0)
-            hours = int(remaining.total_seconds() // 3600)
-            minutes = int((remaining.total_seconds() % 3600) // 60)
-            acc.send_message(
-                chat_id,
-                "Свободных лотов нет. Ближайший освободится через "
-                f"{hours} ч {minutes} мин (в {next_expiry.strftime('%H:%M:%S')} МСК).",
-            )
+            acc.send_message(chat_id, self._build_stock_message())
         except Exception as exc:
             logger.error(f"Failed to load stock: {exc}")
             acc.send_message(chat_id, USER.stock_failed)
+
+    def _build_stock_message(self) -> str:
+        available_lots = self._db.get_available_lot_accounts(self._user_id)
+        if available_lots:
+            lines = [USER.stock_title]
+            for account in available_lots:
+                lot_label = f"№{account['lot_number']}"
+                display_name = self._display_account_name(account.get("account_name"))
+                lot_url = account.get("lot_url")
+                if lot_url:
+                    lines.append(f"{display_name} - {lot_label} - {lot_url}")
+                else:
+                    lines.append(f"{display_name} - {lot_label}")
+            return "\n".join(lines)
+
+        all_lots = self._db.get_all_lot_accounts(self._user_id)
+        if not all_lots:
+            return USER.stock_no_lots_configured
+
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        next_expiry = self._find_next_expiry(all_lots)
+        if not next_expiry:
+            return "Свободных лотов нет. Не удалось определить время освобождения."
+
+        remaining = next_expiry - current_time
+        if remaining.total_seconds() < 0:
+            remaining = timedelta(0)
+        hours = int(remaining.total_seconds() // 3600)
+        minutes = int((remaining.total_seconds() % 3600) // 60)
+        return (
+            "Свободных лотов нет. Ближайший освободится через "
+            f"{hours} ч {minutes} мин (в {next_expiry.strftime('%H:%M:%S')} МСК)."
+        )
 
     def _handle_cancel(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
