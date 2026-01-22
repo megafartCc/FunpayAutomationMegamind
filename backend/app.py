@@ -1,6 +1,8 @@
 import html as html_module
 import json
+import os
 import re
+import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,7 +13,7 @@ from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -36,12 +38,11 @@ from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
-from AIModel.memory_store import get_memory_store
-from AIModel.telemetry import get_telemetry
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR.parent / "Public"
+FRONTEND_DIST_DIR = BASE_DIR.parent / "Public" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
 
 app = FastAPI(title="FunpaySeller")
 
@@ -451,11 +452,37 @@ class PresenceCache:
 
 presence_cache = PresenceCache()
 
-app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
+if FRONTEND_ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
+
+
+def _frontend_assets_mounted() -> bool:
+    return any(getattr(route, "path", None) == "/assets" for route in app.router.routes)
+
+
+def _maybe_build_frontend() -> None:
+    if FRONTEND_DIST_DIR.exists():
+        return
+    if os.getenv("FRONTEND_AUTO_BUILD", "true").lower() not in ("1", "true", "yes", "on"):
+        return
+    frontend_dir = BASE_DIR.parent / "Public"
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        logger.warning("Frontend package.json not found; skipping auto build.")
+        return
+    logger.info("Frontend build missing; attempting auto-build.")
+    try:
+        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
+        subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
+    except Exception as exc:
+        logger.warning(f"Frontend auto-build failed: {exc}")
 
 
 @app.on_event("startup")
 def start_background_services() -> None:
+    _maybe_build_frontend()
+    if FRONTEND_ASSETS_DIR.exists() and not _frontend_assets_mounted():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
     try:
         init_presence_bot(
             enabled=STEAM_PRESENCE_ENABLED,
@@ -1143,33 +1170,6 @@ def chat_history(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/api/ai/memory/{owner}", dependencies=[Depends(require_admin)])
-def ai_memory(owner: str, request: Request, limit: int = 20) -> dict:
-    if not owner:
-        raise HTTPException(status_code=400, detail="Owner is required")
-    uid = current_user_id(request)
-    try:
-        limit_value = max(1, min(int(limit), 200))
-    except Exception:
-        limit_value = 20
-    store = get_memory_store()
-    state = store.get_summary_state(owner, uid)
-    return {
-        "owner": owner,
-        "summary": state.get("summary"),
-        "last_message_time": state.get("last_seen_at"),
-        "facts": store.get_facts(owner, uid),
-        "messages": store.get_recent_messages(owner, limit_value, uid),
-    }
-
-
-@app.get("/api/ai/metrics", dependencies=[Depends(require_admin)])
-def ai_metrics(request: Request) -> dict:
-    _ = current_user_id(request)
-    telemetry = get_telemetry()
-    return telemetry.snapshot()
-
-
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
@@ -1202,18 +1202,42 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/ai-dashboard", include_in_schema=False)
-def ai_dashboard() -> FileResponse:
-    return FileResponse(PUBLIC_DIR / "ai-dashboard.html")
-
+def _frontend_build_missing_response() -> HTMLResponse:
+    message = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Frontend build missing</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 40px; color: #1f2937; }
+      code, pre { background: #f3f4f6; padding: 12px; border-radius: 6px; display: block; }
+      h1 { font-size: 24px; margin-bottom: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Frontend build not found</h1>
+    <p>The React frontend has not been built yet. Build it and redeploy:</p>
+    <pre>cd Public
+npm install
+npm run build</pre>
+  </body>
+</html>"""
+    return HTMLResponse(message, status_code=503)
 
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
-    return FileResponse(PUBLIC_DIR / "index.html")
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return _frontend_build_missing_response()
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa_fallback(path: str) -> FileResponse:
-    if path.startswith(("api", "static")):
+    if path.startswith(("api", "assets")):
         raise HTTPException(status_code=404)
-    return FileResponse(PUBLIC_DIR / "index.html")
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return _frontend_build_missing_response()
