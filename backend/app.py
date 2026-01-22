@@ -40,6 +40,8 @@ from FunpayHandler.bot import FunpayBot
 
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR.parent / "Public"
+FRONTEND_DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
 
 app = FastAPI(title="FunpaySeller")
 
@@ -449,7 +451,10 @@ class PresenceCache:
 
 presence_cache = PresenceCache()
 
-app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
+if FRONTEND_ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
+else:
+    app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 
 @app.on_event("startup")
@@ -1175,11 +1180,17 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
 
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
     return FileResponse(PUBLIC_DIR / "index.html")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa_fallback(path: str) -> FileResponse:
-    if path.startswith(("api", "static")):
+    if path.startswith(("api", "static", "assets")):
         raise HTTPException(status_code=404)
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
     return FileResponse(PUBLIC_DIR / "index.html")
