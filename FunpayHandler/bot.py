@@ -30,7 +30,6 @@ from backend.logger import logger
 from backend.notifications import send_message_to_admin
 from FunPayAPI.common.utils import RegularExpressions
 from SteamHandler.SteamGuard import get_steam_guard_code
-from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
 from AIModel.agent import get_ai_responder
@@ -1512,7 +1511,6 @@ class FunpayBot:
         self._expire_warning_sent.pop(account_id, None)
         self._expire_warning_start.pop(account_id, None)
         deauth_ok = False
-        new_password = None
         try:
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
                 try:
@@ -1526,19 +1524,11 @@ class FunpayBot:
                 except Exception as exc:
                     logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
 
-            new_password = asyncio.run(
-                changeSteamPassword(
-                    path_to_maFile=mafile_path,
-                    password=password,
-                    mafile_json=mafile_json,
-                )
-            )
             send_message_to_admin(
                 "RENTAL EXPIRED\n\n"
                 f"Account ID: {account_id}\n"
                 f"Owner: {owner}\n"
                 f"Deauthorize: {'ok' if deauth_ok else 'failed'}\n"
-                f"New password: {new_password}\n"
                 f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
@@ -1559,16 +1549,13 @@ class FunpayBot:
                     "RENTAL EXPIRED (PARTIAL)\n\n"
                     f"Account ID: {account_id}\n"
                     f"Owner: {owner}\n"
-                    "Result: password rotation failed; owner cleared anyway\n"
+                    "Result: deauthorize failed; owner cleared anyway\n"
                     f"Error: {exc}\n",
                 )
             except Exception:
                 pass
-            new_password = None
 
         update_fields = {"rental_duration": 1, "rental_duration_minutes": 60}
-        if new_password:
-            update_fields["password"] = new_password
 
         if not self._db.update_account(account_id, update_fields):
             logger.error(f"Failed to update expired account state for account {account_id}")
