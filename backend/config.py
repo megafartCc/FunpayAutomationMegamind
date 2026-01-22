@@ -12,6 +12,12 @@ def _get_int(name: str, default: int) -> int:
         return default
     return int(value)
 
+def _get_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return float(value)
+
 
 def _get_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -48,3 +54,23 @@ MYSQLUSER = os.getenv("MYSQLUSER", "").strip()
 MYSQLPASSWORD = os.getenv("MYSQLPASSWORD", "").strip()
 MYSQLDATABASE = os.getenv("MYSQLDATABASE", "").strip()
 DATABASE_PATH = None
+
+AI_ENABLED = _get_bool("AI_ENABLED", False)
+AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").strip().lower()
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.groq.com/openai/v1").strip()
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_MODEL = os.getenv("AI_MODEL", "llama-3.1-8b-instant").strip()
+AI_TEMPERATURE = _get_float("AI_TEMPERATURE", 0.2)
+AI_MAX_TOKENS = _get_int("AI_MAX_TOKENS", 256)
+AI_TIMEOUT_SECONDS = _get_int("AI_TIMEOUT_SECONDS", 12)
+AI_SYSTEM_PROMPT = os.getenv("AI_SYSTEM_PROMPT", "").strip()
+AI_FALLBACK_REPLY = os.getenv(
+    "AI_FALLBACK_REPLY",
+    "I can help with rentals. Please tell me what you need.",
+).strip()
+AI_PAYMENT_REQUIRED_REPLY = os.getenv(
+    "AI_PAYMENT_REQUIRED_REPLY",
+    "I do not see a paid order yet. Please pay on FunPay and send your order number.",
+).strip()
+
+REQUIRE_PAID_ORDER = _get_bool("REQUIRE_PAID_ORDER", True)

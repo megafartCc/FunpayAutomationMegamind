@@ -15,6 +15,7 @@ from backend.config import (
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
     HOURS_FOR_REVIEW,
+    REQUIRE_PAID_ORDER,
     RENTAL_CHECK_INTERVAL,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
@@ -25,6 +26,7 @@ from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
+from AIModel.agent import get_ai_responder
 
 from .messages import USER
 from .utils import (
@@ -76,6 +78,7 @@ class FunpayBot:
 
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
+        self._ai = get_ai_responder()
 
         self._pending_account_choice: Dict[str, List[Dict]] = {}
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
@@ -255,6 +258,12 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = time.time()
 
+        if REQUIRE_PAID_ORDER and not hasattr(events.EventTypes, "ORDER_PAID"):
+            logger.warning(
+                "REQUIRE_PAID_ORDER is enabled but ORDER_PAID event is not available; "
+                "orders will not be processed."
+            )
+
         thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
         thread.start()
         logger.info("Rental expiration checker started.")
@@ -302,6 +311,9 @@ class FunpayBot:
         self._last_refresh_ts = now
 
     def _handle_new_order(self, event: Any) -> None:
+        if REQUIRE_PAID_ORDER:
+            logger.info("Skipping NEW_ORDER delivery; waiting for ORDER_PAID.")
+            return
         self._process_order(event, source="NEW_ORDER")
 
     def _handle_order_paid(self, event: Any) -> None:
@@ -641,6 +653,109 @@ class FunpayBot:
         if message_text in ("!bonus", "!бонус"):
             self._handle_bonus(acc, chat.id, event.message.author)
             return
+
+        if not raw_text:
+            return
+
+        if not self._ai or not self._ai.enabled:
+            return
+
+        active_accounts = self._db.get_user_active_accounts(
+            event.message.author,
+            self._user_id,
+        )
+        context = {
+            "active_rental_count": len(active_accounts),
+            "active_account_ids": [
+                item.get("id")
+                for item in active_accounts
+                if item.get("id") is not None
+            ],
+            "active_account_names": [
+                item.get("account_name")
+                for item in active_accounts
+                if item.get("account_name")
+            ],
+        }
+        response = self._ai.respond(raw_text, context)
+        if not response:
+            return
+
+        if response.action == "send_code":
+            if active_accounts:
+                self._handle_code(acc, chat.id, event.message.author)
+            else:
+                reply = response.reply or self._ai.payment_required_reply
+                if reply:
+                    acc.send_message(chat.id, reply)
+            return
+
+        if response.action == "send_account":
+            if active_accounts:
+                self._handle_acc(acc, chat.id, event.message.author)
+            else:
+                reply = response.reply or self._ai.payment_required_reply
+                if reply:
+                    acc.send_message(chat.id, reply)
+            return
+
+        if response.action == "handoff":
+            if response.reply:
+                acc.send_message(chat.id, response.reply)
+            send_message_to_admin(
+                f"AI handoff requested for {event.message.author}: {raw_text}"
+            )
+            return
+
+        if response.action == "stock":
+            self._handle_stock(acc, chat.id)
+            return
+
+        if response.action == "extend":
+            hours = response.args.get("hours")
+            lot_number = response.args.get("lot_number")
+            try:
+                hours = int(hours)
+                lot_number = int(lot_number)
+            except (TypeError, ValueError):
+                hours = None
+                lot_number = None
+
+            if hours and lot_number:
+                self._handle_extend(
+                    acc,
+                    chat.id,
+                    event.message.author,
+                    f"extend {hours} {lot_number}",
+                )
+            elif response.reply:
+                acc.send_message(chat.id, response.reply)
+            else:
+                self._handle_extend(acc, chat.id, event.message.author, raw_text)
+            return
+
+        if response.action == "cancel":
+            account_id = response.args.get("account_id")
+            try:
+                account_id = int(account_id)
+            except (TypeError, ValueError):
+                account_id = None
+
+            if account_id:
+                self._handle_cancel(
+                    acc,
+                    chat.id,
+                    event.message.author,
+                    f"cancel {account_id}",
+                )
+            elif response.reply:
+                acc.send_message(chat.id, response.reply)
+            else:
+                self._handle_cancel(acc, chat.id, event.message.author, raw_text)
+            return
+
+        if response.reply:
+            acc.send_message(chat.id, response.reply)
 
     def _extract_order_id(self, text: str) -> Optional[str]:
         match = RegularExpressions().ORDER_ID.search(text or "")
