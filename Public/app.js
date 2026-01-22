@@ -418,7 +418,7 @@ const renderInventory = (items) => {
   });
 
   if (!filtered.length) {
-    ui.inventoryTable.innerHTML = "<tr><td colspan=\"5\">Аккаунты не найдены.</td></tr>";
+    ui.inventoryTable.innerHTML = "<tr><td colspan=\"6\">Аккаунты не найдены.</td></tr>";
     return;
   }
 
@@ -432,6 +432,7 @@ const renderInventory = (items) => {
           <td>${item.account_name}</td>
           <td>${item.login}</td>
           <td>${showPasswords ? item.password : "******"}</td>
+          <td>${Number.isFinite(Number(item.mmr)) ? Number(item.mmr) : "-"}</td>
           <td>${item.steamid || "-"}</td>
         </tr>
       `
