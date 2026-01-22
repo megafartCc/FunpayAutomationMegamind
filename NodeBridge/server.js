@@ -301,7 +301,19 @@ function derivePresence(data) {
   const heroLevel = null;
 
   let matchSeconds = extractMatchSeconds(rp, rpRaw);
-  if (matchSeconds === null && inMatch) {
+  if (matchSeconds !== null && matchSeconds > 0) {
+    const expectedStart = Date.now() - matchSeconds * 1000;
+    const entry = matchStart.get(data.steamid64);
+    if (!entry || Math.abs(entry.startedAt - expectedStart) > 5000) {
+      matchStart.set(data.steamid64, {
+        startedAt: expectedStart,
+        matchId: matchId || entry?.matchId || null,
+        lastSeenAt: Date.now(),
+        graceUntil: null,
+      });
+    }
+  }
+  if ((matchSeconds === null || matchSeconds <= 0) && inMatch) {
     const entry = matchStart.get(data.steamid64);
     if (entry?.startedAt) {
       matchSeconds = Math.max(0, Math.floor((Date.now() - entry.startedAt) / 1000));
