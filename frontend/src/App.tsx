@@ -33,6 +33,42 @@ type RentalRow = {
   hero?: string;
 };
 
+const extractSteamId = (a: any): string => {
+  const direct =
+    a?.steamId ??
+    a?.steamid ??
+    a?.steam_id ??
+    a?.steamId64 ??
+    a?.steam ??
+    a?.steamId32 ??
+    a?.steamid32 ??
+    "";
+  const stringDirect = direct ? String(direct).trim() : "";
+  const regex17 = /\b(7656119\d{10})\b/;
+  if (stringDirect && regex17.test(stringDirect)) return regex17.exec(stringDirect)![1];
+
+  const maRaw = a?.mafile_json ?? a?.maFileJson ?? a?.mafile ?? "";
+  if (typeof maRaw === "string" && maRaw.trim()) {
+    const hit = regex17.exec(maRaw);
+    if (hit) return hit[1];
+    try {
+      const parsed = JSON.parse(maRaw);
+      const deep =
+        parsed?.steamid ||
+        parsed?.Session?.SteamID ||
+        parsed?.session?.SteamID ||
+        parsed?.SessionID ||
+        parsed?.SteamID;
+      const deepStr = deep ? String(deep) : "";
+      const deepHit = regex17.exec(deepStr);
+      if (deepHit) return deepHit[1];
+    } catch {
+      // ignore bad JSON
+    }
+  }
+  return stringDirect || "";
+};
+
 const DashboardIcon = () => (
   <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -287,7 +323,9 @@ const App: React.FC = () => {
         const [stats, activeRentals, accounts] = await Promise.all([
           apiFetch<Record<string, number>>("/api/stats").catch(() => null),
           apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1").catch(() => ({ items: [] })),
-          apiFetch<{ items: unknown[] }>("/api/accounts?fast=1").catch(() => ({ items: [] })),
+          apiFetch<{ items: unknown[] }>(
+            "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
+          ).catch(() => ({ items: [] })),
         ]);
 
         const totalAccounts =
@@ -330,7 +368,7 @@ const App: React.FC = () => {
               })(),
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
-              steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.steamId64 ?? a.steam ?? "",
+              steamId: extractSteamId(a),
               mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
             }))
           );
@@ -526,7 +564,7 @@ const App: React.FC = () => {
                       </div>
                       <div
                         className="grid gap-3 text-xs font-semibold text-neutral-500 px-1"
-                        style={{ gridTemplateColumns: "70px 240px 180px 150px 100px 110px 110px" }}
+                        style={{ gridTemplateColumns: "70px 280px 200px 160px 120px 90px 110px" }}
                       >
                         <span>ID</span>
                         <span>Name</span>
@@ -542,7 +580,7 @@ const App: React.FC = () => {
                             <div
                               key={acc.id}
                               className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                              style={{ gridTemplateColumns: "70px 240px 180px 150px 100px 110px 110px" }}
+                              style={{ gridTemplateColumns: "70px 280px 200px 160px 120px 90px 110px" }}
                             >
                               <span className="truncate font-semibold text-neutral-900" title={String(acc.id ?? "—")}>
                                 {acc.id ?? "—"}
