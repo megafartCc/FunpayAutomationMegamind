@@ -39,6 +39,8 @@ _SYSTEM_PROMPT = (
     "Use history_summary, recent_messages, memory_facts, and last_message_time to keep context across turns. "
     "recent_messages items may include time; use it when helpful. "
     "If the user asks what you remember, reply with memory_facts. "
+    "If active_rental_count > 0, do not claim the rental is ended. "
+    "If active_rentals is provided, use it to answer time-left questions. "
     "Keep replies short (1-4 sentences). "
     "Output JSON only with keys: reply, action, args. "
     "Action must be one of: none, send_account, send_code, handoff, stock, extend, cancel. "

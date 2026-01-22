@@ -22,6 +22,7 @@ from backend.config import (
     AI_MESSAGE_MAX_CHARS,
     AI_ORDER_HISTORY_LIMIT,
     AI_RENTAL_HISTORY_LIMIT,
+    AI_ALLOW_USERID_FALLBACK,
     AI_RATE_LIMIT_REPLY,
     AI_RATE_LIMIT_SECONDS,
     AI_SUMMARY_ENABLED,
@@ -76,6 +77,10 @@ MEMORY_REMEMBER_RE = re.compile(
 )
 MEMORY_RECALL_RE = re.compile(
     r"\b(what did (?:i )?say to remember|what do you remember|remind me|recall)\b",
+    re.IGNORECASE,
+)
+RENTAL_STATUS_RE = re.compile(
+    r"(сколько|остал|врем|час).*(аренд|врем)|аренд.*(есть|остал)|time left|rental time|hours left",
     re.IGNORECASE,
 )
 ISSUE_KEYWORDS = (
@@ -600,6 +605,85 @@ class FunpayBot:
         self._ai_last_request_at[owner] = now
         return False
 
+    def _get_active_accounts_for_owner(self, owner: str) -> list[dict]:
+        accounts = self._db.get_user_active_accounts(owner, self._user_id)
+        if accounts:
+            return accounts
+        if not AI_ALLOW_USERID_FALLBACK:
+            return []
+        if self._user_id in (None, 0):
+            return []
+        fallback = self._db.get_user_active_accounts(owner)
+        if fallback:
+            logger.warning(
+                "Active rental fallback used for owner %s (user_id %s).",
+                owner,
+                self._user_id,
+            )
+        return fallback
+
+    def _get_available_lots(self) -> list[dict]:
+        lots = self._db.get_available_lot_accounts(self._user_id)
+        if lots:
+            return lots
+        if not AI_ALLOW_USERID_FALLBACK:
+            return []
+        if self._user_id in (None, 0):
+            return lots
+        fallback = self._db.get_available_lot_accounts(None)
+        if fallback:
+            logger.warning(
+                "Available lot fallback used (user_id %s).",
+                self._user_id,
+            )
+        return fallback
+
+    def _get_order_history_for_owner(self, owner: str) -> list[dict]:
+        history = self._db.get_order_history(owner, AI_ORDER_HISTORY_LIMIT, self._user_id)
+        if history:
+            return history
+        if not AI_ALLOW_USERID_FALLBACK:
+            return []
+        if self._user_id in (None, 0):
+            return history
+        return self._db.get_order_history(owner, AI_ORDER_HISTORY_LIMIT, None)
+
+    def _handle_rental_status_query(
+        self, acc: Account, chat_id: int, owner: str, raw_text: str
+    ) -> bool:
+        if not RENTAL_STATUS_RE.search(raw_text or ""):
+            return False
+        accounts = self._get_active_accounts_for_owner(owner)
+        if not accounts:
+            no_rental_reply = (
+                self._ai.payment_required_reply
+                if self._ai
+                else ISSUE_NO_RENTAL_REPLY
+            )
+            stock_message = self._build_stock_message()
+            acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+            return True
+
+        current_time = datetime.now(tz=MOSCOW_TZ)
+        if len(accounts) == 1:
+            account = accounts[0]
+            _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+            display_name = self._display_account_name(account.get("account_name"))
+            acc.send_message(
+                chat_id,
+                f"У вас активна аренда: {display_name}.\n"
+                f"Осталось: {remaining_str} | Истекает: {expiry_str} МСК.",
+            )
+            return True
+
+        lines = ["Ваши активные аренды:"]
+        for account in accounts:
+            _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+            display_name = self._display_account_name(account.get("account_name"))
+            lines.append(f"- {display_name}: {remaining_str}, до {expiry_str} МСК")
+        acc.send_message(chat_id, "\n".join(lines))
+        return True
+
     def _record_ai_decision(
         self,
         owner: str,
@@ -698,8 +782,8 @@ class FunpayBot:
         return updated
 
     def _build_ai_context(self, owner: str) -> Dict[str, Any]:
-        active_accounts = self._db.get_user_active_accounts(owner, self._user_id)
-        available_lots = self._db.get_available_lot_accounts(self._user_id)
+        active_accounts = self._get_active_accounts_for_owner(owner)
+        available_lots = self._get_available_lots()
         summary_text = self._refresh_chat_summary(owner)
         recent_messages = self._memory.get_recent_messages(
             owner, AI_CONTEXT_MESSAGES, self._user_id
@@ -743,9 +827,7 @@ class FunpayBot:
                 }
             )
 
-        order_history = self._db.get_order_history(
-            owner, AI_ORDER_HISTORY_LIMIT, self._user_id
-        )
+        order_history = self._get_order_history_for_owner(owner)
         safe_orders: List[Dict[str, Any]] = []
         for item in order_history:
             amount = item.get("amount")
@@ -767,10 +849,22 @@ class FunpayBot:
             )
 
         active_account_names: List[str] = []
+        active_rentals: List[Dict[str, Any]] = []
+        current_time = datetime.now(tz=MOSCOW_TZ)
         for item in active_accounts:
             name = self._redact_mmr_label(item.get("account_name"))
             if name:
                 active_account_names.append(name)
+            expiry_time, expiry_str, remaining_str = get_remaining_time(item, current_time)
+            active_rentals.append(
+                {
+                    "id": item.get("id"),
+                    "account_name": name,
+                    "expiry_time": self._format_datetime(expiry_time),
+                    "expiry_label": expiry_str,
+                    "remaining_label": remaining_str,
+                }
+            )
 
         return {
             "active_rental_count": len(active_accounts),
@@ -786,6 +880,7 @@ class FunpayBot:
             "history_summary": summary_text,
             "memory_facts": safe_facts,
             "last_message_time": last_message_time,
+            "active_rentals": active_rentals,
             "rental_history": safe_rentals,
             "order_history": safe_orders,
         }
@@ -1290,8 +1385,11 @@ class FunpayBot:
             self._handle_cancel(acc, chat_id, owner, raw_text)
             return
 
+        if self._handle_rental_status_query(acc, chat_id, owner, raw_text):
+            return
+
         if self._is_account_request(raw_text):
-            has_active = bool(self._db.get_user_active_accounts(owner, self._user_id))
+            has_active = bool(self._get_active_accounts_for_owner(owner))
             if has_active:
                 self._handle_acc(acc, chat_id, owner)
             else:
@@ -1861,7 +1959,7 @@ class FunpayBot:
             acc.send_message(chat_id, USER.stock_failed)
 
     def _build_stock_message(self) -> str:
-        available_lots = self._db.get_available_lot_accounts(self._user_id)
+        available_lots = self._get_available_lots()
         if available_lots:
             lines = [USER.stock_title]
             for account in available_lots:
@@ -2033,7 +2131,8 @@ class FunpayBot:
                 start_datetime = start_time
             else:
                 start_datetime = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-            start_datetime = MOSCOW_TZ.localize(start_datetime)
+            if start_datetime.tzinfo is None:
+                start_datetime = MOSCOW_TZ.localize(start_datetime)
             try:
                 total_minutes = int(duration_minutes) if duration_minutes is not None else int(duration) * 60
             except Exception:
