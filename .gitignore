@@ -74,6 +74,8 @@ THIRD_PARTY_NOTICES.chromedriver
 # Runtime artifacts
 sessions/
 screenshots/
+data/chat_memory/
+data/ai_metrics.json
 
 # Old README file
 README.txt

@@ -22,6 +22,8 @@ from backend.config import (
     AI_MESSAGE_MAX_CHARS,
     AI_ORDER_HISTORY_LIMIT,
     AI_RENTAL_HISTORY_LIMIT,
+    AI_RATE_LIMIT_REPLY,
+    AI_RATE_LIMIT_SECONDS,
     AI_SUMMARY_ENABLED,
     AI_SUMMARY_MAX_CHARS,
     AI_SUMMARY_TRIGGER,
@@ -36,6 +38,7 @@ from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot
 from AIModel.agent import get_ai_responder
 from AIModel.memory_store import get_memory_store
+from AIModel.telemetry import get_telemetry
 
 from .messages import USER
 from .utils import (
@@ -184,11 +187,13 @@ class FunpayBot:
         self._runner: Optional[Runner] = None
         self._ai = get_ai_responder()
         self._memory = get_memory_store()
+        self._telemetry = get_telemetry()
 
         self._pending_account_choice: Dict[str, List[Dict]] = {}
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
         self._processed_order_statuses: set[tuple[str, str]] = set()
+        self._ai_last_request_at: Dict[str, float] = {}
 
         self._last_refresh_ts = 0.0
         self._token_lock = threading.Lock()
@@ -584,6 +589,38 @@ class FunpayBot:
         if "end" in lowered and "rental" in lowered:
             return True
         return False
+
+    def _should_rate_limit_ai(self, owner: str) -> bool:
+        if AI_RATE_LIMIT_SECONDS <= 0 or not owner:
+            return False
+        now = time.time()
+        last_seen = self._ai_last_request_at.get(owner)
+        if last_seen is not None and now - last_seen < AI_RATE_LIMIT_SECONDS:
+            return True
+        self._ai_last_request_at[owner] = now
+        return False
+
+    def _record_ai_decision(
+        self,
+        owner: str,
+        action: str,
+        latency_ms: float | None,
+        status: str,
+        reason: str | None = None,
+        variant: str | None = None,
+    ) -> None:
+        provider = getattr(self._ai, "provider", None) if self._ai else None
+        model = getattr(self._ai, "model", None) if self._ai else None
+        self._telemetry.record_action(
+            owner=owner,
+            action=action,
+            latency_ms=latency_ms,
+            status=status,
+            reason=reason,
+            provider=provider,
+            model=model,
+            variant=variant,
+        )
 
 
     def _redact_mmr_label(self, text: Optional[str]) -> str:
@@ -1253,12 +1290,51 @@ class FunpayBot:
             self._handle_cancel(acc, chat_id, owner, raw_text)
             return
 
+        if self._is_account_request(raw_text):
+            has_active = bool(self._db.get_user_active_accounts(owner, self._user_id))
+            if has_active:
+                self._handle_acc(acc, chat_id, owner)
+            else:
+                stock_message = self._build_stock_message()
+                no_rental_reply = (
+                    self._ai.payment_required_reply
+                    if self._ai
+                    else ISSUE_NO_RENTAL_REPLY
+                )
+                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+            return
+
+        if self._should_rate_limit_ai(owner):
+            self._record_ai_decision(
+                owner=owner,
+                action="none",
+                latency_ms=None,
+                status="rate_limited",
+                reason="rate_limited",
+            )
+            if AI_RATE_LIMIT_REPLY:
+                acc.send_message(chat_id, AI_RATE_LIMIT_REPLY)
+            return
+
         if not self._ai or not self._ai.enabled:
             return
 
         context = self._build_ai_context(owner)
-        response = self._ai.respond(raw_text, context)
+        system_prompt, variant = self._ai.select_prompt_variant(owner)
+        self._telemetry.record_request(owner)
+        start_ts = time.time()
+        response = self._ai.respond(raw_text, context, system_prompt_override=system_prompt)
+        latency_ms = (time.time() - start_ts) * 1000.0
+        error_reason = self._ai.last_error_reason()
         if not response:
+            self._record_ai_decision(
+                owner=owner,
+                action="none",
+                latency_ms=latency_ms,
+                status="empty",
+                reason=error_reason,
+                variant=variant,
+            )
             return
         has_active_rental = bool(context.get("active_rental_count"))
         no_rental_reply = self._ai.payment_required_reply or ISSUE_NO_RENTAL_REPLY
@@ -1266,17 +1342,45 @@ class FunpayBot:
         if response.action == "send_code":
             if has_active_rental:
                 self._handle_code(acc, chat_id, event.message.author)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="send_code",
+                    latency_ms=latency_ms,
+                    status="ok",
+                    variant=variant,
+                )
             else:
                 stock_message = self._build_stock_message()
                 acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+                self._record_ai_decision(
+                    owner=owner,
+                    action="send_code",
+                    latency_ms=latency_ms,
+                    status="no_rental",
+                    variant=variant,
+                )
             return
 
         if response.action == "send_account":
             if has_active_rental:
                 self._handle_acc(acc, chat_id, event.message.author)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="send_account",
+                    latency_ms=latency_ms,
+                    status="ok",
+                    variant=variant,
+                )
             else:
                 stock_message = self._build_stock_message()
                 acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+                self._record_ai_decision(
+                    owner=owner,
+                    action="send_account",
+                    latency_ms=latency_ms,
+                    status="no_rental",
+                    variant=variant,
+                )
             return
 
         if response.action == "handoff":
@@ -1284,6 +1388,13 @@ class FunpayBot:
                 acc.send_message(chat_id, response.reply)
             send_message_to_admin(
                 f"AI handoff requested for {event.message.author}: {raw_text}"
+            )
+            self._record_ai_decision(
+                owner=owner,
+                action="handoff",
+                latency_ms=latency_ms,
+                status="ok",
+                variant=variant,
             )
             return
 
@@ -1294,8 +1405,22 @@ class FunpayBot:
                     acc.send_message(chat_id, f"{response.reply}\n\n{stock_message}")
                 else:
                     acc.send_message(chat_id, stock_message)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="stock",
+                    latency_ms=latency_ms,
+                    status="ok",
+                    variant=variant,
+                )
             else:
                 acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+                self._record_ai_decision(
+                    owner=owner,
+                    action="stock",
+                    latency_ms=latency_ms,
+                    status="no_rental",
+                    variant=variant,
+                )
             return
 
         if response.action == "extend":
@@ -1315,10 +1440,31 @@ class FunpayBot:
                     event.message.author,
                     f"extend {hours} {lot_number}",
                 )
+                self._record_ai_decision(
+                    owner=owner,
+                    action="extend",
+                    latency_ms=latency_ms,
+                    status="ok",
+                    variant=variant,
+                )
             elif response.reply:
                 acc.send_message(chat_id, response.reply)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="extend",
+                    latency_ms=latency_ms,
+                    status="invalid_args",
+                    variant=variant,
+                )
             else:
                 self._handle_extend(acc, chat_id, event.message.author, raw_text)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="extend",
+                    latency_ms=latency_ms,
+                    status="fallback",
+                    variant=variant,
+                )
             return
 
         if response.action == "cancel":
@@ -1335,19 +1481,63 @@ class FunpayBot:
                     event.message.author,
                     f"cancel {account_id}",
                 )
+                self._record_ai_decision(
+                    owner=owner,
+                    action="cancel",
+                    latency_ms=latency_ms,
+                    status="ok",
+                    variant=variant,
+                )
             elif response.reply:
                 acc.send_message(chat_id, response.reply)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="cancel",
+                    latency_ms=latency_ms,
+                    status="invalid_args",
+                    variant=variant,
+                )
             else:
                 self._handle_cancel(acc, chat_id, event.message.author, raw_text)
+                self._record_ai_decision(
+                    owner=owner,
+                    action="cancel",
+                    latency_ms=latency_ms,
+                    status="fallback",
+                    variant=variant,
+                )
             return
 
         if response.action == "none" and not has_active_rental:
             stock_message = self._build_stock_message()
             acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
+            self._record_ai_decision(
+                owner=owner,
+                action="none",
+                latency_ms=latency_ms,
+                status="no_rental",
+                variant=variant,
+            )
             return
 
         if response.reply:
             acc.send_message(chat_id, response.reply)
+            self._record_ai_decision(
+                owner=owner,
+                action=response.action or "none",
+                latency_ms=latency_ms,
+                status="ok",
+                variant=variant,
+            )
+            return
+
+        self._record_ai_decision(
+            owner=owner,
+            action=response.action or "none",
+            latency_ms=latency_ms,
+            status="empty",
+            variant=variant,
+        )
 
     def _extract_order_id(self, text: str) -> Optional[str]:
         match = RegularExpressions().ORDER_ID.search(text or "")

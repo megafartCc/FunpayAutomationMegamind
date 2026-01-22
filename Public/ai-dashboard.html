@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Metrics Dashboard</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600;700&display=swap");
+
+      :root {
+        --bg: #0f172a;
+        --bg-2: #0b1220;
+        --card: rgba(255, 255, 255, 0.06);
+        --border: rgba(148, 163, 184, 0.2);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #22d3ee;
+        --accent-2: #38bdf8;
+        --danger: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 10% -10%, rgba(34, 211, 238, 0.15), transparent),
+          radial-gradient(900px 500px at 90% -20%, rgba(56, 189, 248, 0.12), transparent),
+          linear-gradient(160deg, var(--bg), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      header {
+        padding: 32px 20px 12px;
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.8rem, 4vw, 2.6rem);
+        letter-spacing: 0.02em;
+      }
+
+      .subtitle {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 12px 20px 48px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        backdrop-filter: blur(8px);
+      }
+
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 0.95rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .value {
+        font-size: 1.8rem;
+        font-weight: 700;
+      }
+
+      .value.muted {
+        color: var(--muted);
+      }
+
+      .value.danger {
+        color: var(--danger);
+      }
+
+      .list {
+        display: grid;
+        gap: 8px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.85rem;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .events {
+        max-height: 320px;
+        overflow: auto;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.78rem;
+        border-top: 1px dashed var(--border);
+        margin-top: 12px;
+        padding-top: 12px;
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--accent);
+        font-size: 0.75rem;
+      }
+
+      .footer {
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>AI Metrics Dashboard</h1>
+      <div class="subtitle">Live snapshot of AI routing, latency, and errors.</div>
+    </header>
+    <main>
+      <div class="grid">
+        <div class="card">
+          <h2>Requests</h2>
+          <div class="value" id="requests">-</div>
+        </div>
+        <div class="card">
+          <h2>Error Rate</h2>
+          <div class="value" id="error-rate">-</div>
+        </div>
+        <div class="card">
+          <h2>Error Budget</h2>
+          <div class="value" id="error-budget">-</div>
+        </div>
+        <div class="card">
+          <h2>Latency P50</h2>
+          <div class="value" id="latency-p50">-</div>
+        </div>
+        <div class="card">
+          <h2>Latency P95</h2>
+          <div class="value" id="latency-p95">-</div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Actions</h2>
+          <div class="list" id="actions"></div>
+        </div>
+        <div class="card">
+          <h2>Errors</h2>
+          <div class="list" id="errors"></div>
+        </div>
+        <div class="card">
+          <h2>Recent Events</h2>
+          <div class="events" id="events"></div>
+        </div>
+      </div>
+      <div class="footer">
+        Add <span class="pill">?token=YOUR_TOKEN</span> if you are not already authenticated.
+      </div>
+    </main>
+
+    <script>
+      const token = new URLSearchParams(window.location.search).get("token");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+      const fmt = (value, suffix = "") =>
+        value === null || value === undefined ? "-" : `${value}${suffix}`;
+
+      const renderList = (target, data) => {
+        target.innerHTML = "";
+        const entries = Object.entries(data || {});
+        if (!entries.length) {
+          target.innerHTML = "<div class='value muted'>No data</div>";
+          return;
+        }
+        entries.forEach(([key, value]) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.innerHTML = `<span>${key}</span><span>${value}</span>`;
+          target.appendChild(row);
+        });
+      };
+
+      const renderEvents = (target, events) => {
+        target.innerHTML = "";
+        if (!events || !events.length) {
+          target.innerHTML = "<div class='value muted'>No events</div>";
+          return;
+        }
+        events
+          .slice()
+          .reverse()
+          .forEach((event) => {
+            const row = document.createElement("div");
+            row.className = "row";
+            const status = event.status || "ok";
+            const latency = event.latency_ms ? `${event.latency_ms.toFixed(0)}ms` : "-";
+            row.innerHTML = `<span>${event.action} / ${status}</span><span>${latency}</span>`;
+            target.appendChild(row);
+          });
+      };
+
+      const loadMetrics = async () => {
+        try {
+          const resp = await fetch("/api/ai/metrics", { headers });
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          const data = await resp.json();
+          document.getElementById("requests").textContent = fmt(
+            data?.counters?.requests_total
+          );
+          const errorRate = data?.error_rate ? (data.error_rate * 100).toFixed(1) : "0.0";
+          document.getElementById("error-rate").textContent = `${errorRate}%`;
+          const budget = data?.error_budget;
+          const budgetLabel = budget
+            ? `${(budget.remaining * 100).toFixed(2)}%`
+            : "-";
+          document.getElementById("error-budget").textContent = budgetLabel;
+          const p50 = data?.latency_ms?.p50;
+          const p95 = data?.latency_ms?.p95;
+          document.getElementById("latency-p50").textContent = fmt(p50, "ms");
+          document.getElementById("latency-p95").textContent = fmt(p95, "ms");
+          renderList(document.getElementById("actions"), data?.actions);
+          renderList(document.getElementById("errors"), data?.errors);
+          renderEvents(document.getElementById("events"), data?.events);
+        } catch (err) {
+          document.getElementById("requests").textContent = "Auth required";
+          document.getElementById("error-rate").textContent = "-";
+        }
+      };
+
+      loadMetrics();
+      setInterval(loadMetrics, 5000);
+    </script>
+  </body>
+</html>

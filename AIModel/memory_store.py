@@ -243,19 +243,154 @@ class LocalMemoryStore:
             return entry.last_seen_at
 
 
-_memory_store: Optional[LocalMemoryStore] = None
+class MySQLMemoryStore:
+    def __init__(self, max_messages: int = 200, max_facts: int = 20) -> None:
+        self._max_messages = max(1, int(max_messages))
+        self._max_facts = max(1, int(max_facts))
+        self._lock = threading.Lock()
+        self._db = None
+
+    def _ensure_db(self):
+        if self._db is None:
+            from DatabaseHandler.databaseSetup import MySQLDB
+
+            self._db = MySQLDB()
+
+    def log_message(
+        self,
+        owner: str,
+        role: str,
+        message: str,
+        user_id: int | None = None,
+        created_at: Optional[str] = None,
+    ) -> None:
+        if not owner or not role or not message:
+            return
+        with self._lock:
+            try:
+                self._ensure_db()
+                self._db.log_chat_message(owner, role, message, user_id)
+            except Exception as exc:
+                logger.warning("MySQL memory log failed: %s", exc)
+
+    def add_fact(
+        self,
+        owner: str,
+        fact: str,
+        user_id: int | None = None,
+        created_at: Optional[str] = None,
+    ) -> bool:
+        if not owner or not fact:
+            return False
+        with self._lock:
+            try:
+                self._ensure_db()
+                return self._db.add_memory_fact(owner, fact, user_id, self._max_facts)
+            except Exception as exc:
+                logger.warning("MySQL memory fact insert failed: %s", exc)
+                return False
+
+    def get_facts(self, owner: str, user_id: int | None = None) -> List[Dict[str, Any]]:
+        if not owner:
+            return []
+        with self._lock:
+            try:
+                self._ensure_db()
+                return self._db.get_memory_facts(owner, user_id, self._max_facts)
+            except Exception as exc:
+                logger.warning("MySQL memory fact read failed: %s", exc)
+                return []
+
+    def get_summary_state(self, owner: str, user_id: int | None = None) -> Dict[str, Any]:
+        if not owner:
+            return {"summary": "", "last_summary_id": 0, "last_seen_at": None}
+        with self._lock:
+            try:
+                self._ensure_db()
+                entry = self._db.get_chat_summary(owner, user_id)
+                if not entry:
+                    return {"summary": "", "last_summary_id": 0, "last_seen_at": None}
+                return {
+                    "summary": entry.get("summary") or "",
+                    "last_summary_id": entry.get("last_message_id") or 0,
+                    "last_seen_at": None,
+                }
+            except Exception as exc:
+                logger.warning("MySQL memory summary read failed: %s", exc)
+                return {"summary": "", "last_summary_id": 0, "last_seen_at": None}
+
+    def set_summary(
+        self,
+        owner: str,
+        summary: str,
+        last_summary_id: int,
+        user_id: int | None = None,
+    ) -> None:
+        if not owner:
+            return
+        with self._lock:
+            try:
+                self._ensure_db()
+                self._db.upsert_chat_summary(owner, summary, int(last_summary_id or 0), user_id)
+            except Exception as exc:
+                logger.warning("MySQL memory summary write failed: %s", exc)
+
+    def get_messages_after(
+        self,
+        owner: str,
+        last_message_id: int,
+        user_id: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        if not owner:
+            return []
+        with self._lock:
+            try:
+                self._ensure_db()
+                return self._db.get_chat_messages_after(owner, int(last_message_id or 0), user_id)
+            except Exception as exc:
+                logger.warning("MySQL memory messages-after failed: %s", exc)
+                return []
+
+    def get_recent_messages(
+        self,
+        owner: str,
+        limit: int = 20,
+        user_id: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        if not owner:
+            return []
+        with self._lock:
+            try:
+                self._ensure_db()
+                return self._db.get_chat_messages(owner, limit, user_id)
+            except Exception as exc:
+                logger.warning("MySQL memory messages read failed: %s", exc)
+                return []
+
+    def get_last_seen_at(self, owner: str, user_id: int | None = None) -> Optional[str]:
+        return None
 
 
-def get_memory_store() -> LocalMemoryStore:
+_memory_store: Optional[LocalMemoryStore | MySQLMemoryStore] = None
+
+
+def get_memory_store() -> LocalMemoryStore | MySQLMemoryStore:
     global _memory_store
     if _memory_store is None:
-        base_dir = app_config.AI_MEMORY_DIR or "data/chat_memory"
-        _memory_store = LocalMemoryStore(
-            base_dir=base_dir,
-            max_messages=app_config.AI_MEMORY_MAX_MESSAGES,
-            max_facts=app_config.AI_MEMORY_MAX_FACTS,
-        )
+        backend = (app_config.AI_MEMORY_BACKEND or "file").strip().lower()
+        if backend == "mysql":
+            _memory_store = MySQLMemoryStore(
+                max_messages=app_config.AI_MEMORY_MAX_MESSAGES,
+                max_facts=app_config.AI_MEMORY_MAX_FACTS,
+            )
+        else:
+            base_dir = app_config.AI_MEMORY_DIR or "data/chat_memory"
+            _memory_store = LocalMemoryStore(
+                base_dir=base_dir,
+                max_messages=app_config.AI_MEMORY_MAX_MESSAGES,
+                max_facts=app_config.AI_MEMORY_MAX_FACTS,
+            )
     return _memory_store
 
 
-__all__ = ["LocalMemoryStore", "get_memory_store"]
+__all__ = ["LocalMemoryStore", "MySQLMemoryStore", "get_memory_store"]

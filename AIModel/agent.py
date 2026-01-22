@@ -1,4 +1,6 @@
 import json
+import hashlib
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -72,8 +74,12 @@ class AIResponder:
         self._max_tokens = app_config.AI_MAX_TOKENS
         self._base_url = app_config.AI_BASE_URL
         self._system_prompt = app_config.AI_SYSTEM_PROMPT or _SYSTEM_PROMPT
+        self._prompt_variants = _parse_prompt_variants(app_config.AI_SYSTEM_PROMPT_VARIANTS)
         self._fallback_reply = app_config.AI_FALLBACK_REPLY or ""
         self._payment_required_reply = app_config.AI_PAYMENT_REQUIRED_REPLY or ""
+        self._queue_timeout = max(0, int(app_config.AI_QUEUE_TIMEOUT_SECONDS))
+        self._semaphore = threading.BoundedSemaphore(max(1, int(app_config.AI_MAX_CONCURRENT)))
+        self._last_error = threading.local()
         self._api_key = app_config.AI_API_KEY
         self._client: Optional[GroqClient] = None
 
@@ -97,11 +103,34 @@ class AIResponder:
             )
             self.enabled = False
 
+    def select_prompt_variant(self, key: Optional[str]) -> tuple[str, Optional[str]]:
+        if not self._prompt_variants:
+            return self._system_prompt, None
+        if key:
+            bucket = _stable_bucket(key, len(self._prompt_variants))
+        else:
+            bucket = 0
+        prompt = self._prompt_variants[bucket]
+        return prompt, f"variant_{bucket}"
+
     @property
     def payment_required_reply(self) -> str:
         return self._payment_required_reply
 
-    def respond(self, user_message: str, context: Dict[str, Any]) -> Optional[AIResponse]:
+    @property
+    def provider(self) -> str:
+        return self._provider
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def respond(
+        self,
+        user_message: str,
+        context: Dict[str, Any],
+        system_prompt_override: Optional[str] = None,
+    ) -> Optional[AIResponse]:
         if not self.enabled:
             return None
         if not user_message:
@@ -109,14 +138,23 @@ class AIResponder:
         if not self._client:
             return None
 
-        messages = self._build_messages(user_message, context)
+        if not self._acquire_slot():
+            self._set_last_error("queue_timeout")
+            if self._fallback_reply:
+                return AIResponse(reply=self._fallback_reply, action="none", args={})
+            return None
+
+        messages = self._build_messages(user_message, context, system_prompt_override)
         try:
             content = self._client.chat(messages)
         except Exception as exc:
             logger.warning("AI provider error: %s", exc)
+            self._set_last_error("provider_error")
             if self._fallback_reply:
                 return AIResponse(reply=self._fallback_reply, action="none", args={})
             return None
+        finally:
+            self._release_slot()
 
         data = _extract_json(content)
         if isinstance(data, dict):
@@ -134,6 +172,8 @@ class AIResponder:
         if not reply and action == "none":
             return None
 
+        self._set_last_error(None)
+
         return AIResponse(reply=reply, action=action, args=args)
 
     def summarize(
@@ -145,6 +185,9 @@ class AIResponder:
         if not self.enabled or not self._client:
             return None
         if not messages:
+            return existing_summary
+        if not self._acquire_slot():
+            self._set_last_error("queue_timeout")
             return existing_summary
         prompt = _SUMMARY_PROMPT.format(max_chars=int(max_chars))
         payload = {"summary": existing_summary, "messages": messages}
@@ -158,20 +201,48 @@ class AIResponder:
             )
         except Exception as exc:
             logger.warning("AI summary error: %s", exc)
+            self._set_last_error("provider_error")
             return None
+        finally:
+            self._release_slot()
         summary = (content or "").strip()
         if not summary:
             return None
+        self._set_last_error(None)
         if len(summary) > int(max_chars):
             summary = summary[: int(max_chars)].rstrip()
         return summary
 
-    def _build_messages(self, user_message: str, context: Dict[str, Any]) -> list[dict]:
+    def _build_messages(
+        self,
+        user_message: str,
+        context: Dict[str, Any],
+        system_prompt_override: Optional[str] = None,
+    ) -> list[dict]:
         payload = {"message": user_message, "context": context}
+        system_prompt = system_prompt_override or self._system_prompt
         return [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
+
+    def _acquire_slot(self) -> bool:
+        return self._semaphore.acquire(timeout=self._queue_timeout)
+
+    def _release_slot(self) -> None:
+        try:
+            self._semaphore.release()
+        except ValueError:
+            return
+
+    def _set_last_error(self, reason: Optional[str]) -> None:
+        try:
+            self._last_error.reason = reason
+        except Exception:
+            pass
+
+    def last_error_reason(self) -> Optional[str]:
+        return getattr(self._last_error, "reason", None)
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -186,6 +257,28 @@ def _extract_json(text: str) -> Optional[dict]:
         return json.loads(snippet)
     except Exception:
         return None
+
+
+def _parse_prompt_variants(raw: str) -> list[str]:
+    if not raw:
+        return []
+    raw = raw.strip()
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return []
+        return [str(item) for item in data if isinstance(item, str) and item.strip()]
+    parts = [item.strip() for item in raw.split("|||")]
+    return [item for item in parts if item]
+
+
+def _stable_bucket(key: str, buckets: int) -> int:
+    if buckets <= 1:
+        return 0
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
+    value = int.from_bytes(digest[:4], "little", signed=False)
+    return int(value % buckets)
 
 
 _ai_instance: Optional[AIResponder] = None

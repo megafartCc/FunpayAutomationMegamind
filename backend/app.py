@@ -37,6 +37,7 @@ from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
 from AIModel.memory_store import get_memory_store
+from AIModel.telemetry import get_telemetry
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1162,6 +1163,13 @@ def ai_memory(owner: str, request: Request, limit: int = 20) -> dict:
     }
 
 
+@app.get("/api/ai/metrics", dependencies=[Depends(require_admin)])
+def ai_metrics(request: Request) -> dict:
+    _ = current_user_id(request)
+    telemetry = get_telemetry()
+    return telemetry.snapshot()
+
+
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
@@ -1192,6 +1200,11 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         return {"status": "ok", "message_id": message.id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/ai-dashboard", include_in_schema=False)
+def ai_dashboard() -> FileResponse:
+    return FileResponse(PUBLIC_DIR / "ai-dashboard.html")
 
 
 @app.get("/", include_in_schema=False)
