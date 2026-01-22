@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap&subset=latin,cyrillic");
 
 @tailwind base;
 @tailwind components;
@@ -47,4 +47,12 @@
   .toast {
     @apply fixed bottom-6 right-6 z-50 rounded-xl border border-amber-500/40 bg-slate-900 px-4 py-3 text-sm text-slate-100 shadow-lg;
   }
+}
+
+/* Hide native password reveal/clear buttons (Edge/IE) to avoid double eye icon */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+  width: 0;
+  height: 0;
 }
