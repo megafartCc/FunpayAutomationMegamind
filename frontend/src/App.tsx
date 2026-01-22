@@ -7,6 +7,13 @@ import { useToast } from "./hooks/useToast";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
+type OverviewData = {
+  totalAccounts: number | null;
+  activeRentals: number | null;
+  freeAccounts: number | null;
+  past24: number | null;
+};
+
 const DashboardIcon = () => (
   <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -175,16 +182,22 @@ const pathToNavId = (path: string): string => {
 };
 
 const overviewCards = [
-  { title: "Total Accounts", value: "1,240", delta: "+12%", deltaTone: "positive", Icon: CardUsersIcon },
-  { title: "Active Rentals", value: "312", delta: "-3%", deltaTone: "negative", Icon: CardUsersIcon },
-  { title: "Free Accounts", value: "428", delta: "+6%", deltaTone: "positive", Icon: CardCloudCheckIcon },
-  { title: "Past 24 hours", value: "89", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
+  { key: "totalAccounts", title: "Total Accounts", delta: "+12%", deltaTone: "positive", Icon: CardUsersIcon },
+  { key: "activeRentals", title: "Active Rentals", delta: "-3%", deltaTone: "negative", Icon: CardUsersIcon },
+  { key: "freeAccounts", title: "Free Accounts", delta: "+6%", deltaTone: "positive", Icon: CardCloudCheckIcon },
+  { key: "past24", title: "Past 24 hours", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
 ];
 
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
+  const [overview, setOverview] = useState<OverviewData>({
+    totalAccounts: null,
+    activeRentals: null,
+    freeAccounts: null,
+    past24: null,
+  });
   const { toast, showToast } = useToast();
 
   const api = useMemo(
@@ -245,6 +258,45 @@ const App: React.FC = () => {
       showToast((error as Error).message || "Не удалось войти", "error");
     }
   };
+
+  useEffect(() => {
+    const loadOverview = async () => {
+      try {
+        const [stats, activeRentals, accounts] = await Promise.all([
+          apiFetch<Record<string, number>>("/api/stats").catch(() => null),
+          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1").catch(() => ({ items: [] })),
+          apiFetch<{ items: unknown[] }>("/api/accounts?fast=1").catch(() => ({ items: [] })),
+        ]);
+
+        const totalAccounts =
+          stats?.accounts_total ??
+          (Array.isArray(accounts?.items) ? accounts.items.length : null);
+
+        const active =
+          stats?.active_rentals ??
+          (Array.isArray(activeRentals?.items) ? activeRentals.items.length : null);
+
+        const past24 = stats?.rentals_last24 ?? null;
+
+        const freeAccounts =
+          stats?.free_accounts ??
+          (totalAccounts != null && active != null ? Math.max(totalAccounts - active, 0) : null);
+
+        setOverview({
+          totalAccounts,
+          activeRentals: active,
+          freeAccounts,
+          past24,
+        });
+      } catch {
+        // ignore overview load errors
+      }
+    };
+
+    if (token) {
+      loadOverview();
+    }
+  }, [token, apiFetch]);
 
   return (
     <>
@@ -338,17 +390,19 @@ const App: React.FC = () => {
                   <div className="mt-6">
                     <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                      {overviewCards.map((card) => (
-                        <motion.div
-                          key={card.title}
-                          className="group relative rounded-xl border border-neutral-200 bg-white p-4 shadow-sm shadow-neutral-200/60"
-                          whileHover={{ y: -2, scale: 1.01 }}
-                          transition={{ duration: 0.15, ease: EASE }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
-                              <card.Icon />
-                            </div>
+                      {overviewCards.map((card) => {
+                        const value = (overview as Record<string, number | null>)[card.key] ?? null;
+                        return (
+                          <motion.div
+                            key={card.title}
+                            className="group relative rounded-xl border border-neutral-200 bg-white p-4 shadow-sm shadow-neutral-200/60"
+                            whileHover={{ y: -2, scale: 1.01 }}
+                            transition={{ duration: 0.15, ease: EASE }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
+                                <card.Icon />
+                              </div>
                             <div
                               className={`rounded-full px-3 py-1 text-xs font-semibold ${
                                 card.deltaTone === "negative"
@@ -358,11 +412,14 @@ const App: React.FC = () => {
                             >
                               {card.delta}
                             </div>
+                            </div>
+                            <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
+                          <div className="mt-2 text-2xl font-semibold text-neutral-900">
+                            {value === null ? "—" : value.toLocaleString()}
                           </div>
-                          <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
-                          <div className="mt-2 text-2xl font-semibold text-neutral-900">{card.value}</div>
-                        </motion.div>
-                      ))}
+                          </motion.div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
