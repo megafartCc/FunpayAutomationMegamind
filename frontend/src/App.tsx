@@ -330,7 +330,7 @@ const App: React.FC = () => {
               })(),
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
-              steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.id ?? "",
+              steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.steamId64 ?? a.steam ?? "",
               mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
             }))
           );
