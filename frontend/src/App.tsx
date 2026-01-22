@@ -411,6 +411,7 @@ const App: React.FC = () => {
       <>
         <LoginPage
           onLogin={handleLogin}
+          onRegister={handleRegister}
           onToast={(message, isError) => showToast(message, isError ? "error" : "success")}
         />
         <Toast toast={toast} />

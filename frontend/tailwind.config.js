@@ -4,7 +4,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Sora", "Work Sans", "sans-serif"],
+        // Use a font with Cyrillic support; avoids "????" for Russian.
+        sans: ["Rubik", "system-ui", "sans-serif"],
       },
       colors: {
         panel: "#111827",
