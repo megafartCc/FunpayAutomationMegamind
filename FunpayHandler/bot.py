@@ -42,7 +42,7 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
-STOCK_LIST_LIMIT = 20
+STOCK_LIST_LIMIT = 8
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
 COMMANDS_HELP = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
@@ -1231,7 +1231,7 @@ class FunpayBot:
                     lines.append(f"{display_name}")
             remaining = len(available_lots) - STOCK_LIST_LIMIT
             if remaining > 0:
-                lines.append(f"...и еще {remaining} лотов. Напишите !сток позже для остального.")
+                lines.append(f"...и еще {remaining} лотов. Напишите !сток, чтобы увидеть следующую страницу.")
             return "\n".join(lines)
 
         all_lots = self._db.get_all_lot_accounts(self._user_id)
