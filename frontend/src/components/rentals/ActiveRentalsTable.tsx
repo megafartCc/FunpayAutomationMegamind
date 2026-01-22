@@ -1,0 +1,125 @@
+import React from "react";
+import { Rental } from "../../types";
+import {
+  formatDate,
+  formatDuration,
+  formatRentalEnd,
+  formatRemainingSeconds,
+  getDurationMinutes,
+  getRentalEndTimestamp,
+  presenceLabel,
+} from "../../utils/format";
+
+const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
+
+type ActiveRentalsTableProps = {
+  rentals: Rental[];
+  tick: number;
+  matchStartCache: React.MutableRefObject<Map<string, number>>;
+};
+
+const getMatchCacheKey = (item: Rental) => {
+  if (!item) return null;
+  if (item.steamid) return `steam-${item.steamid}`;
+  if (Number.isFinite(Number(item.id))) return `acc-${item.id}`;
+  return null;
+};
+
+const getMatchSecondsForItem = (
+  item: Rental,
+  now: number,
+  matchStartCache: Map<string, number>
+) => {
+  const key = getMatchCacheKey(item);
+  if (!item?.in_match) {
+    if (key) matchStartCache.delete(key);
+    return null;
+  }
+  if (!key) return null;
+  const rawSeconds = Number(item?.match_seconds);
+  if (Number.isFinite(rawSeconds) && rawSeconds > 0) {
+    matchStartCache.set(key, now - rawSeconds * 1000);
+  } else if (!matchStartCache.has(key)) {
+    matchStartCache.set(key, now);
+  }
+  const startAt = matchStartCache.get(key);
+  if (!Number.isFinite(startAt)) return null;
+  return Math.max(0, Math.floor((now - (startAt ?? now)) / 1000));
+};
+
+const ActiveRentalsTable: React.FC<ActiveRentalsTableProps> = ({ rentals, tick, matchStartCache }) => {
+  const now = Date.now();
+  void tick;
+
+  if (!rentals.length) {
+    return (
+      <div className="panel">
+        <p className="text-sm text-slate-400">Нет активных аренд.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel overflow-x-auto">
+      <table className="table min-w-[980px]">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Аккаунт</th>
+            <th>Покупатель</th>
+            <th>Чат</th>
+            <th>Логин</th>
+            <th>Начало</th>
+            <th>Окончание</th>
+            <th>Осталось</th>
+            <th>Длительность</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rentals.map((item) => {
+            const matchSeconds = getMatchSecondsForItem(item, now, matchStartCache.current);
+            const rentalEnd = getRentalEndTimestamp(item);
+            const remainingSeconds = Number.isFinite(rentalEnd)
+              ? Math.max(0, Math.floor(((rentalEnd ?? 0) - now) / 1000))
+              : null;
+            const label = presenceLabel(item, matchSeconds);
+            const presenceUrl = item.steamid ? `${PRESENCE_BASE_URL}/${item.steamid}` : null;
+            return (
+              <tr key={item.id}>
+                <td>{item.id}</td>
+                <td>{item.account_name}</td>
+                <td>{item.owner}</td>
+                <td>
+                  {item.chat_url ? (
+                    <a className="text-amber-300" href={item.chat_url} target="_blank" rel="noreferrer">
+                      {item.chat_url}
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+                <td>{item.login}</td>
+                <td>{formatDate(item.rental_start)}</td>
+                <td>{formatRentalEnd(item.rental_start || undefined, getDurationMinutes(item))}</td>
+                <td>{formatRemainingSeconds(remainingSeconds)}</td>
+                <td>{formatDuration(item)}</td>
+                <td>
+                  {presenceUrl ? (
+                    <a className="text-amber-300" href={presenceUrl} target="_blank" rel="noreferrer">
+                      {label}
+                    </a>
+                  ) : (
+                    label
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+export default ActiveRentalsTable;
