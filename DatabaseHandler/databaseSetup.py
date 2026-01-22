@@ -355,6 +355,7 @@ class MySQLDB:
         self._ensure_users_table()
         self._ensure_user_owner_columns()
         self._ensure_feedback_rewards_table()
+        self._ensure_feedback_rewards_revoked_column()
         self._migrate_lots_schema()
 
     def _ensure_mafile_column(self):
@@ -534,11 +535,36 @@ class MySQLDB:
                     review_text TEXT DEFAULT NULL,
                     reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     claimed_at TIMESTAMP NULL,
-                    account_id INT DEFAULT NULL
+                    account_id INT DEFAULT NULL,
+                    revoked_at TIMESTAMP NULL
                 )
                 """
             )
             self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_feedback_rewards_revoked_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'feedback_rewards' AND column_name = 'revoked_at'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE feedback_rewards ADD COLUMN revoked_at TIMESTAMP NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE feedback_rewards ADD COLUMN revoked_at TIMESTAMP")
+                self.conn.commit()
         except Exception:
             pass
         finally:
@@ -1973,6 +1999,55 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def get_feedback_reward(self, order_id: str) -> dict | None:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT order_id, owner, rating, review_text, reviewed_at, claimed_at, account_id, revoked_at
+                FROM feedback_rewards
+                WHERE order_id = ?
+                """,
+                (order_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "order_id": row[0],
+                "owner": row[1],
+                "rating": row[2],
+                "review_text": row[3],
+                "reviewed_at": row[4],
+                "claimed_at": row[5],
+                "account_id": row[6],
+                "revoked_at": row[7],
+            }
+        except Exception as e:
+            logger.error(f"Error reading feedback reward: {str(e)}")
+            return None
+        finally:
+            cursor.close()
+
+    def mark_feedback_reward_revoked(self, order_id: str) -> bool:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                UPDATE feedback_rewards
+                SET revoked_at = CURRENT_TIMESTAMP
+                WHERE order_id = ? AND revoked_at IS NULL
+                """,
+                (order_id,),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error marking feedback reward revoked: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
     def get_user_accounts_by_name(self, owner_id: str, account_name: str) -> list:
         """
         Get active accounts of a specific user by account name.
@@ -2452,6 +2527,43 @@ class MySQLDB:
             return success
         except Exception as e:
             logger.error(f"Error extending rental duration for owner: {str(e)}")
+            return False
+        finally:
+            cursor.close()
+
+    def reduce_rental_duration_for_owner(
+        self, account_id: int, owner_id: str, reduce_hours: int, reduce_minutes: int = 0
+    ) -> bool:
+        """
+        Reduce rental duration, but only if the account is currently owned by the given owner.
+        """
+        try:
+            total_minutes = int(reduce_hours) * 60 + int(reduce_minutes)
+            if total_minutes <= 0:
+                return False
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET rental_duration_minutes = CASE
+                        WHEN COALESCE(rental_duration_minutes, rental_duration * 60) > ?
+                        THEN COALESCE(rental_duration_minutes, rental_duration * 60) - ?
+                        ELSE 0
+                    END,
+                    rental_duration = CASE
+                        WHEN COALESCE(rental_duration, 0) > ?
+                        THEN COALESCE(rental_duration, 0) - ?
+                        ELSE 0
+                    END
+                WHERE ID = ? AND owner = ?
+                """,
+                (total_minutes, total_minutes, reduce_hours, reduce_hours, account_id, owner_id),
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as e:
+            logger.error(f"Error reducing rental duration for owner: {str(e)}")
             return False
         finally:
             cursor.close()

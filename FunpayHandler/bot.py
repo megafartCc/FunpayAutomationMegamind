@@ -323,14 +323,13 @@ class FunpayBot:
         )
         lot_label = f"\u2116{lot_number}" if lot_number else "\u043b\u043e\u0442"
         lot_url = replacement.get("lot_url")
-        link_line = f"\n\u0421\u0441\u044b\u043b\u043a\u0430: {lot_url}" if lot_url else ""
-        acc.send_message(
-            chat_id,
-            "\u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, \u043b\u043e\u0442 \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442. "
+        note = (
+            "\u0410\u043a\u043a\u0430\u0443\u043d\u0442 \u0443\u0436\u0435 \u0432 \u0430\u0440\u0435\u043d\u0434\u0435. "
             f"\u0412\u044b\u0434\u0430\u043b\u0438 \u0437\u0430\u043c\u0435\u043d\u0443: {lot_label} \u2014 {display_name} ({mmr_label})."
-            f"{link_line}",
         )
-        self._issue_new_account(acc, chat_id, event, replacement, amount, lot_number)
+        if lot_url:
+            note = f"{note}\n\u0421\u0441\u044b\u043b\u043a\u0430: {lot_url}"
+        self._issue_new_account(acc, chat_id, event, replacement, amount, lot_number, note=note)
         self._mark_order_processed(event)
 
         target_mmr = account.get("mmr")
@@ -922,6 +921,7 @@ class FunpayBot:
         account: dict,
         units: int,
         lot_number: int | None = None,
+        note: str | None = None,
     ) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
         self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id)
@@ -943,8 +943,7 @@ class FunpayBot:
             f"Note: specific account '{account['account_name']}' issued for {duration_label}",
         )
 
-        acc.send_message(
-            chat_id,
+        message = (
             "Ваш аккаунт:\n"
             f"ID: {account['id']}\n"
             f"Название: {display_name}\n"
@@ -954,6 +953,9 @@ class FunpayBot:
             f"{COMMANDS_HELP}\n\n"
             "Если нужна помощь — напишите в чат.",
         )
+        if note:
+            message = f"{note}\n\n{message}"
+        acc.send_message(chat_id, message)
 
         self._db.log_order_event(
             order_id=str(event.order.id),
@@ -994,6 +996,9 @@ class FunpayBot:
             types.MessageTypes.FEEDBACK_CHANGED,
         ):
             self._handle_feedback_event(acc, event)
+            return
+        if event.message.type is types.MessageTypes.FEEDBACK_DELETED:
+            self._handle_feedback_deleted(acc, event, chat_id)
             return
         if event.message.type in (
             types.MessageTypes.ORDER_CONFIRMED,
@@ -1210,6 +1215,82 @@ class FunpayBot:
         review_text = review.text or ""
         self._db.upsert_feedback_reward(order_id, owner, int(review.stars), review_text)
 
+    def _handle_feedback_deleted(self, acc: Account, event: Any, chat_id: int | None = None) -> None:
+        order_id = self._extract_order_id(event.message.text or "")
+        if not order_id:
+            return
+        try:
+            order = acc.get_order(order_id)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch order {order_id} for feedback delete: {exc}")
+            return
+        owner = getattr(order, "buyer_username", None) or event.message.author
+        if not owner:
+            return
+
+        reward = self._db.get_feedback_reward(order_id)
+        if not reward:
+            return
+        if reward.get("revoked_at"):
+            return
+        if not reward.get("claimed_at"):
+            return
+
+        reward_owner = reward.get("owner") or owner
+        target_account = None
+        claimed_account_id = reward.get("account_id")
+        if claimed_account_id:
+            candidate = self._db.get_account_by_id(int(claimed_account_id), self._user_id)
+            if candidate and candidate.get("owner") == reward_owner:
+                target_account = candidate
+        if target_account is None:
+            accounts = self._db.get_user_active_accounts(reward_owner, self._user_id)
+            if accounts:
+                target_account = accounts[0]
+
+        if target_account is None:
+            send_message_to_admin(
+                "BONUS REVOKE SKIPPED\n\n"
+                f"Order: {order_id}\n"
+                f"Owner: {reward_owner}\n"
+                "Reason: no active rental to deduct.",
+            )
+            self._db.mark_feedback_reward_revoked(order_id)
+            return
+
+        if not self._db.reduce_rental_duration_for_owner(
+            target_account["id"], reward_owner, HOURS_FOR_REVIEW, 0
+        ):
+            send_message_to_admin(
+                "BONUS REVOKE FAILED\n\n"
+                f"Order: {order_id}\n"
+                f"Owner: {reward_owner}\n"
+                f"Account ID: {target_account['id']}",
+            )
+            return
+
+        self._db.mark_feedback_reward_revoked(order_id)
+        duration_label = format_duration_minutes(HOURS_FOR_REVIEW * 60)
+        message = (
+            f"\u041e\u0442\u043d\u044f\u043b\u0438 {duration_label} \u043e\u0442 "
+            f"\u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u0430\u0440\u0435\u043d\u0434\u044b, "
+            f"\u0442\u0430\u043a \u043a\u0430\u043a \u0437\u0430\u043c\u0435\u0442\u0438\u043b\u0438, "
+            f"\u0447\u0442\u043e \u0432\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438 "
+            f"\u043e\u0442\u0437\u044b\u0432 \u043a \u0437\u0430\u043a\u0430\u0437\u0443 #{order_id}."
+        )
+        if chat_id is None:
+            chat = acc.get_chat_by_name(reward_owner, True)
+            chat_id = getattr(chat, "id", None)
+        if chat_id:
+            acc.send_message(chat_id, message)
+        send_message_to_admin(
+            "BONUS REVOKED\n\n"
+            f"Order: {order_id}\n"
+            f"Owner: {reward_owner}\n"
+            f"Account ID: {target_account['id']}\n"
+            f"Removed: {duration_label}",
+        )
+
     def _handle_bonus(self, acc: Account, chat_id: int, owner: str) -> None:
         reward = self._db.get_unclaimed_feedback_reward(owner, min_rating=5)
         if not reward:
@@ -1241,9 +1322,15 @@ class FunpayBot:
             return
 
         self._db.mark_feedback_reward_claimed(order_id, account_id)
+        updated = self._db.get_account_by_id(account_id, self._user_id)
+        total_minutes = get_duration_minutes(updated or {})
+        if total_minutes <= 0:
+            total_minutes = get_duration_minutes(target) + HOURS_FOR_REVIEW * 60
+        total_label = format_duration_minutes(total_minutes)
         acc.send_message(
             chat_id,
-            f"Бонус начислен: +{HOURS_FOR_REVIEW} ч. за отзыв 5★. Заказ #{order_id}.",
+            f"\u0411\u043e\u043d\u0443\u0441 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d: +{HOURS_FOR_REVIEW} \u0447. \u0437\u0430 \u043e\u0442\u0437\u044b\u0432 5\u2605. \u0417\u0430\u043a\u0430\u0437 #{order_id}.\n"
+            f"\u041e\u0431\u0449\u0435\u0435 \u0432\u0440\u0435\u043c\u044f \u0430\u0440\u0435\u043d\u0434\u044b: {total_label}.",
         )
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
