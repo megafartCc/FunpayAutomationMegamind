@@ -118,32 +118,32 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
 
     const RU = {
       brand: "FunpayMegamind",
-      titleLogin: "????",
-      subtitleLogin: "???????, ????? ??????? ?????? ??????????.",
-      titleRegister: "???????????",
-      subtitleRegister: "???????? ??????? ? ?????????? ??????? ???? FunPay.",
-      usernamePlaceholder: "Email ??? ?????",
-      passwordPlaceholder: "??????",
-      goldenKeyPlaceholder: "??????? ???? FunPay",
-      forgotPassword: "?????? ???????",
-      forgotPasswordHint: "?????????????? ?????? ???? ?? ??????????.",
-      actionLogin: "?????",
-      actionRegister: "??????? ???????",
-      working: "?????????...",
-      marketingTag: "????????????? ??? ????????? FunPay",
-      marketingTitle: "??????????????? ???? ???????",
+      titleLogin: "Вход",
+      subtitleLogin: "Войдите, чтобы открыть панель управления.",
+      titleRegister: "Регистрация",
+      subtitleRegister: "Создайте аккаунт и подключите золотой ключ FunPay.",
+      usernamePlaceholder: "Email или логин",
+      passwordPlaceholder: "Пароль",
+      goldenKeyPlaceholder: "Золотой ключ FunPay",
+      forgotPassword: "Забыли пароль?",
+      forgotPasswordHint: "Восстановление пароля пока не подключено.",
+      actionLogin: "Войти",
+      actionRegister: "Создать аккаунт",
+      working: "Подождите...",
+      marketingTag: "Автоматизация для продавцов FunPay",
+      marketingTitle: "Автоматизируйте свой процесс",
       marketingSubtitle:
-        "????????, ??????, ????, ??????????? ? ???? ? ? ????? ??????. ???????, ????, ??? ??????.",
-      bullet1: "?????? ????????? ? ????????? ?????? ? ???? ??????",
-      bullet2: "???? FunPay ? ??????????? ? ???????? ???????",
-      bullet3: "?????????, ???? ? ?????????? ? ??? ??? ?????????",
-      footerLeft: `? ${year} FunpayMegamind`,
-      footerSupport: "?????????",
-      supportHint: "????????? ?????.",
-      validation: "??????? ????? ? ??????.",
-      validationRegister: "????????? ?????, ?????? ? ??????? ????.",
-      linkSignUp: "???????????",
-      linkSignIn: "?????",
+        "Аккаунты, аренды, лоты, уведомления и чаты — в одной панели. Быстрее, чище, без рутины.",
+      bullet1: "Выдача аккаунтов и продление аренды в пару кликов",
+      bullet2: "Чаты FunPay и уведомления в реальном времени",
+      bullet3: "Инвентарь, лоты и статистика — всё под контролем",
+      footerLeft: `© ${year} FunpayMegamind`,
+      footerSupport: "Поддержка",
+      supportHint: "Поддержка скоро.",
+      validation: "Введите логин и пароль.",
+      validationRegister: "Заполните логин, пароль и золотой ключ.",
+      linkSignUp: "Регистрация",
+      linkSignIn: "Войти",
     } as const;
 
     const EN = {
@@ -229,26 +229,26 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
           <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-gradient-to-br from-orange-400/35 via-red-500/15 to-pink-500/25 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-40 -right-40 h-96 w-96 rounded-full bg-gradient-to-br from-white/10 via-white/10 to-white/0 blur-3xl" />
 
-          <div className="relative z-10 flex h-full flex-col">
-            <div className="inline-flex items-center gap-3">
-              <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/10 ring-1 ring-white/10">
-                <span className="h-3.5 w-3.5 rounded-full bg-gradient-to-br from-orange-400 to-pink-500" />
-              </span>
-              <div className="leading-tight">
-                <div className="text-sm font-semibold tracking-wide">{copy.brand}</div>
-                <div className="text-xs text-white/60">{copy.marketingTag}</div>
+          <div className="relative z-10 flex h-full items-center justify-center">
+            <div className="w-full max-w-lg text-center">
+              <div className="mx-auto inline-flex items-center gap-3">
+                <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/10 ring-1 ring-white/10">
+                  <span className="h-3.5 w-3.5 rounded-full bg-gradient-to-br from-orange-400 to-pink-500" />
+                </span>
+                <div className="text-left leading-tight">
+                  <div className="text-sm font-semibold tracking-wide">{copy.brand}</div>
+                  <div className="text-xs text-white/60">{copy.marketingTag}</div>
+                </div>
               </div>
-            </div>
 
-            <div className="mt-12">
-              <h2 className="text-4xl font-semibold leading-tight tracking-tight md:text-[46px]">
+              <h2 className="mt-12 text-4xl font-semibold leading-tight tracking-tight md:text-[52px]">
                 {copy.marketingTitle}
               </h2>
-              <p className="mt-4 max-w-[52ch] text-sm leading-relaxed text-white/70">
+              <p className="mx-auto mt-5 max-w-[56ch] text-sm leading-relaxed text-white/70">
                 {copy.marketingSubtitle}
               </p>
 
-              <div className="mt-9 space-y-3 text-sm text-white/80">
+              <div className="mx-auto mt-9 max-w-md space-y-3 text-left text-sm text-white/80">
                 <div className="flex items-start gap-3">
                   <span className="mt-0.5 text-orange-300">
                     <CheckIcon />
@@ -268,27 +268,25 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
                   <span>{copy.bullet3}</span>
                 </div>
               </div>
-            </div>
 
-            <div className="mt-10 grow" />
+              <div className="relative mx-auto mt-12 w-full max-w-sm">
+                <div className="pointer-events-none absolute -left-10 -top-10 h-24 w-24 rounded-[28px] bg-gradient-to-br from-orange-500/25 to-pink-500/10 blur-lg" />
+                <div className="pointer-events-none absolute -bottom-12 -right-10 h-32 w-32 rounded-full bg-gradient-to-br from-white/10 to-white/0 blur-2xl" />
 
-            <div className="relative z-10 mt-10">
-              <div className="absolute -left-10 -top-10 h-24 w-24 rounded-[28px] bg-gradient-to-br from-orange-500/25 to-pink-500/10 blur-lg" />
-              <div className="absolute -bottom-12 -right-10 h-32 w-32 rounded-full bg-gradient-to-br from-white/10 to-white/0 blur-2xl" />
-
-              <div className="relative mx-auto w-full max-w-sm rounded-[34px] border border-white/10 bg-white/5 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
-                <div className="flex items-center justify-between">
-                  <div className="h-3 w-28 rounded-full bg-white/15" />
-                  <div className="h-9 w-9 rounded-2xl bg-gradient-to-br from-orange-400/90 to-pink-500/70" />
-                </div>
-                <div className="mt-6 space-y-3">
-                  <div className="h-12 rounded-2xl bg-white/10" />
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="h-16 rounded-2xl bg-white/10" />
-                    <div className="h-16 rounded-2xl bg-white/10" />
-                    <div className="h-16 rounded-2xl bg-white/10" />
+                <div className="relative w-full rounded-[34px] border border-white/10 bg-white/5 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
+                  <div className="flex items-center justify-between">
+                    <div className="h-3 w-28 rounded-full bg-white/15" />
+                    <div className="h-9 w-9 rounded-2xl bg-gradient-to-br from-orange-400/90 to-pink-500/70" />
                   </div>
-                  <div className="h-10 rounded-2xl bg-gradient-to-r from-orange-500/35 via-red-500/25 to-pink-500/30" />
+                  <div className="mt-6 space-y-3">
+                    <div className="h-12 rounded-2xl bg-white/10" />
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="h-16 rounded-2xl bg-white/10" />
+                      <div className="h-16 rounded-2xl bg-white/10" />
+                      <div className="h-16 rounded-2xl bg-white/10" />
+                    </div>
+                    <div className="h-10 rounded-2xl bg-gradient-to-r from-orange-500/35 via-red-500/25 to-pink-500/30" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -296,7 +294,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
         </aside>
 
         <main className="relative flex flex-col bg-white p-10 md:p-14">
-          <div className="flex items-center justify-between">
+          <div className="absolute left-0 right-0 top-0 flex items-center justify-between px-10 pt-10 md:px-14 md:pt-14">
             <div className="inline-flex items-center gap-3">
               <BrandMark />
               <span className="text-sm font-semibold tracking-wide text-neutral-900">{copy.brand}</span>
@@ -311,16 +309,16 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
             </button>
           </div>
 
-          <div className="mt-14">
-            <h1 className="text-[44px] font-semibold leading-none tracking-tight text-neutral-900">
-              {mode === "login" ? copy.titleLogin : copy.titleRegister}
-            </h1>
-            <p className="mt-3 text-sm text-neutral-500">
-              {mode === "login" ? copy.subtitleLogin : copy.subtitleRegister}
-            </p>
-          </div>
+          <div className="flex grow items-center justify-center">
+            <div className="w-full max-w-md">
+              <h1 className="text-[44px] font-semibold leading-none tracking-tight text-neutral-900">
+                {mode === "login" ? copy.titleLogin : copy.titleRegister}
+              </h1>
+              <p className="mt-3 text-sm text-neutral-500">
+                {mode === "login" ? copy.subtitleLogin : copy.subtitleRegister}
+              </p>
 
-          <form className="mt-10 space-y-5" onSubmit={handleSubmit}>
+              <form className="mt-10 space-y-5" onSubmit={handleSubmit}>
             <div>
               <label className="sr-only" htmlFor="login-username">
                 {copy.usernamePlaceholder}
@@ -397,11 +395,11 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
                     : copy.actionRegister}
               </span>
             </button>
-          </form>
+              </form>
+            </div>
+          </div>
 
-          <div className="mt-10 grow" />
-
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-400">
+          <div className="absolute bottom-0 left-0 right-0 flex flex-wrap items-center justify-between gap-3 px-10 pb-10 text-xs text-neutral-400 md:px-14 md:pb-14">
             <div className="flex items-center gap-4">
               <span>{copy.footerLeft}</span>
               <button
@@ -422,7 +420,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onRegister, onToast }) =
                 }
                 onClick={() => setLang("ru")}
               >
-                ???????
+                Русский
               </button>
               <button
                 type="button"
