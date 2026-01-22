@@ -39,7 +39,6 @@ from FunpayHandler.bot import FunpayBot
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR.parent / "Public"
 FRONTEND_DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
 
@@ -453,8 +452,6 @@ presence_cache = PresenceCache()
 
 if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
-else:
-    app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 
 @app.on_event("startup")
@@ -1183,14 +1180,14 @@ def root() -> FileResponse:
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return FileResponse(PUBLIC_DIR / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend build not found")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa_fallback(path: str) -> FileResponse:
-    if path.startswith(("api", "static", "assets")):
+    if path.startswith(("api", "assets")):
         raise HTTPException(status_code=404)
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return FileResponse(PUBLIC_DIR / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend build not found")
