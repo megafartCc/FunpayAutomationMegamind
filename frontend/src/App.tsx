@@ -322,14 +322,11 @@ const App: React.FC = () => {
                   a.account ??
                   a.acc_name ??
                   a.title ??
-                  (a.name && a.name !== a.login ? a.name : null) ??
+                  a.name ??
+                  a.login ??
                   "";
-                const login = a.login ?? "";
-                const cleanedPref = String(preferred).trim();
-                if (!cleanedPref || cleanedPref.toLowerCase() === String(login).trim().toLowerCase()) {
-                  return `ID ${a.id ?? idx}`;
-                }
-                return cleanedPref;
+                const cleaned = String(preferred).trim();
+                return cleaned || `ID ${a.id ?? idx}`;
               })(),
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
