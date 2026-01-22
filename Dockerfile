@@ -13,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt ./
+COPY pysteamauth ./pysteamauth
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
