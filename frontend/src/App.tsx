@@ -524,7 +524,10 @@ const App: React.FC = () => {
                       <div className="mb-4 flex items-center justify-between">
                         <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                       </div>
-                      <div className="grid grid-cols-7 gap-3 text-xs font-semibold text-neutral-500 px-1">
+                      <div
+                        className="grid gap-3 text-xs font-semibold text-neutral-500 px-1"
+                        style={{ gridTemplateColumns: "70px 240px 180px 150px 100px 110px 110px" }}
+                      >
                         <span>ID</span>
                         <span>Name</span>
                         <span>Login</span>
@@ -538,14 +541,27 @@ const App: React.FC = () => {
                           return (
                             <div
                               key={acc.id}
-                              className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                              className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                              style={{ gridTemplateColumns: "70px 240px 180px 150px 100px 110px 110px" }}
                             >
-                              <span className="truncate font-semibold text-neutral-900">{acc.id ?? "—"}</span>
-                              <span className="truncate font-semibold text-neutral-900">{acc.name || "Account"}</span>
-                              <span className="truncate text-neutral-700">{acc.login || "—"}</span>
-                              <span className="truncate text-neutral-700">{acc.password || "—"}</span>
-                              <span className="truncate text-neutral-700">{acc.steamId || "—"}</span>
-                              <span className="truncate text-neutral-700">{acc.mmr ?? "—"}</span>
+                              <span className="truncate font-semibold text-neutral-900" title={String(acc.id ?? "—")}>
+                                {acc.id ?? "—"}
+                              </span>
+                              <span className="truncate font-semibold text-neutral-900" title={acc.name || "Account"}>
+                                {acc.name || "Account"}
+                              </span>
+                              <span className="truncate text-neutral-700" title={acc.login || "—"}>
+                                {acc.login || "—"}
+                              </span>
+                              <span className="truncate text-neutral-700" title={acc.password || "—"}>
+                                {acc.password || "—"}
+                              </span>
+                              <span className="truncate text-neutral-700" title={acc.steamId || "—"}>
+                                {acc.steamId || "—"}
+                              </span>
+                              <span className="truncate text-neutral-700" title={acc.mmr ?? "—"}>
+                                {acc.mmr ?? "—"}
+                              </span>
                               <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
                                 Available
                               </span>
