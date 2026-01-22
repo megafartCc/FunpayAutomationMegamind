@@ -1,6 +1,8 @@
 import html as html_module
 import json
+import os
 import re
+import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -454,8 +456,33 @@ if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
 
 
+def _frontend_assets_mounted() -> bool:
+    return any(getattr(route, "path", None) == "/assets" for route in app.router.routes)
+
+
+def _maybe_build_frontend() -> None:
+    if FRONTEND_DIST_DIR.exists():
+        return
+    if os.getenv("FRONTEND_AUTO_BUILD", "true").lower() not in ("1", "true", "yes", "on"):
+        return
+    frontend_dir = BASE_DIR.parent / "frontend"
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        logger.warning("Frontend package.json not found; skipping auto build.")
+        return
+    logger.info("Frontend build missing; attempting auto-build.")
+    try:
+        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
+        subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
+    except Exception as exc:
+        logger.warning(f"Frontend auto-build failed: {exc}")
+
+
 @app.on_event("startup")
 def start_background_services() -> None:
+    _maybe_build_frontend()
+    if FRONTEND_ASSETS_DIR.exists() and not _frontend_assets_mounted():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
     try:
         init_presence_bot(
             enabled=STEAM_PRESENCE_ENABLED,
