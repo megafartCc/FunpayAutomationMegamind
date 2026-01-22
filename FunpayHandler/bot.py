@@ -42,85 +42,8 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
+STOCK_LIST_LIMIT = 20
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
-RENTAL_STATUS_RE = re.compile(
-    r"(сколько|остал|врем|час).*(аренд|врем)|аренд.*(есть|остал)|time left|rental time|hours left",
-    re.IGNORECASE,
-)
-ISSUE_KEYWORDS = (
-    "не работает",
-    "нерабоч",
-    "не рабоч",
-    "не могу войти",
-    "не могу зайти",
-    "не входит",
-    "не пускает",
-    "ошибка",
-    "invalid password",
-    "wrong password",
-    "incorrect password",
-    "login failed",
-    "not working",
-    "doesn't work",
-    "steam guard",
-    "guard code",
-    "steamguard",
-    "code",
-    "код",
-)
-
-CODE_REQUEST_KEYWORDS = (
-    "!code",
-    "!\u043a\u043e\u0434",
-    "\u043a\u043e\u0434",
-    "code",
-    "2fa",
-    "otp",
-    "steam guard",
-    "steamguard",
-    "guard code",
-    "steamguard code",
-)
-ACCOUNT_REQUEST_KEYWORDS = (
-    "!acc",
-    "!\u0430\u043a\u043a",
-    "!account",
-    "\u0430\u043a\u043a",
-    "\u0430\u043a\u043a\u0430\u0443\u043d\u0442",
-    "\u043b\u043e\u0433\u0438\u043d",
-    "\u043f\u0430\u0440\u043e\u043b\u044c",
-    "credentials",
-    "details",
-)
-ACCOUNT_ACTION_KEYWORDS = (
-    "\u0434\u0430\u0439",
-    "\u0432\u044b\u0434\u0430\u0439",
-    "\u043f\u043e\u043a\u0430\u0436\u0438",
-    "\u0441\u043a\u0438\u043d\u044c",
-    "\u043d\u0443\u0436\u0435\u043d",
-    "\u043d\u0443\u0436\u043d\u043e",
-    "\u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c",
-    "send",
-    "show",
-    "give",
-)
-
-ISSUE_REPLY = (
-    "\u041f\u043e\u043d\u044f\u043b, \u0441\u0435\u0439\u0447\u0430\u0441 "
-    "\u043f\u0440\u043e\u0432\u0435\u0440\u044e. \u041f\u0440\u0438\u0448\u043b\u044e "
-    "\u0441\u0432\u0435\u0436\u0438\u0439 Steam Guard \u043a\u043e\u0434 \u2014 "
-    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0432\u043e\u0439\u0442\u0438 "
-    "\u0435\u0449\u0435 \u0440\u0430\u0437. \u0415\u0441\u043b\u0438 \u043d\u0435 "
-    "\u043f\u043e\u043c\u043e\u0436\u0435\u0442, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, "
-    "\u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043f\u0438\u0448\u0435\u0442 \u043f\u0440\u0438 \u0432\u0445\u043e\u0434\u0435."
-)
-ISSUE_NO_RENTAL_REPLY = (
-    "\u0421\u0435\u0439\u0447\u0430\u0441 \u043d\u0435 \u0432\u0438\u0436\u0443 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 "
-    "\u0430\u0440\u0435\u043d\u0434\u044b. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 "
-    "\u043b\u043e\u0442 \u043d\u0430 FunPay \u2014 \u043f\u043e\u0441\u043b\u0435 "
-    "\u043e\u043f\u043b\u0430\u0442\u044b \u0431\u043e\u0442 \u0441\u0430\u043c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442 "
-    "\u0434\u0430\u043d\u043d\u044b\u0435."
-)
 COMMANDS_HELP = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
     "!acc / !\u0430\u043a\u043a \u2014 \u0434\u0430\u043d\u043d\u044b\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430\n"
@@ -456,48 +379,6 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = now
 
-
-    def _is_issue_message(self, text: str) -> bool:
-        lowered = text.lower()
-        return any(keyword in lowered for keyword in ISSUE_KEYWORDS)
-
-    def _is_code_request(self, text: str) -> bool:
-        lowered = text.lower()
-        if any(keyword in lowered for keyword in CODE_REQUEST_KEYWORDS):
-            return True
-        return self._is_issue_message(text)
-
-    def _is_account_request(self, text: str) -> bool:
-        lowered = text.lower()
-        if any(keyword in lowered for keyword in ACCOUNT_REQUEST_KEYWORDS):
-            return True
-        if any(k in lowered for k in ("\u0430\u043a\u043a", "\u0430\u043a\u043a\u0430\u0443\u043d\u0442", "account")) and any(
-            keyword in lowered for keyword in ACCOUNT_ACTION_KEYWORDS
-        ):
-            return True
-        return False
-
-
-    def _is_stock_request(self, text: str) -> bool:
-        lowered = text.lower()
-        if "stock" in lowered or "list accounts" in lowered or "account list" in lowered:
-            return True
-        if "available" in lowered and ("account" in lowered or "lot" in lowered):
-            return True
-        if "rent" in lowered and "account" in lowered:
-            return True
-        return False
-
-    def _is_cancel_request(self, text: str) -> bool:
-        lowered = text.lower()
-        if "cancel" in lowered:
-            return True
-        if "stop" in lowered and ("rent" in lowered or "rental" in lowered):
-            return True
-        if "end" in lowered and "rental" in lowered:
-            return True
-        return False
-
     def _get_active_accounts_for_owner(self, owner: str) -> list[dict]:
         accounts = self._db.get_user_active_accounts(owner, self._user_id)
         if accounts:
@@ -526,38 +407,6 @@ class FunpayBot:
                 self._user_id,
             )
         return fallback
-
-    def _handle_rental_status_query(
-        self, acc: Account, chat_id: int, owner: str, raw_text: str
-    ) -> bool:
-        if not RENTAL_STATUS_RE.search(raw_text or ""):
-            return False
-        accounts = self._get_active_accounts_for_owner(owner)
-        if not accounts:
-            no_rental_reply = ISSUE_NO_RENTAL_REPLY
-            stock_message = self._build_stock_message()
-            acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
-            return True
-
-        current_time = datetime.now(tz=MOSCOW_TZ)
-        if len(accounts) == 1:
-            account = accounts[0]
-            _, expiry_str, remaining_str = get_remaining_time(account, current_time)
-            display_name = self._display_account_name(account.get("account_name"))
-            acc.send_message(
-                chat_id,
-                f"У вас активна аренда: {display_name}.\n"
-                f"Осталось: {remaining_str} | Истекает: {expiry_str} МСК.",
-            )
-            return True
-
-        lines = ["Ваши активные аренды:"]
-        for account in accounts:
-            _, expiry_str, remaining_str = get_remaining_time(account, current_time)
-            display_name = self._display_account_name(account.get("account_name"))
-            lines.append(f"- {display_name}: {remaining_str}, до {expiry_str} МСК")
-        acc.send_message(chat_id, "\n".join(lines))
-        return True
 
     def _clean_account_label(self, text: Optional[str]) -> str:
         if not text:
@@ -1042,39 +891,6 @@ class FunpayBot:
             return
 
         if not raw_text:
-            return
-
-        if self._is_issue_message(raw_text):
-            has_active = bool(
-                self._db.get_user_active_accounts(owner, self._user_id)
-            )
-            if has_active:
-                acc.send_message(chat_id, ISSUE_REPLY)
-                self._handle_code(acc, chat_id, owner)
-            else:
-                stock_message = self._build_stock_message()
-                acc.send_message(chat_id, f"{ISSUE_NO_RENTAL_REPLY}\n\n{stock_message}")
-            return
-
-        if self._is_stock_request(raw_text):
-            self._handle_stock(acc, chat_id)
-            return
-
-        if self._is_cancel_request(raw_text):
-            self._handle_cancel(acc, chat_id, owner, raw_text)
-            return
-
-        if self._handle_rental_status_query(acc, chat_id, owner, raw_text):
-            return
-
-        if self._is_account_request(raw_text):
-            has_active = bool(self._get_active_accounts_for_owner(owner))
-            if has_active:
-                self._handle_acc(acc, chat_id, owner)
-            else:
-                stock_message = self._build_stock_message()
-                no_rental_reply = ISSUE_NO_RENTAL_REPLY
-                acc.send_message(chat_id, f"{no_rental_reply}\n\n{stock_message}")
             return
 
     def _extract_order_id(self, text: str) -> Optional[str]:
