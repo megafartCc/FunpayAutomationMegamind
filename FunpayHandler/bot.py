@@ -143,6 +143,7 @@ class FunpayBot:
         self._pending_account_choice: Dict[str, List[Dict]] = {}
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
+        self._processed_order_statuses: set[tuple[str, str]] = set()
 
         self._last_refresh_ts = 0.0
         self._token_lock = threading.Lock()
@@ -341,9 +342,18 @@ class FunpayBot:
                 elif hasattr(events.EventTypes, "ORDER_PAID") and event.type is events.EventTypes.ORDER_PAID:
                     self._handle_order_paid(event)
                 elif hasattr(events.EventTypes, "ORDER_STATUS_CHANGED") and event.type is events.EventTypes.ORDER_STATUS_CHANGED:
-                    status = getattr(getattr(event, "order", None), "status", None)
+                    order = getattr(event, "order", None)
+                    status = getattr(order, "status", None)
                     if status is types.OrderStatuses.PAID:
+                        if order is not None:
+                            self._log_order_status(order, "paid", "ORDER_STATUS_CHANGED")
                         self._process_order(event, source="ORDER_STATUS_CHANGED")
+                    elif status is types.OrderStatuses.CLOSED:
+                        if order is not None:
+                            self._log_order_status(order, "closed", "ORDER_STATUS_CHANGED")
+                    elif status is types.OrderStatuses.REFUNDED:
+                        if order is not None:
+                            self._log_order_status(order, "refunded", "ORDER_STATUS_CHANGED")
 
                 if event.type is events.EventTypes.NEW_MESSAGE:
                     self._handle_new_message(event)
@@ -530,6 +540,9 @@ class FunpayBot:
         self._process_order(event, source="NEW_ORDER")
 
     def _handle_order_paid(self, event: Any) -> None:
+        order = getattr(event, "order", None)
+        if order is not None:
+            self._log_order_status(order, "paid", "ORDER_PAID")
         self._process_order(event, source="ORDER_PAID")
 
     def _mark_order_processed(self, event: Any) -> None:
@@ -540,6 +553,43 @@ class FunpayBot:
         if order_id is None:
             return
         self._processed_order_ids.add(str(order_id))
+
+    def _log_order_status(self, order: Any, action: str, source: str) -> None:
+        order_id = getattr(order, "id", None)
+        if not order_id or not action:
+            return
+        order_id = str(order_id)
+        status_key = (order_id, action)
+        if status_key in self._processed_order_statuses:
+            return
+        self._processed_order_statuses.add(status_key)
+
+        buyer = str(getattr(order, "buyer_username", "") or "unknown")
+        description = str(getattr(order, "description", "") or "")
+        amount = getattr(order, "amount", None)
+        price = getattr(order, "price", None)
+        lot_number = parse_lot_number(description)
+
+        self._db.log_order_event(
+            order_id=order_id,
+            owner_id=buyer,
+            action=action,
+            account_name=description or None,
+            lot_number=lot_number,
+            amount=amount,
+            price=price,
+            user_id=self._user_id,
+        )
+
+        send_message_to_admin(
+            f"ORDER {action.upper()}\n\n"
+            f"Order: {order_id}\n"
+            f"Buyer: {buyer}\n"
+            f"Description: {description}\n"
+            f"Amount: {amount}\n"
+            f"Price: {price}\n"
+            f"Source: {source}"
+        )
 
     def _process_order(self, event: Any, source: str) -> None:
         if self._acc is None:
@@ -889,11 +939,27 @@ class FunpayBot:
         ):
             self._handle_feedback_event(acc, event)
             return
+        if event.message.type in (
+            types.MessageTypes.ORDER_CONFIRMED,
+            types.MessageTypes.ORDER_CONFIRMED_BY_ADMIN,
+        ):
+            self._handle_order_status_message(
+                acc, event, "closed", "ORDER_CONFIRMED_MESSAGE"
+            )
+            return
+        if event.message.type in (
+            types.MessageTypes.REFUND,
+            types.MessageTypes.PARTIAL_REFUND,
+            types.MessageTypes.REFUND_BY_ADMIN,
+        ):
+            self._handle_order_status_message(acc, event, "refunded", "REFUND_MESSAGE")
+            return
         if event.message.type is types.MessageTypes.ORDER_PURCHASED:
             order_id = self._extract_order_id(event.message.text or "")
             if order_id:
                 try:
                     order = acc.get_order(order_id)
+                    self._log_order_status(order, "paid", "ORDER_PURCHASED_MESSAGE")
                     self._process_order(
                         SimpleNamespace(order=order),
                         source="ORDER_PURCHASED_MESSAGE",
@@ -1039,6 +1105,29 @@ class FunpayBot:
         if not match:
             return None
         return match.group(0).lstrip("#")
+
+    def _handle_order_status_message(
+        self,
+        acc: Account,
+        event: Any,
+        action: str,
+        source: str,
+    ) -> None:
+        order_id = self._extract_order_id(event.message.text or "")
+        if not order_id:
+            return
+        try:
+            order = acc.get_order(order_id)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch order {order_id} for {action}: {exc}")
+            send_message_to_admin(
+                f"ORDER {action.upper()}\n\n"
+                f"Order: {order_id}\n"
+                f"Source: {source}\n"
+                f"Error: {exc}"
+            )
+            return
+        self._log_order_status(order, action, source)
 
     def _handle_feedback_event(self, acc: Account, event: Any) -> None:
         order_id = self._extract_order_id(event.message.text or "")
