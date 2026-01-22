@@ -84,4 +84,4 @@ AI_PAYMENT_REQUIRED_REPLY = os.getenv(
     "\u0434\u0430\u043d\u043d\u044b\u0435.",
 ).strip()
 
-REQUIRE_PAID_ORDER = _get_bool("REQUIRE_PAID_ORDER", True)
+REQUIRE_PAID_ORDER = _get_bool("REQUIRE_PAID_ORDER", False)
