@@ -823,9 +823,9 @@ class FunpayBot:
             types.MessageTypes.NEW_FEEDBACK,
             types.MessageTypes.FEEDBACK_CHANGED,
         ):
-            self._handle_feedback_event(acc, event)
+            self._handle_feedback_event(acc, event, chat_id)
             return
-        if event.message.type is types.MessageTypes.FEEDBACK_DELETED:
+        if event.message.type == types.MessageTypes.FEEDBACK_DELETED:
             self._handle_feedback_deleted(acc, event, chat_id)
             return
         if event.message.type in (
@@ -843,7 +843,7 @@ class FunpayBot:
         ):
             self._handle_order_status_message(acc, event, "refunded", "REFUND_MESSAGE")
             return
-        if event.message.type is types.MessageTypes.ORDER_PURCHASED:
+        if event.message.type == types.MessageTypes.ORDER_PURCHASED:
             order_id = self._extract_order_id(event.message.text or "")
             if order_id:
                 try:
@@ -917,7 +917,9 @@ class FunpayBot:
             return
         self._log_order_status(order, action, source)
 
-    def _handle_feedback_event(self, acc: Account, event: Any) -> None:
+    def _handle_feedback_event(
+        self, acc: Account, event: Any, chat_id: int | None = None
+    ) -> None:
         order_id = self._extract_order_id(event.message.text or "")
         if not order_id:
             return
@@ -928,6 +930,8 @@ class FunpayBot:
             return
         review = getattr(order, "review", None)
         if not review or review.stars is None:
+            if event.message.type == types.MessageTypes.FEEDBACK_CHANGED:
+                self._handle_feedback_deleted(acc, event, chat_id)
             return
         owner = review.author or getattr(order, "buyer_username", None) or event.message.author
         if not owner:
@@ -1035,10 +1039,15 @@ class FunpayBot:
             return
 
         self._db.mark_feedback_reward_revoked(order_id)
-        duration_label = format_duration_minutes(HOURS_FOR_REVIEW * 60)
+        updated = self._db.get_account_by_id(target_account["id"], self._user_id)
+        total_minutes = get_duration_minutes(updated or {})
+        if total_minutes <= 0:
+            total_minutes = get_duration_minutes(target_account) - HOURS_FOR_REVIEW * 60
+        total_label = format_duration_minutes(max(total_minutes, 0))
         message = (
-            "\u041c\u044b \u043e\u0431\u043d\u0430\u0440\u0443\u0436\u0438\u043b\u0438, \u0447\u0442\u043e \u043e\u0442\u0437\u044b\u0432 \u043a \u0437\u0430\u043a\u0430\u0437\u0443 "
-            f"#{order_id} \u0443\u0434\u0430\u043b\u0451\u043d, \u0432\u0440\u0435\u043c\u044f \u0430\u0440\u0435\u043d\u0434\u044b \u0443\u043c\u0435\u043d\u044c\u0448\u0435\u043d\u043e \u043d\u0430 {duration_label}."
+            "\u041c\u044b \u043e\u0431\u043d\u0430\u0440\u0443\u0436\u0438\u043b\u0438 \u0447\u0442\u043e \u0432\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438 \u043e\u0442\u0437\u044b\u0432 \u2014 "
+            f"\u0443\u043c\u0435\u043d\u044c\u0448\u0438\u043c \u0432\u0430\u0448\u0443 \u0430\u0440\u0435\u043d\u0434\u0443 \u043d\u0430 {HOURS_FOR_REVIEW} \u0447\u0430\u0441.\n"
+            f"\u041e\u0431\u0449\u0435\u0435 \u0432\u0440\u0435\u043c\u044f \u0430\u0440\u0435\u043d\u0434\u044b: {total_label}."
         )
         if chat_id is None:
             chat = acc.get_chat_by_name(reward_owner, True)
@@ -1050,7 +1059,8 @@ class FunpayBot:
             f"Order: {order_id}\n"
             f"Owner: {reward_owner}\n"
             f"Account ID: {target_account['id']}\n"
-            f"Removed: {duration_label}",
+            f"Removed: {HOURS_FOR_REVIEW}h\n"
+            f"Total after: {total_label}",
         )
 
     def _try_handle_pending_choice(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> bool:
@@ -1554,7 +1564,7 @@ class FunpayBot:
                 "!код — код Steam Guard\n"
                 "!сток — наличие\n"
                 "!продлить <часы> <номер_лота> — продлить аренду\n"
-                "!отмена <ID> — отменить аренду\n!бонус — бонус за отзыв\n\n"
+                "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
         except Exception as exc:
@@ -1575,6 +1585,7 @@ class FunpayBot:
         self._expire_warning_sent.pop(account_id, None)
         self._expire_warning_start.pop(account_id, None)
         deauth_ok = False
+        deauth_error: str | None = None
         try:
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
                 try:
@@ -1586,15 +1597,24 @@ class FunpayBot:
                         )
                     )
                 except Exception as exc:
+                    deauth_error = str(exc)
                     logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
 
-            send_message_to_admin(
+            if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
+                deauth_status = "ok" if deauth_ok else "failed"
+            else:
+                deauth_status = "skipped"
+
+            admin_message = (
                 "RENTAL EXPIRED\n\n"
                 f"Account ID: {account_id}\n"
                 f"Owner: {owner}\n"
-                f"Deauthorize: {'ok' if deauth_ok else 'failed'}\n"
-                f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Deauthorize: {deauth_status}\n"
+                f"Expired at: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}"
             )
+            if deauth_error:
+                admin_message += f"\nDeauth error: {deauth_error}"
+            send_message_to_admin(admin_message)
 
             try:
                 self.send_message_by_owner(
