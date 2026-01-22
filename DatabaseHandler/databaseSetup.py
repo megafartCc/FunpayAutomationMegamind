@@ -213,6 +213,50 @@ class MySQLDB:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner VARCHAR(255) NOT NULL,
+                    role VARCHAR(16) NOT NULL,
+                    message TEXT NOT NULL,
+                    user_id INT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_chat_owner_id (owner, id),
+                    INDEX idx_chat_user_owner (user_id, owner)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_summaries (
+                    owner VARCHAR(255) NOT NULL,
+                    user_id INT NOT NULL DEFAULT 0,
+                    summary TEXT NOT NULL,
+                    last_message_id BIGINT NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (owner, user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS order_history (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    order_id VARCHAR(32) NOT NULL,
+                    owner VARCHAR(255) NOT NULL,
+                    account_name VARCHAR(255) NULL,
+                    lot_number INT NULL,
+                    amount INT DEFAULT 1,
+                    price DECIMAL(10,2) NULL,
+                    action VARCHAR(32) NOT NULL,
+                    user_id INT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_order_owner_created (owner, created_at),
+                    INDEX idx_order_user_owner (user_id, owner)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         else:
             cursor.execute(
                 """
@@ -258,6 +302,46 @@ class MySQLDB:
                     password_hash TEXT NOT NULL,
                     golden_key TEXT NOT NULL,
                     session_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_summaries (
+                    owner TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT NOT NULL,
+                    last_message_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (owner, user_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS order_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    account_name TEXT,
+                    lot_number INTEGER,
+                    amount INTEGER DEFAULT 1,
+                    price REAL,
+                    action TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -1419,6 +1503,246 @@ class MySQLDB:
             ]
         except Exception as e:
             logger.error(f"Error getting user rental history: {str(e)}")
+            return []
+        finally:
+            cursor.close()
+
+    def log_chat_message(
+        self, owner_id: str, role: str, message: str, user_id: int | None = None
+    ) -> bool:
+        if not owner_id or not message or not role:
+            return False
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                INSERT INTO chat_messages (owner, role, message, user_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(owner_id), str(role), str(message), int(user_id or 0)),
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Error logging chat message: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def get_chat_messages(
+        self, owner_id: str, limit: int = 20, user_id: int | None = None
+    ) -> list:
+        if not owner_id:
+            return []
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT id, role, message, created_at
+                FROM chat_messages
+                WHERE owner = ? AND user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (str(owner_id), int(user_id or 0), int(limit)),
+            )
+            rows = cursor.fetchall()
+            rows.reverse()
+            return [
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "message": row[2],
+                    "created_at": row[3],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error getting chat messages: {exc}")
+            return []
+        finally:
+            cursor.close()
+
+    def get_chat_messages_after(
+        self, owner_id: str, after_id: int, user_id: int | None = None
+    ) -> list:
+        if not owner_id:
+            return []
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT id, role, message, created_at
+                FROM chat_messages
+                WHERE owner = ? AND user_id = ? AND id > ?
+                ORDER BY id ASC
+                """,
+                (str(owner_id), int(user_id or 0), int(after_id)),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "message": row[2],
+                    "created_at": row[3],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error getting chat messages after id {after_id}: {exc}")
+            return []
+        finally:
+            cursor.close()
+
+    def get_chat_summary(self, owner_id: str, user_id: int | None = None) -> dict | None:
+        if not owner_id:
+            return None
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT summary, last_message_id
+                FROM chat_summaries
+                WHERE owner = ? AND user_id = ?
+                """,
+                (str(owner_id), int(user_id or 0)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {"summary": row[0], "last_message_id": int(row[1])}
+        except Exception as exc:
+            logger.error(f"Error getting chat summary: {exc}")
+            return None
+        finally:
+            cursor.close()
+
+    def upsert_chat_summary(
+        self,
+        owner_id: str,
+        summary: str,
+        last_message_id: int,
+        user_id: int | None = None,
+    ) -> bool:
+        if not owner_id:
+            return False
+        try:
+            cursor = self._cursor()
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT INTO chat_summaries (owner, user_id, summary, last_message_id)
+                    VALUES (?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        summary = VALUES(summary),
+                        last_message_id = VALUES(last_message_id),
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (str(owner_id), int(user_id or 0), summary, int(last_message_id)),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO chat_summaries (owner, user_id, summary, last_message_id)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(owner, user_id) DO UPDATE SET
+                        summary = excluded.summary,
+                        last_message_id = excluded.last_message_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (str(owner_id), int(user_id or 0), summary, int(last_message_id)),
+                )
+            return True
+        except Exception as exc:
+            logger.error(f"Error updating chat summary: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def log_order_event(
+        self,
+        order_id: str,
+        owner_id: str,
+        action: str,
+        account_name: str | None = None,
+        lot_number: int | None = None,
+        amount: int | None = None,
+        price: float | None = None,
+        user_id: int | None = None,
+    ) -> bool:
+        if not order_id or not owner_id or not action:
+            return False
+        try:
+            amount_value = None
+            if amount is not None:
+                try:
+                    amount_value = int(amount)
+                except (TypeError, ValueError):
+                    amount_value = None
+            price_value = None
+            if price is not None:
+                try:
+                    price_value = float(price)
+                except (TypeError, ValueError):
+                    price_value = None
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                INSERT INTO order_history (
+                    order_id, owner, account_name, lot_number, amount, price, action, user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(order_id),
+                    str(owner_id),
+                    account_name,
+                    int(lot_number) if lot_number is not None else None,
+                    amount_value,
+                    price_value,
+                    str(action),
+                    int(user_id or 0),
+                ),
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Error logging order event: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def get_order_history(
+        self, owner_id: str, limit: int = 5, user_id: int | None = None
+    ) -> list:
+        if not owner_id:
+            return []
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT order_id, account_name, lot_number, amount, price, action, created_at
+                FROM order_history
+                WHERE owner = ? AND user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (str(owner_id), int(user_id or 0), int(limit)),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "order_id": row[0],
+                    "account_name": row[1],
+                    "lot_number": row[2],
+                    "amount": row[3],
+                    "price": row[4],
+                    "action": row[5],
+                    "created_at": row[6],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error getting order history: {exc}")
             return []
         finally:
             cursor.close()

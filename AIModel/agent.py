@@ -21,13 +21,27 @@ _ALLOWED_ACTIONS = {
 _SYSTEM_PROMPT = (
     "You are a support assistant for a FunPay account rental bot. "
     "Respond in Russian with a casual, friendly tone. "
-    "Never provide account credentials or codes unless payment is confirmed. "
-    "If payment is not confirmed, ask the user to pay on FunPay and wait for confirmation. "
+    "Never provide account credentials, logins, passwords, or Steam codes. "
+    "Before purchase, only describe available lots (lot number, account type, MMR, lot_url). "
+    "If active_rental_count is 0, guide the user to buy a lot on FunPay; "
+    "the bot will send details automatically after payment. "
+    "Do not ask the user to confirm payment manually. "
+    "When user asks about availability or how to rent, use available_lots from context. "
+    "Include MMR in lot descriptions when present. "
+    "Use history_summary and recent_messages to keep context across turns. "
     "Keep replies short (1-4 sentences). "
     "Output JSON only with keys: reply, action, args. "
     "Action must be one of: none, send_account, send_code, handoff, stock, extend, cancel. "
     "Use args for parameters: extend needs hours and lot_number; cancel needs account_id. "
     "If required details are missing, set action to none and ask for them."
+)
+
+_SUMMARY_PROMPT = (
+    "Summarize the conversation for future context. "
+    "Keep the summary under {max_chars} characters. "
+    "Include: user requests, lots discussed, order status, preferences, issues. "
+    "Exclude credentials or sensitive data. "
+    "Return plain text only."
 )
 
 
@@ -112,6 +126,36 @@ class AIResponder:
             return None
 
         return AIResponse(reply=reply, action=action, args=args)
+
+    def summarize(
+        self,
+        existing_summary: str,
+        messages: list[dict],
+        max_chars: int,
+    ) -> Optional[str]:
+        if not self.enabled or not self._client:
+            return None
+        if not messages:
+            return existing_summary
+        prompt = _SUMMARY_PROMPT.format(max_chars=int(max_chars))
+        payload = {"summary": existing_summary, "messages": messages}
+        try:
+            content = self._client.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                max_tokens=app_config.AI_SUMMARY_MAX_TOKENS,
+            )
+        except Exception as exc:
+            logger.warning("AI summary error: %s", exc)
+            return None
+        summary = (content or "").strip()
+        if not summary:
+            return None
+        if len(summary) > int(max_chars):
+            summary = summary[: int(max_chars)].rstrip()
+        return summary
 
     def _build_messages(self, user_message: str, context: Dict[str, Any]) -> list[dict]:
         payload = {"message": user_message, "context": context}

@@ -18,15 +18,16 @@ class GroqClient:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
-    def chat(self, messages: list[dict]) -> str:
+    def chat(self, messages: list[dict], max_tokens: int | None = None) -> str:
         payload: dict = {
             "model": self._model,
             "messages": messages,
         }
         if self._temperature is not None:
             payload["temperature"] = float(self._temperature)
-        if self._max_tokens:
-            payload["max_tokens"] = int(self._max_tokens)
+        tokens = max_tokens if max_tokens is not None else self._max_tokens
+        if tokens:
+            payload["max_tokens"] = int(tokens)
         url = f"{self._base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self._api_key}"}
         resp = requests.post(url, json=payload, headers=headers, timeout=self._timeout)

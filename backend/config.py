@@ -63,6 +63,14 @@ AI_MODEL = os.getenv("AI_MODEL", "llama-3.1-8b-instant").strip()
 AI_TEMPERATURE = _get_float("AI_TEMPERATURE", 0.2)
 AI_MAX_TOKENS = _get_int("AI_MAX_TOKENS", 256)
 AI_TIMEOUT_SECONDS = _get_int("AI_TIMEOUT_SECONDS", 12)
+AI_SUMMARY_ENABLED = _get_bool("AI_SUMMARY_ENABLED", True)
+AI_SUMMARY_TRIGGER = _get_int("AI_SUMMARY_TRIGGER", 40)
+AI_SUMMARY_MAX_CHARS = _get_int("AI_SUMMARY_MAX_CHARS", 1200)
+AI_SUMMARY_MAX_TOKENS = _get_int("AI_SUMMARY_MAX_TOKENS", 256)
+AI_CONTEXT_MESSAGES = _get_int("AI_CONTEXT_MESSAGES", 20)
+AI_MESSAGE_MAX_CHARS = _get_int("AI_MESSAGE_MAX_CHARS", 500)
+AI_RENTAL_HISTORY_LIMIT = _get_int("AI_RENTAL_HISTORY_LIMIT", 5)
+AI_ORDER_HISTORY_LIMIT = _get_int("AI_ORDER_HISTORY_LIMIT", 5)
 AI_SYSTEM_PROMPT = os.getenv("AI_SYSTEM_PROMPT", "").strip()
 AI_FALLBACK_REPLY = os.getenv(
     "AI_FALLBACK_REPLY",
@@ -70,7 +78,7 @@ AI_FALLBACK_REPLY = os.getenv(
 ).strip()
 AI_PAYMENT_REQUIRED_REPLY = os.getenv(
     "AI_PAYMENT_REQUIRED_REPLY",
-    "I do not see a paid order yet. Please pay on FunPay and send your order number.",
+    "Please purchase a lot on FunPay and the bot will send details automatically after payment.",
 ).strip()
 
 REQUIRE_PAID_ORDER = _get_bool("REQUIRE_PAID_ORDER", True)

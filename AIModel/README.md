@@ -17,4 +17,6 @@ Notes:
 - Actions are gated by active rentals; if there is no active rental, the bot
   will not send accounts or codes. Extend/cancel/stock are safe actions and
   still validate inputs on the server.
+- The bot stores full chat history and keeps a rolling summary to stay within
+  token limits. Tune with AI_CONTEXT_MESSAGES / AI_SUMMARY_* env vars.
 - REQUIRE_PAID_ORDER=true ensures accounts are issued only after ORDER_PAID.

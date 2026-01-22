@@ -15,6 +15,13 @@ from backend.config import (
     DOTA_MATCH_DELAY_EXPIRE,
     DOTA_MATCH_GRACE_MINUTES,
     HOURS_FOR_REVIEW,
+    AI_CONTEXT_MESSAGES,
+    AI_MESSAGE_MAX_CHARS,
+    AI_ORDER_HISTORY_LIMIT,
+    AI_RENTAL_HISTORY_LIMIT,
+    AI_SUMMARY_ENABLED,
+    AI_SUMMARY_MAX_CHARS,
+    AI_SUMMARY_TRIGGER,
     REQUIRE_PAID_ORDER,
     RENTAL_CHECK_INTERVAL,
 )
@@ -43,6 +50,17 @@ from .utils import (
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
+AI_STOCK_LIMIT = 10
+SENSITIVE_KEYWORDS = (
+    "password",
+    "пароль",
+    "login",
+    "логин",
+    "steam guard",
+    "guard code",
+    "steamguard",
+    "код steam",
+)
 COMMANDS_HELP = (
     "Команды:\n"
     "!acc / !акк — данные аккаунта\n"
@@ -310,6 +328,138 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = now
 
+    def _normalize_message_text(self, message: Any) -> str:
+        if message is None:
+            return ""
+        text = (getattr(message, "text", None) or "").strip()
+        if text:
+            return text
+        if getattr(message, "image_link", None):
+            return "[image]"
+        return ""
+
+    def _log_chat_message(self, owner: str, role: str, message: str) -> None:
+        if not owner or not message:
+            return
+        self._db.log_chat_message(owner, role, message, self._user_id)
+
+    def _is_sensitive_message(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
+    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        sanitized: List[Dict[str, str]] = []
+        for item in messages:
+            text = (item.get("message") or "").strip()
+            if not text:
+                continue
+            if self._is_sensitive_message(text):
+                continue
+            if len(text) > AI_MESSAGE_MAX_CHARS:
+                text = text[:AI_MESSAGE_MAX_CHARS].rstrip() + "..."
+            role = (item.get("role") or "user").strip().lower()
+            if role not in ("user", "bot"):
+                role = "user"
+            sanitized.append({"role": role, "text": text})
+        return sanitized
+
+    def _format_datetime(self, value: Any) -> Optional[str]:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if value is None:
+            return None
+        return str(value)
+
+    def _refresh_chat_summary(self, owner: str) -> str:
+        summary_entry = self._db.get_chat_summary(owner, self._user_id)
+        summary_text = summary_entry["summary"] if summary_entry else ""
+        last_message_id = summary_entry["last_message_id"] if summary_entry else 0
+
+        if not AI_SUMMARY_ENABLED or not self._ai or not self._ai.enabled:
+            return summary_text
+
+        pending = self._db.get_chat_messages_after(owner, last_message_id, self._user_id)
+        if len(pending) < AI_SUMMARY_TRIGGER:
+            return summary_text
+
+        chunk = pending[:AI_SUMMARY_TRIGGER]
+        sanitized = self._sanitize_messages(chunk)
+        if not sanitized:
+            return summary_text
+
+        updated = self._ai.summarize(summary_text, sanitized, AI_SUMMARY_MAX_CHARS)
+        if not updated:
+            return summary_text
+
+        self._db.upsert_chat_summary(owner, updated, chunk[-1]["id"], self._user_id)
+        return updated
+
+    def _build_ai_context(self, owner: str) -> Dict[str, Any]:
+        active_accounts = self._db.get_user_active_accounts(owner, self._user_id)
+        available_lots = self._db.get_available_lot_accounts(self._user_id)
+        summary_text = self._refresh_chat_summary(owner)
+        recent_messages = self._db.get_chat_messages(owner, AI_CONTEXT_MESSAGES, self._user_id)
+        recent_messages = self._sanitize_messages(recent_messages)
+
+        safe_lots: List[Dict[str, Any]] = []
+        for item in available_lots[:AI_STOCK_LIMIT]:
+            safe_lots.append(
+                {
+                    "lot_number": item.get("lot_number"),
+                    "account_name": item.get("account_name"),
+                    "mmr": item.get("mmr"),
+                    "lot_url": item.get("lot_url"),
+                }
+            )
+
+        rental_history = self._db.get_user_rental_history(owner)
+        safe_rentals: List[Dict[str, Any]] = []
+        for item in rental_history[:AI_RENTAL_HISTORY_LIMIT]:
+            safe_rentals.append(
+                {
+                    "account_name": item.get("account_name"),
+                    "rental_start": self._format_datetime(item.get("rental_start")),
+                    "rental_duration_minutes": item.get("rental_duration_minutes"),
+                }
+            )
+
+        order_history = self._db.get_order_history(
+            owner, AI_ORDER_HISTORY_LIMIT, self._user_id
+        )
+        safe_orders: List[Dict[str, Any]] = []
+        for item in order_history:
+            safe_orders.append(
+                {
+                    "order_id": item.get("order_id"),
+                    "account_name": item.get("account_name"),
+                    "lot_number": item.get("lot_number"),
+                    "amount": item.get("amount"),
+                    "price": item.get("price"),
+                    "action": item.get("action"),
+                    "created_at": self._format_datetime(item.get("created_at")),
+                }
+            )
+
+        return {
+            "active_rental_count": len(active_accounts),
+            "active_account_ids": [
+                item.get("id")
+                for item in active_accounts
+                if item.get("id") is not None
+            ],
+            "active_account_names": [
+                item.get("account_name")
+                for item in active_accounts
+                if item.get("account_name")
+            ],
+            "available_lot_count": len(available_lots),
+            "available_lots": safe_lots,
+            "recent_messages": recent_messages,
+            "history_summary": summary_text,
+            "rental_history": safe_rentals,
+            "order_history": safe_orders,
+        }
+
     def _handle_new_order(self, event: Any) -> None:
         if REQUIRE_PAID_ORDER:
             logger.info("Skipping NEW_ORDER delivery; waiting for ORDER_PAID.")
@@ -409,7 +559,7 @@ class FunpayBot:
             self._pending_lot_extend.pop(buyer, None)
 
         if account.get("owner") is None:
-            self._issue_new_account(acc, chat_id, event, account, amount)
+            self._issue_new_account(acc, chat_id, event, account, amount, lot_number)
             self._mark_order_processed(event)
             return
 
@@ -440,6 +590,16 @@ class FunpayBot:
                 f"ID: {account['id']}\n"
                 f"Аккаунт: {account['account_name']}\n"
                 f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}{note}",
+            )
+            self._db.log_order_event(
+                order_id=str(event.order.id),
+                owner_id=buyer,
+                action="extended",
+                account_name=account.get("account_name"),
+                lot_number=lot_number,
+                amount=amount,
+                price=getattr(event.order, "price", None),
+                user_id=self._user_id,
             )
             acc.confirm(event.order.id)
             self._mark_order_processed(event)
@@ -570,9 +730,37 @@ class FunpayBot:
             "Note: user already had an active rental",
         )
 
+        self._db.log_order_event(
+            order_id=str(event.order.id),
+            owner_id=event.order.buyer_username,
+            action="issued",
+            account_name=account.get("account_name"),
+            lot_number=lot_number,
+            amount=units,
+            price=getattr(event.order, "price", None),
+            user_id=self._user_id,
+        )
+        self._db.log_order_event(
+            order_id=str(event.order.id),
+            owner_id=event.order.buyer_username,
+            action="extended",
+            account_name=order_name,
+            lot_number=None,
+            amount=units,
+            price=getattr(event.order, "price", None),
+            user_id=self._user_id,
+        )
         acc.confirm(event.order.id)
 
-    def _issue_new_account(self, acc: Account, chat_id: int, event: Any, account: dict, units: int) -> None:
+    def _issue_new_account(
+        self,
+        acc: Account,
+        chat_id: int,
+        event: Any,
+        account: dict,
+        units: int,
+        lot_number: int | None = None,
+    ) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
         self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id)
         unit_minutes = self._get_unit_minutes(account)
@@ -613,7 +801,16 @@ class FunpayBot:
         chat = acc.get_chat_by_name(event.message.author, True)
 
         if event.message.author_id == acc.id:
+            target = getattr(event.message, "chat_name", None) or event.message.author
+            text = self._normalize_message_text(event.message)
+            if target and text:
+                self._log_chat_message(target, "bot", text)
             return
+
+        owner = event.message.author
+        text = self._normalize_message_text(event.message)
+        if owner and text:
+            self._log_chat_message(owner, "user", text)
 
         if event.message.type in (
             types.MessageTypes.NEW_FEEDBACK,
@@ -623,7 +820,7 @@ class FunpayBot:
             return
 
         logger.info(f"{event.message.author} : {event.message.text}")
-        raw_text = event.message.text.strip()
+        raw_text = (event.message.text or "").strip()
         message_text = raw_text.lower()
 
         if message_text and not message_text.startswith("!"):
@@ -660,43 +857,30 @@ class FunpayBot:
         if not self._ai or not self._ai.enabled:
             return
 
-        active_accounts = self._db.get_user_active_accounts(
-            event.message.author,
-            self._user_id,
-        )
-        context = {
-            "active_rental_count": len(active_accounts),
-            "active_account_ids": [
-                item.get("id")
-                for item in active_accounts
-                if item.get("id") is not None
-            ],
-            "active_account_names": [
-                item.get("account_name")
-                for item in active_accounts
-                if item.get("account_name")
-            ],
-        }
+        context = self._build_ai_context(event.message.author)
         response = self._ai.respond(raw_text, context)
         if not response:
             return
+        has_active_rental = bool(context.get("active_rental_count"))
 
         if response.action == "send_code":
-            if active_accounts:
+            if has_active_rental:
                 self._handle_code(acc, chat.id, event.message.author)
             else:
-                reply = response.reply or self._ai.payment_required_reply
-                if reply:
-                    acc.send_message(chat.id, reply)
+                if response.reply:
+                    acc.send_message(chat.id, response.reply)
+                else:
+                    self._handle_stock(acc, chat.id)
             return
 
         if response.action == "send_account":
-            if active_accounts:
+            if has_active_rental:
                 self._handle_acc(acc, chat.id, event.message.author)
             else:
-                reply = response.reply or self._ai.payment_required_reply
-                if reply:
-                    acc.send_message(chat.id, reply)
+                if response.reply:
+                    acc.send_message(chat.id, response.reply)
+                else:
+                    self._handle_stock(acc, chat.id)
             return
 
         if response.action == "handoff":
@@ -708,6 +892,8 @@ class FunpayBot:
             return
 
         if response.action == "stock":
+            if response.reply:
+                acc.send_message(chat.id, response.reply)
             self._handle_stock(acc, chat.id)
             return
 
@@ -969,10 +1155,14 @@ class FunpayBot:
                 for account in available_lots:
                     lot_label = f"№{account['lot_number']}"
                     lot_url = account.get("lot_url")
+                    mmr = account.get("mmr")
+                    mmr_label = f" MMR {mmr}" if mmr is not None else ""
                     if lot_url:
-                        lines.append(f"{account['account_name']} - {lot_label} - {lot_url}")
+                        lines.append(
+                            f"{account['account_name']}{mmr_label} - {lot_label} - {lot_url}"
+                        )
                     else:
-                        lines.append(f"{account['account_name']} - {lot_label}")
+                        lines.append(f"{account['account_name']}{mmr_label} - {lot_label}")
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
