@@ -1209,31 +1209,32 @@ class FunpayBot:
 
     def _handle_stock(self, acc: Account, chat_id: int) -> None:
         try:
+            available_lots = self._get_available_lots()
+            if available_lots:
+                lines = [USER.stock_title]
+                for index, account in enumerate(available_lots, start=1):
+                    display_name = self._display_account_name(account.get("account_name"))
+                    if display_name == "\u0430\u043a\u043a\u0430\u0443\u043d\u0442":
+                        lot_number = account.get("lot_number")
+                        if lot_number:
+                            display_name = f"\u0410\u043a\u043a\u0430\u0443\u043d\u0442 \u2116{lot_number}"
+                    lot_url = account.get("lot_url")
+                    if lot_url:
+                        lines.append(f"{display_name} - {lot_url}")
+                    else:
+                        lines.append(f"{display_name}")
+                    if index % STOCK_LIST_LIMIT == 0:
+                        acc.send_message(chat_id, "\n".join(lines))
+                        lines = [USER.stock_title]
+                if len(lines) > 1:
+                    acc.send_message(chat_id, "\n".join(lines))
+                return
             acc.send_message(chat_id, self._build_stock_message())
         except Exception as exc:
             logger.error(f"Failed to load stock: {exc}")
             acc.send_message(chat_id, USER.stock_failed)
 
     def _build_stock_message(self) -> str:
-        available_lots = self._get_available_lots()
-        if available_lots:
-            lines = [USER.stock_title]
-            for account in available_lots[:STOCK_LIST_LIMIT]:
-                display_name = self._display_account_name(account.get("account_name"))
-                if display_name == "\u0430\u043a\u043a\u0430\u0443\u043d\u0442":
-                    lot_number = account.get("lot_number")
-                    if lot_number:
-                        display_name = f"\u0410\u043a\u043a\u0430\u0443\u043d\u0442 \u2116{lot_number}"
-                lot_url = account.get("lot_url")
-                if lot_url:
-                    lines.append(f"{display_name} - {lot_url}")
-                else:
-                    lines.append(f"{display_name}")
-            remaining = len(available_lots) - STOCK_LIST_LIMIT
-            if remaining > 0:
-                lines.append(f"...и еще {remaining} лотов. Напишите !сток, чтобы увидеть следующую страницу.")
-            return "\n".join(lines)
-
         all_lots = self._db.get_all_lot_accounts(self._user_id)
         if not all_lots:
             return USER.stock_no_lots_configured
