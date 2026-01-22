@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from FunPayAPI import Account, Runner, events, types
@@ -50,6 +52,10 @@ REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
 AI_STOCK_LIMIT = 10
+MMR_REDACTION_REGEX = re.compile(
+    r"(?:\b(?:mmr|\u043c\u043c\u0440)\s*\d+(?:\s*-\s*\d+)?\b|\b\d+(?:\s*-\s*\d+)?\s*(?:mmr|\u043c\u043c\u0440)\b)",
+    re.IGNORECASE,
+)
 SENSITIVE_KEYWORDS = (
     "password",
     "пароль",
@@ -59,6 +65,43 @@ SENSITIVE_KEYWORDS = (
     "guard code",
     "steamguard",
     "код steam",
+)
+ISSUE_KEYWORDS = (
+    "не работает",
+    "нерабоч",
+    "не рабоч",
+    "не могу войти",
+    "не могу зайти",
+    "не входит",
+    "не пускает",
+    "ошибка",
+    "invalid password",
+    "wrong password",
+    "incorrect password",
+    "login failed",
+    "not working",
+    "doesn't work",
+    "steam guard",
+    "guard code",
+    "steamguard",
+    "code",
+    "код",
+)
+ISSUE_REPLY = (
+    "\u041f\u043e\u043d\u044f\u043b, \u0441\u0435\u0439\u0447\u0430\u0441 "
+    "\u043f\u0440\u043e\u0432\u0435\u0440\u044e. \u041f\u0440\u0438\u0448\u043b\u044e "
+    "\u0441\u0432\u0435\u0436\u0438\u0439 Steam Guard \u043a\u043e\u0434 \u2014 "
+    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0432\u043e\u0439\u0442\u0438 "
+    "\u0435\u0449\u0435 \u0440\u0430\u0437. \u0415\u0441\u043b\u0438 \u043d\u0435 "
+    "\u043f\u043e\u043c\u043e\u0436\u0435\u0442, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, "
+    "\u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043f\u0438\u0448\u0435\u0442 \u043f\u0440\u0438 \u0432\u0445\u043e\u0434\u0435."
+)
+ISSUE_NO_RENTAL_REPLY = (
+    "\u0421\u0435\u0439\u0447\u0430\u0441 \u043d\u0435 \u0432\u0438\u0436\u0443 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 "
+    "\u0430\u0440\u0435\u043d\u0434\u044b. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 "
+    "\u043b\u043e\u0442 \u043d\u0430 FunPay \u2014 \u043f\u043e\u0441\u043b\u0435 "
+    "\u043e\u043f\u043b\u0430\u0442\u044b \u0431\u043e\u0442 \u0441\u0430\u043c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442 "
+    "\u0434\u0430\u043d\u043d\u044b\u0435."
 )
 COMMANDS_HELP = (
     "Команды:\n"
@@ -138,13 +181,14 @@ class FunpayBot:
             conn.close()
 
     def _build_replacement_message(self, account: dict, lot_number: int | None = None) -> str:
-        subject = "лот" if lot_number is not None else "аккаунт"
+        subject = "\u043b\u043e\u0442" if lot_number is not None else "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
         now = datetime.now(tz=MOSCOW_TZ)
         _, expiry_str, remaining_str = get_remaining_time(account, now)
         release_line = None
         if expiry_str and remaining_str:
             release_line = (
-                f"Текущий аккаунт освободится в {expiry_str} МСК (осталось {remaining_str})."
+                f"\u0422\u0435\u043a\u0443\u0449\u0438\u0439 {subject} \u043e\u0441\u0432\u043e\u0431\u043e\u0434\u0438\u0442\u0441\u044f \u0432 {expiry_str} "
+                f"(\u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c {remaining_str})."
             )
 
         try:
@@ -153,39 +197,38 @@ class FunpayBot:
             target_mmr = None
         if target_mmr is None:
             lines = [
-                f"Этот {subject} сейчас арендован.",
-                "MMR для аккаунта не указан, поэтому подобрать замену автоматически не удалось.",
+                f"\u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, {subject} \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442.",
+                "\u041f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c \u0437\u0430\u043c\u0435\u043d\u0443 \u0441\u0435\u0439\u0447\u0430\u0441 \u043d\u0435 \u0443\u0434\u0430\u0451\u0442\u0441\u044f.",
             ]
             if release_line:
                 lines.append(release_line)
-            lines.append("Пожалуйста, напишите в чат — поможем подобрать замену.")
+            lines.append(
+                "\u0415\u0441\u043b\u0438 \u0445\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u043c\u0435\u043d\u0443 \u0438\u043b\u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0443, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u043c\u043d\u0435."
+            )
             return "\n".join(lines)
 
-        mmr_range = MMR_RANGE_DEFAULT
-        low = max(int(target_mmr) - mmr_range, 0)
-        high = int(target_mmr) + mmr_range
         candidates = self._db.get_lot_accounts_by_mmr_range(
-            int(target_mmr), mmr_range, self._user_id
+            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id
         )
         candidates = [item for item in candidates if item.get("id") != account.get("id")]
         available = [item for item in candidates if not item.get("owner")]
         available_lines = []
         for item in available:
-            mmr_label = f"{item.get('mmr')} MMR" if item.get("mmr") is not None else "MMR ?"
-            lot_label = f"№{item.get('lot_number')}" if item.get("lot_number") else "Лот не настроен"
+            display_name = self._display_account_name(item.get("account_name"))
+            lot_label = (
+                f"\u2116{item.get('lot_number')}" if item.get("lot_number") else "\u0431\u0435\u0437 \u043b\u043e\u0442\u0430"
+            )
             if item.get("lot_url"):
                 available_lines.append(
-                    f"{lot_label} — {item.get('account_name')} ({mmr_label}) — {item.get('lot_url')}"
+                    f"{lot_label} \u2014 {display_name} \u2014 {item.get('lot_url')}"
                 )
             else:
-                available_lines.append(
-                    f"{lot_label} — {item.get('account_name')} ({mmr_label})"
-                )
+                available_lines.append(f"{lot_label} \u2014 {display_name}")
 
         if available_lines:
             lines = [
-                f"Этот {subject} сейчас арендован.",
-                f"Пожалуйста, выберите аккаунт на замену из списка (MMR {low}-{high}):",
+                f"\u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, {subject} \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442.",
+                "\u0412\u043e\u0442 \u0441\u0432\u043e\u0431\u043e\u0434\u043d\u044b\u0435 \u0437\u0430\u043c\u0435\u043d\u044b \u0438\u0437 \u043f\u043e\u0445\u043e\u0436\u0438\u0445 \u043b\u043e\u0442\u043e\u0432:",
                 "",
                 *available_lines,
             ]
@@ -204,23 +247,24 @@ class FunpayBot:
         upcoming.sort(key=lambda entry: entry[0])
 
         lines = [
-            f"Этот {subject} сейчас арендован.",
-            f"В диапазоне MMR {low}-{high} сейчас нет свободных аккаунтов.",
+            f"\u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, {subject} \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442.",
+            "\u0421\u0435\u0439\u0447\u0430\u0441 \u0441\u0432\u043e\u0431\u043e\u0434\u043d\u044b\u0445 \u0437\u0430\u043c\u0435\u043d \u043d\u0435\u0442.",
         ]
         if upcoming:
-            lines.append("Ближайшие освобождения:")
+            lines.append("\u0411\u043b\u0438\u0436\u0430\u0439\u0448\u0438\u0435 \u043e\u0441\u0432\u043e\u0431\u043e\u0436\u0434\u0435\u043d\u0438\u044f:")
             for _, item, expiry_label, remaining_label in upcoming[:5]:
-                mmr_label = (
-                    f"{item.get('mmr')} MMR" if item.get("mmr") is not None else "MMR ?"
+                display_name = self._display_account_name(item.get("account_name"))
+                lot_label = (
+                    f"\u2116{item.get('lot_number')}" if item.get("lot_number") else "\u0431\u0435\u0437 \u043b\u043e\u0442\u0430"
                 )
-                lot_label = f"№{item.get('lot_number')}" if item.get("lot_number") else "Лот не настроен"
                 lines.append(
-                    f"{lot_label} — {item.get('account_name')} ({mmr_label}) — "
-                    f"{expiry_label} МСК (осталось {remaining_label})"
+                    f"{lot_label} \u2014 {display_name} \u2014 {expiry_label} (\u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c {remaining_label})"
                 )
         if release_line:
             lines.append(release_line)
-        lines.append("Если нужен другой диапазон — напишите в чат.")
+        lines.append(
+            "\u0415\u0441\u043b\u0438 \u0445\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u043c\u0435\u043d\u0443 \u0438\u043b\u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0443, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u043c\u043d\u0435."
+        )
         return "\n".join(lines)
 
     def _extend_rental_for_order(self, account_id: int, owner: str, units: int, unit_minutes: int) -> bool:
@@ -296,6 +340,10 @@ class FunpayBot:
                     self._handle_new_order(event)
                 elif hasattr(events.EventTypes, "ORDER_PAID") and event.type is events.EventTypes.ORDER_PAID:
                     self._handle_order_paid(event)
+                elif hasattr(events.EventTypes, "ORDER_STATUS_CHANGED") and event.type is events.EventTypes.ORDER_STATUS_CHANGED:
+                    status = getattr(getattr(event, "order", None), "status", None)
+                    if status is types.OrderStatuses.PAID:
+                        self._process_order(event, source="ORDER_STATUS_CHANGED")
 
                 if event.type is events.EventTypes.NEW_MESSAGE:
                     self._handle_new_message(event)
@@ -345,6 +393,21 @@ class FunpayBot:
     def _is_sensitive_message(self, text: str) -> bool:
         lowered = text.lower()
         return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
+    def _is_issue_message(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(keyword in lowered for keyword in ISSUE_KEYWORDS)
+
+    def _redact_mmr_label(self, text: Optional[str]) -> str:
+        if not text:
+            return ""
+        cleaned = MMR_REDACTION_REGEX.sub("", text)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned.strip(" -\u2014")
+
+    def _display_account_name(self, name: Optional[str]) -> str:
+        cleaned = self._redact_mmr_label(name or "")
+        return cleaned or "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
 
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         sanitized: List[Dict[str, str]] = []
@@ -405,8 +468,7 @@ class FunpayBot:
             safe_lots.append(
                 {
                     "lot_number": item.get("lot_number"),
-                    "account_name": item.get("account_name"),
-                    "mmr": item.get("mmr"),
+                    "account_name": self._redact_mmr_label(item.get("account_name")),
                     "lot_url": item.get("lot_url"),
                 }
             )
@@ -416,7 +478,7 @@ class FunpayBot:
         for item in rental_history[:AI_RENTAL_HISTORY_LIMIT]:
             safe_rentals.append(
                 {
-                    "account_name": item.get("account_name"),
+                    "account_name": self._redact_mmr_label(item.get("account_name")),
                     "rental_start": self._format_datetime(item.get("rental_start")),
                     "rental_duration_minutes": item.get("rental_duration_minutes"),
                 }
@@ -430,7 +492,7 @@ class FunpayBot:
             safe_orders.append(
                 {
                     "order_id": item.get("order_id"),
-                    "account_name": item.get("account_name"),
+                    "account_name": self._redact_mmr_label(item.get("account_name")),
                     "lot_number": item.get("lot_number"),
                     "amount": item.get("amount"),
                     "price": item.get("price"),
@@ -439,6 +501,12 @@ class FunpayBot:
                 }
             )
 
+        active_account_names: List[str] = []
+        for item in active_accounts:
+            name = self._redact_mmr_label(item.get("account_name"))
+            if name:
+                active_account_names.append(name)
+
         return {
             "active_rental_count": len(active_accounts),
             "active_account_ids": [
@@ -446,11 +514,7 @@ class FunpayBot:
                 for item in active_accounts
                 if item.get("id") is not None
             ],
-            "active_account_names": [
-                item.get("account_name")
-                for item in active_accounts
-                if item.get("account_name")
-            ],
+            "active_account_names": active_account_names,
             "available_lot_count": len(available_lots),
             "available_lots": safe_lots,
             "recent_messages": recent_messages,
@@ -573,6 +637,7 @@ class FunpayBot:
             current_time = datetime.now(tz=MOSCOW_TZ)
             _, expiry_str, remaining_str = get_remaining_time(refreshed, current_time)
             duration_label = format_duration_minutes(unit_minutes * amount)
+            display_name = self._display_account_name(account.get("account_name"))
 
             note = ""
             if is_requested_extend and pending and pending.hours != amount:
@@ -587,7 +652,7 @@ class FunpayBot:
                 f"Продлено на {duration_label}.\n"
                 f"Лот: №{lot_number}\n"
                 f"ID: {account['id']}\n"
-                f"Аккаунт: {account['account_name']}\n"
+                f"Аккаунт: {display_name}\n"
                 f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}{note}",
             )
             self._db.log_order_event(
@@ -629,6 +694,7 @@ class FunpayBot:
             return
 
         account_name = matched_account
+        display_name = self._display_account_name(account_name)
         if account_name not in all_accounts:
             logger.info(f"Item '{account_name}' not found in rentals; skipping.")
             return
@@ -638,7 +704,7 @@ class FunpayBot:
             logger.error(f"Account with name '{account_name}' not found in database")
             acc.send_message(
                 chat_id,
-                f"Ошибка: аккаунт '{account_name}' не найден.\n"
+                f"Ошибка: аккаунт '{display_name}' не найден.\n"
                 "Возврат оформлен. Напишите, поможем.",
             )
             return
@@ -654,7 +720,7 @@ class FunpayBot:
             total_label = format_duration_minutes(unit_minutes * amount)
             acc.send_message(
                 chat_id,
-                f"Вы оплатили {amount} шт. '{account_name}'.\n"
+                f"Вы оплатили {amount} шт. '{display_name}'.\n"
                 f"Продление будет на {total_label} (1 шт = {unit_label}).\n\n"
                 "Если нужен другой вариант — напишите в чат.",
             )
@@ -679,6 +745,7 @@ class FunpayBot:
     ) -> None:
         unit_minutes = self._get_unit_minutes(rental)
         duration_label = format_duration_minutes(unit_minutes * units)
+        display_name = self._display_account_name(order_name)
         logger.info(
             f"User {event.order.buyer_username} already has active rental for {order_name}, extending by {duration_label}..."
         )
@@ -695,7 +762,7 @@ class FunpayBot:
         acc.send_message(
             chat_id,
             "Аренда продлена!\n\n"
-            f"Тип аккаунта: {order_name}\n"
+            f"Тип аккаунта: {display_name}\n"
             f"Продление: +{duration_label}\n"
             f"ID: {rental['id']}\n\n"
             "Данные аккаунта ниже.",
@@ -732,16 +799,6 @@ class FunpayBot:
         self._db.log_order_event(
             order_id=str(event.order.id),
             owner_id=event.order.buyer_username,
-            action="issued",
-            account_name=account.get("account_name"),
-            lot_number=lot_number,
-            amount=units,
-            price=getattr(event.order, "price", None),
-            user_id=self._user_id,
-        )
-        self._db.log_order_event(
-            order_id=str(event.order.id),
-            owner_id=event.order.buyer_username,
             action="extended",
             account_name=order_name,
             lot_number=None,
@@ -765,6 +822,7 @@ class FunpayBot:
         unit_minutes = self._get_unit_minutes(account)
         duration_label = format_duration_minutes(unit_minutes * units)
         self._set_rental_duration_for_order(account["id"], units, unit_minutes)
+        display_name = self._display_account_name(account.get("account_name"))
 
         send_message_to_admin(
             "NEW ACCOUNT ISSUED\n\n"
@@ -783,7 +841,7 @@ class FunpayBot:
             chat_id,
             "Ваш аккаунт:\n"
             f"ID: {account['id']}\n"
-            f"Название: {account['account_name']}\n"
+            f"Название: {display_name}\n"
             f"Логин: {account['login']}\n"
             f"Пароль: {account['password']}\n"
             f"Аренда: {duration_label}\n\n"
@@ -791,6 +849,16 @@ class FunpayBot:
             "Если нужна помощь — напишите в чат.",
         )
 
+        self._db.log_order_event(
+            order_id=str(event.order.id),
+            owner_id=event.order.buyer_username,
+            action="issued",
+            account_name=account.get("account_name"),
+            lot_number=lot_number,
+            amount=units,
+            price=getattr(event.order, "price", None),
+            user_id=self._user_id,
+        )
         acc.confirm(event.order.id)
 
     def _handle_new_message(self, event: Any) -> None:
@@ -798,6 +866,10 @@ class FunpayBot:
             return
         acc = self._acc
         chat = acc.get_chat_by_name(event.message.author, True)
+        chat_id = getattr(chat, "id", None) or getattr(event.message, "chat_id", None)
+        if chat_id is None:
+            logger.warning(f"Chat id not found for message from {event.message.author}")
+            return
 
         if event.message.author_id == acc.id:
             target = getattr(event.message, "chat_name", None) or event.message.author
@@ -817,37 +889,49 @@ class FunpayBot:
         ):
             self._handle_feedback_event(acc, event)
             return
+        if event.message.type is types.MessageTypes.ORDER_PURCHASED:
+            order_id = self._extract_order_id(event.message.text or "")
+            if order_id:
+                try:
+                    order = acc.get_order(order_id)
+                    self._process_order(
+                        SimpleNamespace(order=order),
+                        source="ORDER_PURCHASED_MESSAGE",
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to process paid order {order_id}: {exc}")
+            return
 
         logger.info(f"{event.message.author} : {event.message.text}")
         raw_text = (event.message.text or "").strip()
         message_text = raw_text.lower()
 
         if message_text and not message_text.startswith("!"):
-            if self._try_handle_pending_choice(acc, chat.id, event.message.author, raw_text):
+            if self._try_handle_pending_choice(acc, chat_id, event.message.author, raw_text):
                 return
 
         if message_text in ("!code", "!код"):
-            self._handle_code(acc, chat.id, event.message.author)
+            self._handle_code(acc, chat_id, event.message.author)
             return
 
         if message_text in ("!acc", "!акк"):
-            self._handle_acc(acc, chat.id, event.message.author)
+            self._handle_acc(acc, chat_id, event.message.author)
             return
 
         if message_text.startswith("!extend") or message_text.startswith("!продлить"):
-            self._handle_extend(acc, chat.id, event.message.author, raw_text)
+            self._handle_extend(acc, chat_id, event.message.author, raw_text)
             return
 
         if message_text in ("!stock", "!сток"):
-            self._handle_stock(acc, chat.id)
+            self._handle_stock(acc, chat_id)
             return
 
         if message_text.startswith("!отмена"):
-            self._handle_cancel(acc, chat.id, event.message.author, raw_text)
+            self._handle_cancel(acc, chat_id, event.message.author, raw_text)
             return
 
         if message_text in ("!bonus", "!бонус"):
-            self._handle_bonus(acc, chat.id, event.message.author)
+            self._handle_bonus(acc, chat_id, event.message.author)
             return
 
         if not raw_text:
@@ -857,6 +941,14 @@ class FunpayBot:
             return
 
         context = self._build_ai_context(event.message.author)
+        if self._is_issue_message(raw_text):
+            if context.get("active_rental_count"):
+                acc.send_message(chat_id, ISSUE_REPLY)
+                self._handle_code(acc, chat_id, event.message.author)
+            else:
+                acc.send_message(chat_id, ISSUE_NO_RENTAL_REPLY)
+                self._handle_stock(acc, chat_id)
+            return
         response = self._ai.respond(raw_text, context)
         if not response:
             return
@@ -864,27 +956,27 @@ class FunpayBot:
 
         if response.action == "send_code":
             if has_active_rental:
-                self._handle_code(acc, chat.id, event.message.author)
+                self._handle_code(acc, chat_id, event.message.author)
             else:
                 if response.reply:
-                    acc.send_message(chat.id, response.reply)
+                    acc.send_message(chat_id, response.reply)
                 else:
-                    self._handle_stock(acc, chat.id)
+                    self._handle_stock(acc, chat_id)
             return
 
         if response.action == "send_account":
             if has_active_rental:
-                self._handle_acc(acc, chat.id, event.message.author)
+                self._handle_acc(acc, chat_id, event.message.author)
             else:
                 if response.reply:
-                    acc.send_message(chat.id, response.reply)
+                    acc.send_message(chat_id, response.reply)
                 else:
-                    self._handle_stock(acc, chat.id)
+                    self._handle_stock(acc, chat_id)
             return
 
         if response.action == "handoff":
             if response.reply:
-                acc.send_message(chat.id, response.reply)
+                acc.send_message(chat_id, response.reply)
             send_message_to_admin(
                 f"AI handoff requested for {event.message.author}: {raw_text}"
             )
@@ -892,8 +984,8 @@ class FunpayBot:
 
         if response.action == "stock":
             if response.reply:
-                acc.send_message(chat.id, response.reply)
-            self._handle_stock(acc, chat.id)
+                acc.send_message(chat_id, response.reply)
+            self._handle_stock(acc, chat_id)
             return
 
         if response.action == "extend":
@@ -909,14 +1001,14 @@ class FunpayBot:
             if hours and lot_number:
                 self._handle_extend(
                     acc,
-                    chat.id,
+                    chat_id,
                     event.message.author,
                     f"extend {hours} {lot_number}",
                 )
             elif response.reply:
-                acc.send_message(chat.id, response.reply)
+                acc.send_message(chat_id, response.reply)
             else:
-                self._handle_extend(acc, chat.id, event.message.author, raw_text)
+                self._handle_extend(acc, chat_id, event.message.author, raw_text)
             return
 
         if response.action == "cancel":
@@ -929,18 +1021,18 @@ class FunpayBot:
             if account_id:
                 self._handle_cancel(
                     acc,
-                    chat.id,
+                    chat_id,
                     event.message.author,
                     f"cancel {account_id}",
                 )
             elif response.reply:
-                acc.send_message(chat.id, response.reply)
+                acc.send_message(chat_id, response.reply)
             else:
-                self._handle_cancel(acc, chat.id, event.message.author, raw_text)
+                self._handle_cancel(acc, chat_id, event.message.author, raw_text)
             return
 
         if response.reply:
-            acc.send_message(chat.id, response.reply)
+            acc.send_message(chat_id, response.reply)
 
     def _extract_order_id(self, text: str) -> Optional[str]:
         match = RegularExpressions().ORDER_ID.search(text or "")
@@ -1009,11 +1101,12 @@ class FunpayBot:
             if choice:
                 current_time = datetime.now(tz=MOSCOW_TZ)
                 _, expiry_str, remaining_str = get_remaining_time(choice, current_time)
+                display_name = self._display_account_name(choice.get("account_name"))
                 acc.send_message(
                     chat_id,
                     USER.account_details_header
                     + f"ID: {choice['id']}\n"
-                    + f"Аккаунт: {choice['account_name']}\n"
+                    + f"Аккаунт: {display_name}\n"
                     + f"Логин: {choice['login']}\n"
                     + f"Пароль: {choice['password']}\n"
                     + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
@@ -1039,11 +1132,12 @@ class FunpayBot:
                         login,
                         _rental_duration,
                     ) = account
+                    display_name = self._display_account_name(account_name)
                     guard_code = get_steam_guard_code(
                         mafile_path=mafile_path,
                         mafile_json=mafile_json,
                     )
-                    lines.append(f"{account_name} ({login}): {guard_code}")
+                    lines.append(f"{display_name} ({login}): {guard_code}")
                 acc.send_message(chat_id, "\n".join(lines))
             else:
                 acc.send_message(chat_id, USER.active_rentals_empty)
@@ -1061,11 +1155,12 @@ class FunpayBot:
             if len(accounts) == 1:
                 account = accounts[0]
                 _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+                display_name = self._display_account_name(account.get("account_name"))
                 acc.send_message(
                     chat_id,
                     USER.account_details_header
                     + f"ID: {account['id']}\n"
-                    + f"Аккаунт: {account['account_name']}\n"
+                    + f"Аккаунт: {display_name}\n"
                     + f"Логин: {account['login']}\n"
                     + f"Пароль: {account['password']}\n"
                     + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
@@ -1075,7 +1170,8 @@ class FunpayBot:
             lines = [USER.choose_account_prompt]
             for account in accounts:
                 _, _, remaining_str = get_remaining_time(account, current_time)
-                lines.append(f"{account['id']}) {account['account_name']} ({account['login']}) — осталось {remaining_str}")
+                display_name = self._display_account_name(account.get("account_name"))
+                lines.append(f"{account['id']}) {display_name} ({account['login']}) — осталось {remaining_str}")
             self._pending_account_choice[owner] = accounts
             acc.send_message(chat_id, "\n".join(lines))
         except Exception as exc:
@@ -1102,14 +1198,15 @@ class FunpayBot:
                     _, expiry_str, remaining_str = get_remaining_time(account, current_time)
                     lot_number = account.get("lot_number")
                     lot_url = account.get("lot_url")
+                    display_name = self._display_account_name(account.get("account_name"))
                     if lot_number:
-                        line = f"Лот №{lot_number}: {account['account_name']} — истекает {expiry_str} МСК (осталось {remaining_str})"
+                        line = f"Лот №{lot_number}: {display_name} — истекает {expiry_str} МСК (осталось {remaining_str})"
                         if lot_url:
                             line += f" — {lot_url}"
                         lines.append(line)
                     else:
                         lines.append(
-                            f"ID {account['id']}: {account['account_name']} — лот не настроен (напишите администратору)."
+                            f"ID {account['id']}: {display_name} — лот не настроен (напишите администратору)."
                         )
                 acc.send_message(chat_id, "\n".join(lines))
                 return
@@ -1153,15 +1250,12 @@ class FunpayBot:
                 lines = [USER.stock_title]
                 for account in available_lots:
                     lot_label = f"№{account['lot_number']}"
+                    display_name = self._display_account_name(account.get("account_name"))
                     lot_url = account.get("lot_url")
-                    mmr = account.get("mmr")
-                    mmr_label = f" MMR {mmr}" if mmr is not None else ""
                     if lot_url:
-                        lines.append(
-                            f"{account['account_name']}{mmr_label} - {lot_label} - {lot_url}"
-                        )
+                        lines.append(f"{display_name} - {lot_label} - {lot_url}")
                     else:
-                        lines.append(f"{account['account_name']}{mmr_label} - {lot_label}")
+                        lines.append(f"{display_name} - {lot_label}")
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
@@ -1208,7 +1302,8 @@ class FunpayBot:
                 current_time = datetime.now(tz=MOSCOW_TZ)
                 for account in accounts:
                     _, _, remaining_str = get_remaining_time(account, current_time)
-                    lines.append(f"ID {account['id']}: {account['account_name']} — осталось {remaining_str}")
+                    display_name = self._display_account_name(account.get("account_name"))
+                    lines.append(f"ID {account['id']}: {display_name} — осталось {remaining_str}")
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
@@ -1535,10 +1630,10 @@ class FunpayBot:
             try:
                 self.send_message_by_owner(
                     owner,
-                    "???? ?????? ?????.\n\n"
-                    f"ID ????????: {account_id}\n"
-                    "?????? ??????, ?????? ???????.\n"
-                    "???? ????? ?????? ??? ????????? ? ???????? ? ???.",
+                    "\u0412\u0430\u0448\u0430 \u0430\u0440\u0435\u043d\u0434\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430.\n\n"
+                    f"ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430: {account_id}\n"
+                    "\u0415\u0441\u043b\u0438 \u0445\u043e\u0442\u0438\u0442\u0435 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, \u043a\u0443\u043f\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439 \u043b\u043e\u0442.\n"
+                    "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442.",
                 )
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
