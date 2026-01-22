@@ -434,6 +434,8 @@ class PresenceCache:
         def runner() -> None:
             try:
                 data = fetcher()
+                if data is None:
+                    return
                 self.set_cached(steamid64, data)
             except Exception as exc:
                 logger.warning(f"Failed to refresh presence cache for {steamid64}: {exc}")
@@ -479,16 +481,19 @@ def _steamid64_from_mafile(mafile_json: str | dict) -> int | None:
         return None
 
 
-def _fetch_bridge_presence(steamid64: int) -> dict:
+def _fetch_bridge_presence(steamid64: int) -> dict | None:
     if not STEAM_BRIDGE_URL:
-        return {}
+        return None
     url = f"{STEAM_BRIDGE_URL.rstrip('/')}/presence/{steamid64}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
-        return resp.json() or {}
+        data = resp.json()
     except Exception:
-        return {}
+        return None
+    if not isinstance(data, dict) or not data:
+        return None
+    return data
 
 
 def require_admin(request: Request) -> None:
@@ -536,6 +541,7 @@ class AccountCreate(BaseModel):
     mafile_json: str
     login: str
     password: str
+    mmr: int = Field(ge=0)
     rental_duration: int = Field(default=1, ge=0)
     rental_minutes: int = Field(default=0, ge=0, le=59)
     owner: Optional[str] = None
@@ -546,6 +552,7 @@ class AccountUpdate(BaseModel):
     mafile_json: Optional[str] = None
     login: Optional[str] = None
     password: Optional[str] = None
+    mmr: Optional[int] = Field(default=None, ge=0)
     rental_duration: Optional[int] = Field(default=None, ge=0)
     rental_minutes: Optional[int] = Field(default=None, ge=0, le=59)
 
@@ -673,7 +680,10 @@ def _format_match_time(seconds: int | float | None) -> str | None:
     return f"{minutes}:{secs:02d}"
 
 
-def _presence_for_steamid(steamid64: int | None) -> dict:
+def _presence_for_steamid(
+    steamid64: int | None,
+    bridge_presence: dict | None = None,
+) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
         return {
             "in_game": False,
@@ -686,7 +696,8 @@ def _presence_for_steamid(steamid64: int | None) -> dict:
             "match_seconds": None,
             "match_time": None,
         }
-    bridge_presence = _fetch_bridge_presence(steamid64)
+    if bridge_presence is None:
+        bridge_presence = _fetch_bridge_presence(steamid64)
     if not bridge_presence:
         return {
             "in_game": False,
@@ -743,11 +754,20 @@ def _presence_for_steamid_cached(
     now = time.time()
     if cached is not None and ts is not None and now - ts <= max_age:
         return cached
+    def fetch_presence() -> dict | None:
+        bridge_presence = _fetch_bridge_presence(steamid64)
+        if not bridge_presence:
+            return None
+        return _presence_for_steamid(steamid64, bridge_presence=bridge_presence)
+
     if cached is not None and fast:
-        presence_cache.refresh_async(steamid64, lambda: _presence_for_steamid(steamid64))
+        presence_cache.refresh_async(steamid64, fetch_presence)
         return cached
 
-    data = _presence_for_steamid(steamid64)
+    bridge_presence = _fetch_bridge_presence(steamid64)
+    if not bridge_presence:
+        return cached if cached is not None else _presence_for_steamid(steamid64)
+    data = _presence_for_steamid(steamid64, bridge_presence=bridge_presence)
     presence_cache.set_cached(steamid64, data)
     return data
 
@@ -816,6 +836,7 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
         mafile_json=payload.mafile_json,
         user_id=uid,
         duration_minutes=total_minutes,
+        mmr=payload.mmr,
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to create account")

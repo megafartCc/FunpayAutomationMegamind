@@ -40,6 +40,7 @@ from .utils import (
 
 REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
+MMR_RANGE_DEFAULT = 1000
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,92 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
+
+    def _build_replacement_message(self, account: dict, lot_number: int | None = None) -> str:
+        subject = "лот" if lot_number is not None else "аккаунт"
+        now = datetime.now(tz=MOSCOW_TZ)
+        _, expiry_str, remaining_str = get_remaining_time(account, now)
+        release_line = None
+        if expiry_str and remaining_str:
+            release_line = (
+                f"Текущий аккаунт освободится в {expiry_str} МСК (осталось {remaining_str})."
+            )
+
+        try:
+            target_mmr = int(account.get("mmr"))
+        except Exception:
+            target_mmr = None
+        if target_mmr is None:
+            lines = [
+                f"Этот {subject} сейчас арендован.",
+                "MMR для аккаунта не указан, поэтому подобрать замену автоматически не удалось.",
+            ]
+            if release_line:
+                lines.append(release_line)
+            lines.append("Пожалуйста, напишите в чат — поможем подобрать замену.")
+            return "\n".join(lines)
+
+        mmr_range = MMR_RANGE_DEFAULT
+        low = max(int(target_mmr) - mmr_range, 0)
+        high = int(target_mmr) + mmr_range
+        candidates = self._db.get_lot_accounts_by_mmr_range(
+            int(target_mmr), mmr_range, self._user_id
+        )
+        candidates = [item for item in candidates if item.get("id") != account.get("id")]
+        available = [item for item in candidates if not item.get("owner")]
+        available_lines = []
+        for item in available:
+            mmr_label = f"{item.get('mmr')} MMR" if item.get("mmr") is not None else "MMR ?"
+            lot_label = f"№{item.get('lot_number')}" if item.get("lot_number") else "Лот не настроен"
+            if item.get("lot_url"):
+                available_lines.append(
+                    f"{lot_label} — {item.get('account_name')} ({mmr_label}) — {item.get('lot_url')}"
+                )
+            else:
+                available_lines.append(
+                    f"{lot_label} — {item.get('account_name')} ({mmr_label})"
+                )
+
+        if available_lines:
+            lines = [
+                f"Этот {subject} сейчас арендован.",
+                f"Пожалуйста, выберите аккаунт на замену из списка (MMR {low}-{high}):",
+                "",
+                *available_lines,
+            ]
+            if release_line:
+                lines.extend(["", release_line])
+            return "\n".join(lines)
+
+        upcoming = []
+        for item in candidates:
+            if not item.get("owner"):
+                continue
+            expiry_time, expiry_label, remaining_label = get_remaining_time(item, now)
+            if not expiry_time:
+                continue
+            upcoming.append((expiry_time, item, expiry_label, remaining_label))
+        upcoming.sort(key=lambda entry: entry[0])
+
+        lines = [
+            f"Этот {subject} сейчас арендован.",
+            f"В диапазоне MMR {low}-{high} сейчас нет свободных аккаунтов.",
+        ]
+        if upcoming:
+            lines.append("Ближайшие освобождения:")
+            for _, item, expiry_label, remaining_label in upcoming[:5]:
+                mmr_label = (
+                    f"{item.get('mmr')} MMR" if item.get("mmr") is not None else "MMR ?"
+                )
+                lot_label = f"№{item.get('lot_number')}" if item.get("lot_number") else "Лот не настроен"
+                lines.append(
+                    f"{lot_label} — {item.get('account_name')} ({mmr_label}) — "
+                    f"{expiry_label} МСК (осталось {remaining_label})"
+                )
+        if release_line:
+            lines.append(release_line)
+        lines.append("Если нужен другой диапазон — напишите в чат.")
+        return "\n".join(lines)
 
     def _extend_rental_for_order(self, account_id: int, owner: str, units: int, unit_minutes: int) -> bool:
         total_minutes = int(units) * int(unit_minutes)
@@ -333,11 +420,7 @@ class FunpayBot:
             self._mark_order_processed(event)
             return
 
-        acc.send_message(
-            chat_id,
-            "Этот лот сейчас уже арендован.\n"
-            "Пожалуйста, выберите другой лот или напишите в чат — поможем.",
-        )
+        acc.send_message(chat_id, self._build_replacement_message(account, lot_number))
         send_message_to_admin(
             "КОНФЛИКТ ПО ЛОТУ\n\n"
             f"Покупатель: {buyer}\n"
@@ -378,11 +461,7 @@ class FunpayBot:
 
         if specific_account.get("owner") is not None:
             logger.warning(f"Account '{account_name}' is already rented by {specific_account['owner']}")
-            acc.send_message(
-                chat_id,
-                "Этот аккаунт сейчас уже арендован.\n"
-                "Пожалуйста, выберите другой лот или напишите в чат — поможем.",
-            )
+            acc.send_message(chat_id, self._build_replacement_message(specific_account))
             return
 
         if amount > 1:

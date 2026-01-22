@@ -25,6 +25,7 @@
   manage: {
     id: document.getElementById("manageId"),
     name: document.getElementById("manageName"),
+    mmr: document.getElementById("manageMmr"),
     login: document.getElementById("manageLogin"),
     password: document.getElementById("managePassword"),
     maFileJson: document.getElementById("manageMaFileJson"),
@@ -199,6 +200,7 @@ const setManagePanel = (account) => {
   if (!account) {
     ui.manage.id.value = "";
     ui.manage.name.value = "";
+    ui.manage.mmr.value = "";
     ui.manage.login.value = "";
     ui.manage.password.value = "";
     ui.manage.maFileJson.value = "";
@@ -211,6 +213,7 @@ const setManagePanel = (account) => {
 
   ui.manage.id.value = account.id;
   ui.manage.name.value = account.account_name || "";
+  ui.manage.mmr.value = Number.isFinite(Number(account.mmr)) ? Number(account.mmr) : "";
   ui.manage.login.value = account.login || "";
   ui.manage.password.value = account.password || "";
   ui.manage.maFileJson.value = "";
@@ -728,7 +731,7 @@ const loadLots = async ({ silent = false } = {}) => {
 
 const loadAccounts = async ({ silent = false } = {}) => {
   try {
-    const data = await apiFetch("/api/accounts");
+    const data = await apiFetch("/api/accounts?include_steamid=1");
     accountsCache = data.items || [];
     renderInventory(accountsCache);
     renderLotSelect(accountsCache);
@@ -859,6 +862,14 @@ ui.addForm.addEventListener("submit", async (event) => {
   if (!payload.mafile_json) {
     delete payload.mafile_json;
   }
+  if (payload.mmr !== undefined) {
+    const mmr = Number(payload.mmr);
+    if (!Number.isFinite(mmr) || mmr < 0) {
+      toast("MMR должен быть числом 0 или выше.", true);
+      return;
+    }
+    payload.mmr = Math.floor(mmr);
+  }
   try {
     await apiFetch("/api/accounts", {
       method: "POST",
@@ -925,6 +936,15 @@ ui.manage.update.addEventListener("click", async () => {
     password: ui.manage.password.value.trim(),
     mafile_json: ui.manage.maFileJson.value.trim(),
   };
+  const mmrValue = ui.manage.mmr.value.trim();
+  if (mmrValue !== "") {
+    const mmr = Number(mmrValue);
+    if (!Number.isFinite(mmr) || mmr < 0) {
+      toast("MMR должен быть числом 0 или выше.", true);
+      return;
+    }
+    payload.mmr = Math.floor(mmr);
+  }
   if (durationHoursValue !== "" || durationMinutesValue !== "") {
     const hours = Number(durationHoursValue || 0);
     const minutes = Number(durationMinutesValue || 0);

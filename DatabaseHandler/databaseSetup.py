@@ -176,6 +176,7 @@ class MySQLDB:
                     password TEXT NOT NULL,
                     rental_duration INT NOT NULL,
                     rental_duration_minutes INT NULL,
+                    mmr INT NULL,
                     owner VARCHAR(255) DEFAULT NULL,
                     rental_start DATETIME DEFAULT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -224,6 +225,7 @@ class MySQLDB:
                     password TEXT NOT NULL,
                     rental_duration INTEGER NOT NULL,
                     rental_duration_minutes INTEGER,
+                    mmr INTEGER,
                     owner TEXT DEFAULT NULL,
                     rental_start TIMESTAMP DEFAULT NULL
                 )
@@ -264,6 +266,7 @@ class MySQLDB:
         cursor.close()
         self._ensure_mafile_column()
         self._ensure_rental_duration_minutes_column()
+        self._ensure_mmr_column()
         self._ensure_lot_url_column()
         self._ensure_users_table()
         self._ensure_user_owner_columns()
@@ -411,6 +414,30 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def _ensure_mmr_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'accounts' AND column_name = 'mmr'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE accounts ADD COLUMN mmr INT NULL")
+                    self.conn.commit()
+            else:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN mmr INTEGER")
+                self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
     def _ensure_feedback_rewards_table(self):
         cursor = self._cursor()
         try:
@@ -443,6 +470,7 @@ class MySQLDB:
         mafile_json=None,
         user_id: int | None = None,
         duration_minutes: int | None = None,
+        mmr: int | None = None,
     ):
         """Add an account to the database."""
         cursor = None
@@ -477,9 +505,9 @@ class MySQLDB:
             cursor.execute(
                 """
                 INSERT INTO accounts (
-                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, rental_duration_minutes, owner, user_id
+                    account_name, path_to_maFile, mafile_json, login, password, rental_duration, rental_duration_minutes, mmr, owner, user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_name,
@@ -489,6 +517,7 @@ class MySQLDB:
                     enc_password,
                     duration_value,
                     total_minutes,
+                    mmr,
                     owner,
                     user_id,
                 ),
@@ -508,7 +537,7 @@ class MySQLDB:
         cursor = self._cursor()
         cursor.execute(
             """
-            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes
+            SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr
             FROM accounts 
             WHERE owner IS NULL
             """
@@ -524,6 +553,7 @@ class MySQLDB:
                 "password": self._decrypt_value(row[4]),
                 "rental_duration": row[5],
                 "rental_duration_minutes": row[6],
+                "mmr": row[7],
             }
             for row in rows
         ]
@@ -702,14 +732,14 @@ class MySQLDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 """
             )
         else:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json
                 FROM accounts
                 WHERE user_id = ?
                 """,
@@ -726,10 +756,11 @@ class MySQLDB:
                 "password": self._decrypt_value(row[4]),
                 "rental_duration": row[5],
                 "rental_duration_minutes": row[6],
-                "owner": row[7],
-                "rental_start": row[8],
-                "user_id": row[9] if len(row) > 9 else None,
-                "mafile_json": self._decrypt_value(row[10]) if len(row) > 10 else None,
+                "mmr": row[7],
+                "owner": row[8],
+                "rental_start": row[9],
+                "user_id": row[10] if len(row) > 10 else None,
+                "mafile_json": self._decrypt_value(row[11]) if len(row) > 11 else None,
             }
             for row in rows
         ]
@@ -846,7 +877,7 @@ class MySQLDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.owner, a.rental_start, a.mafile_json
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.mmr, a.owner, a.rental_start, a.mafile_json
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.lot_number = ?
@@ -856,7 +887,7 @@ class MySQLDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.owner, a.rental_start, a.mafile_json
+                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.mmr, a.owner, a.rental_start, a.mafile_json
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.lot_number = ? AND l.user_id = ?
@@ -875,9 +906,10 @@ class MySQLDB:
             "password": self._decrypt_value(row[3]),
             "rental_duration": row[4],
             "rental_duration_minutes": row[5],
-            "owner": row[6],
-            "rental_start": row[7],
-            "mafile_json": self._decrypt_value(row[8]),
+            "mmr": row[6],
+            "owner": row[7],
+            "rental_start": row[8],
+            "mafile_json": self._decrypt_value(row[9]),
         }
 
     def get_available_lot_accounts(self, user_id: int | None = None) -> list:
@@ -885,7 +917,7 @@ class MySQLDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE a.owner IS NULL
@@ -895,7 +927,7 @@ class MySQLDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE a.owner IS NULL AND a.user_id = ?
@@ -914,8 +946,9 @@ class MySQLDB:
                 "rental_start": row[3],
                 "rental_duration": row[4],
                 "rental_duration_minutes": row[5],
-                "lot_number": row[6],
-                "lot_url": row[7],
+                "mmr": row[6],
+                "lot_number": row[7],
+                "lot_url": row[8],
             }
             for row in rows
         ]
@@ -925,7 +958,7 @@ class MySQLDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 ORDER BY l.lot_number
@@ -934,7 +967,7 @@ class MySQLDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.user_id = ?
@@ -953,8 +986,62 @@ class MySQLDB:
                 "rental_start": row[3],
                 "rental_duration": row[4],
                 "rental_duration_minutes": row[5],
-                "lot_number": row[6],
-                "lot_url": row[7],
+                "mmr": row[6],
+                "lot_number": row[7],
+                "lot_url": row[8],
+            }
+            for row in rows
+        ]
+
+    def get_lot_accounts_by_mmr_range(
+        self,
+        target_mmr: int,
+        mmr_range: int = 1000,
+        user_id: int | None = None,
+    ) -> list:
+        cursor = self._cursor()
+        low = int(target_mmr) - int(mmr_range)
+        high = int(target_mmr) + int(mmr_range)
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.mmr, a.owner, a.rental_start,
+                       a.rental_duration, a.rental_duration_minutes,
+                       l.lot_number, l.lot_url
+                FROM accounts a
+                LEFT JOIN lots l ON l.account_id = a.ID
+                WHERE a.mmr BETWEEN ? AND ?
+                ORDER BY a.mmr, a.ID
+                """,
+                (low, high),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT a.ID, a.account_name, a.mmr, a.owner, a.rental_start,
+                       a.rental_duration, a.rental_duration_minutes,
+                       l.lot_number, l.lot_url
+                FROM accounts a
+                LEFT JOIN lots l ON l.account_id = a.ID AND l.user_id = ?
+                WHERE a.user_id = ? AND a.mmr BETWEEN ? AND ?
+                ORDER BY a.mmr, a.ID
+                """,
+                (user_id, user_id, low, high),
+            )
+        rows = cursor.fetchall()
+        if self.db_type == "mysql":
+            cursor.close()
+        return [
+            {
+                "id": row[0],
+                "account_name": row[1],
+                "mmr": row[2],
+                "owner": row[3],
+                "rental_start": row[4],
+                "rental_duration": row[5],
+                "rental_duration_minutes": row[6],
+                "lot_number": row[7],
+                "lot_url": row[8],
             }
             for row in rows
         ]
@@ -1055,6 +1142,7 @@ class MySQLDB:
             "password",
             "rental_duration",
             "rental_duration_minutes",
+            "mmr",
         }
         updates = {key: value for key, value in fields.items() if key in allowed_fields}
         if not updates:
@@ -1135,7 +1223,7 @@ class MySQLDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, owner, rental_start
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start
                 FROM accounts 
                 WHERE account_name = ?
                 """,
@@ -1153,8 +1241,9 @@ class MySQLDB:
                     "password": self._decrypt_value(row[4]),
                     "rental_duration": row[5],
                     "rental_duration_minutes": row[6],
-                    "owner": row[7],
-                    "rental_start": row[8]
+                    "mmr": row[7],
+                    "owner": row[8],
+                    "rental_start": row[9]
                 }
             return None
         except Exception as e:
@@ -1177,7 +1266,7 @@ class MySQLDB:
                 cursor.execute(
                     """
                     SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, rental_duration_minutes, owner, rental_start, mafile_json
+                           rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json
                     FROM accounts 
                     WHERE ID = ?
                     """,
@@ -1187,7 +1276,7 @@ class MySQLDB:
                 cursor.execute(
                     """
                     SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, rental_duration_minutes, owner, rental_start, mafile_json
+                           rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json
                     FROM accounts 
                     WHERE ID = ? AND user_id = ?
                     """,
@@ -1203,9 +1292,10 @@ class MySQLDB:
                     "password": self._decrypt_value(row[4]),
                     "rental_duration": row[5],
                     "rental_duration_minutes": row[6],
-                    "owner": row[7],
-                    "rental_start": row[8],
-                    "mafile_json": self._decrypt_value(row[9]),
+                    "mmr": row[7],
+                    "owner": row[8],
+                    "rental_start": row[9],
+                    "mafile_json": self._decrypt_value(row[10]),
                 }
             return None
         except Exception as e:
