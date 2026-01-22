@@ -310,7 +310,7 @@ const App: React.FC = () => {
                   </AnimatePresence>
                 </nav>
               </aside>
-              <main className="relative flex-1 bg-white">
+              <main className="relative flex-1 bg-white border-t border-neutral-200">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
                 <div className="pl-10 pr-10 pt-5">
                   <div className="flex items-center justify-between gap-6">
@@ -335,7 +335,6 @@ const App: React.FC = () => {
                       />
                     </label>
                   </div>
-                  <div className="mt-4 h-px w-full bg-neutral-200" />
                   <div className="mt-6">
                     <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
