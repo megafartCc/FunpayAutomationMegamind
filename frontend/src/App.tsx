@@ -316,13 +316,20 @@ const App: React.FC = () => {
           setAccountsTable(
             (accounts.items as any[]).map((a, idx) => ({
               id: a.id ?? idx,
-              name:
-                a.account ??
-                a.acc_name ??
-                a.title ??
-                (a.name && a.name !== a.login ? a.name : null) ??
-                a.login ??
-                `Account ${idx + 1}`,
+              name: (() => {
+                const preferred =
+                  a.account ??
+                  a.acc_name ??
+                  a.title ??
+                  (a.name && a.name !== a.login ? a.name : null) ??
+                  "";
+                const login = a.login ?? "";
+                const cleanedPref = String(preferred).trim();
+                if (!cleanedPref || cleanedPref.toLowerCase() === String(login).trim().toLowerCase()) {
+                  return `ID ${a.id ?? idx}`;
+                }
+                return cleanedPref;
+              })(),
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
               steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.id ?? "",
