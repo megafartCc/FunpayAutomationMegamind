@@ -14,6 +14,25 @@ type OverviewData = {
   past24: number | null;
 };
 
+type AccountRow = {
+  id?: string | number;
+  login?: string;
+  password?: string;
+  steamId?: string;
+  rentalOwner?: string | null;
+  name?: string;
+};
+
+type RentalRow = {
+  id?: string | number;
+  accountName?: string;
+  buyer?: string;
+  durationSec?: number;
+  startedAt?: string;
+  status?: string;
+  hero?: string;
+};
+
 const DashboardIcon = () => (
   <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -198,6 +217,9 @@ const App: React.FC = () => {
     freeAccounts: null,
     past24: null,
   });
+  const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
+  const [rentalsTable, setRentalsTable] = useState<RentalRow[]>([]);
+  const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
   const api = useMemo(
@@ -288,6 +310,35 @@ const App: React.FC = () => {
           freeAccounts,
           past24,
         });
+
+        // inventory table
+        if (Array.isArray(accounts?.items)) {
+          setAccountsTable(
+            (accounts.items as any[]).map((a, idx) => ({
+              id: a.id ?? idx,
+              name: a.name ?? a.login ?? `Account ${idx + 1}`,
+              login: a.login ?? "",
+              password: a.password ?? a.pass ?? "",
+              steamId: a.steamid ?? a.steam_id ?? "",
+              rentalOwner: a.rental_owner ?? a.renter ?? null,
+            }))
+          );
+        }
+
+        // rentals table
+        if (Array.isArray(activeRentals?.items)) {
+          setRentalsTable(
+            (activeRentals.items as any[]).map((r, idx) => ({
+              id: r.id ?? idx,
+              accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
+              buyer: r.buyer ?? r.rented_by ?? "",
+              durationSec: r.duration ?? r.duration_sec ?? r.seconds ?? null,
+              startedAt: r.started_at ?? r.start_time ?? r.created_at,
+              status: r.status ?? r.presence ?? "",
+              hero: r.hero ?? r.character ?? "",
+            }))
+          );
+        }
       } catch {
         // ignore overview load errors
       }
@@ -297,6 +348,39 @@ const App: React.FC = () => {
       loadOverview();
     }
   }, [token, apiFetch]);
+
+  // tick for live timers
+  useEffect(() => {
+    if (!token) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [token]);
+
+  const formatDuration = (seconds: number | null | undefined, startedAt?: string) => {
+    let remaining = seconds ?? 0;
+    if (startedAt && seconds != null) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      remaining = Math.max(0, seconds - elapsed);
+    }
+    const h = Math.floor(remaining / 3600)
+      .toString()
+      .padStart(2, "0");
+    const m = Math.floor((remaining % 3600) / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = Math.floor(remaining % 60)
+      .toString()
+      .padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  };
+
+  const statusPill = (status?: string) => {
+    const lower = (status || "").toLowerCase();
+    if (lower.includes("match")) return { className: "bg-emerald-50 text-emerald-600", label: "In match" };
+    if (lower.includes("game")) return { className: "bg-amber-50 text-amber-600", label: "In game" };
+    if (lower.includes("off") || lower === "") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
+    return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
+  };
 
   return (
     <>
@@ -364,7 +448,8 @@ const App: React.FC = () => {
               </aside>
               <main className="relative flex-1 bg-white border-t border-neutral-200">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
-                <div className="pl-10 pr-10 pt-5">
+                <div className="absolute left-0 right-0 top-[78px] h-px bg-neutral-300" />
+                <div className="pl-10 pr-10 pt-5 pb-12">
                   <div className="flex items-center justify-between gap-6">
                     <div>
                       <h1 className="text-2xl font-semibold text-neutral-900">Dashboard</h1>
@@ -424,63 +509,94 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="mt-8 grid gap-6 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                    <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                       <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-neutral-900">Project summary</h3>
+                        <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         <div className="flex gap-2">
-                          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Project</div>
                           <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-3 text-sm font-semibold text-neutral-500">
+                      <div className="grid grid-cols-6 gap-3 text-xs font-semibold text-neutral-500">
                         <span>Name</span>
-                        <span className="text-center">Due date</span>
-                        <span className="text-right">Status</span>
+                        <span>Login</span>
+                        <span>Password</span>
+                        <span>Steam ID</span>
+                        <span>Rental owner</span>
+                        <span className="text-right">State</span>
                       </div>
-                      <div className="mt-3 space-y-3 text-sm text-neutral-800">
-                        {["Nelsa web development", "Datascale AI app", "Media channel branding", "Corlax iOS app", "Website builder"].map(
-                          (name, idx) => (
+                      <div className="mt-3 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "420px" }}>
+                        {accountsTable.map((acc) => {
+                          const rented = acc.rentalOwner && acc.rentalOwner !== "";
+                          return (
                             <div
-                              key={name}
-                              className="grid grid-cols-3 items-center gap-3 rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-3"
+                              key={acc.id}
+                              className="grid grid-cols-6 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm"
                             >
-                              <span className="truncate">{name}</span>
-                              <span className="text-center text-neutral-500">25.01.24</span>
+                              <span className="truncate font-semibold text-neutral-900">{acc.name || "Account"}</span>
+                              <span className="truncate text-neutral-700">{acc.login || "—"}</span>
+                              <span className="truncate text-neutral-700">{acc.password || "—"}</span>
+                              <span className="truncate text-neutral-700">{acc.steamId || "—"}</span>
+                              <span className="truncate text-neutral-700">{acc.rentalOwner || "—"}</span>
                               <span
                                 className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${
-                                  idx % 2 === 0 ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
+                                  rented ? "bg-emerald-50 text-emerald-600" : "bg-neutral-100 text-neutral-600"
                                 }`}
                               >
-                                {idx % 2 === 0 ? "Completed" : "On going"}
+                                {rented ? "Rented Out" : "Available"}
                               </span>
                             </div>
-                          )
+                          );
+                        })}
+                        {accountsTable.length === 0 && (
+                          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                            No accounts loaded yet.
+                          </div>
                         )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                    <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                       <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-neutral-900">Overall progress</h3>
-                        <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">All</button>
+                        <h3 className="text-lg font-semibold text-neutral-900">Active rentals</h3>
+                        <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
                       </div>
-                      <div className="flex items-end justify-between gap-3">
-                        {[65, 87, 20, 25].map((val, idx) => (
-                          <div key={val} className="flex flex-1 flex-col items-center">
+                      <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
+                        <span>ID</span>
+                        <span>Account</span>
+                        <span>Buyer</span>
+                        <span>Started</span>
+                        <span>Remaining</span>
+                        <span>Hero</span>
+                        <span className="text-right">Presence</span>
+                      </div>
+                      <div className="mt-3 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "420px" }}>
+                        {rentalsTable.map((r) => {
+                          const pill = statusPill(r.status);
+                          return (
                             <div
-                              className={`w-full rounded-lg bg-neutral-100`}
-                              style={{ height: "170px", position: "relative" }}
+                              key={r.id}
+                              className="grid grid-cols-7 items-center gap-2 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm"
                             >
-                              <div
-                                className="absolute bottom-0 left-0 right-0 rounded-lg bg-gradient-to-t from-orange-400 to-orange-300"
-                                style={{ height: `${val}%` }}
-                              />
+                              <span className="truncate font-semibold text-neutral-900">{r.id ?? "—"}</span>
+                              <span className="truncate text-neutral-800">{r.accountName || "—"}</span>
+                              <span className="truncate text-neutral-700">{r.buyer || "—"}</span>
+                              <span className="truncate text-neutral-600">
+                                {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : "—"}
+                              </span>
+                              <span className="truncate font-mono text-neutral-900">
+                                {formatDuration(r.durationSec ?? null, r.startedAt)}
+                              </span>
+                              <span className="truncate text-neutral-700">{r.hero || "—"}</span>
+                              <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                {pill.label}
+                              </span>
                             </div>
-                            <div className="mt-2 text-sm font-semibold text-neutral-800">{val}%</div>
-                            <div className="text-xs text-neutral-500">
-                              {idx === 0 ? "Completed" : idx === 1 ? "On going" : idx === 2 ? "At risk" : "Delayed"}
-                            </div>
+                          );
+                        })}
+                        {rentalsTable.length === 0 && (
+                          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                            No active rentals yet.
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
                   </div>
