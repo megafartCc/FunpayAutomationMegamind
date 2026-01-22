@@ -61,6 +61,7 @@ MMR_REDACTION_REGEX = re.compile(
     r"(?:\b(?:mmr|\u043c\u043c\u0440)\s*\d+(?:\s*-\s*\d+)?\b|\b\d+(?:\s*-\s*\d+)?\s*(?:mmr|\u043c\u043c\u0440)\b)",
     re.IGNORECASE,
 )
+ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
 SENSITIVE_KEYWORDS = (
     "password",
     "пароль",
@@ -107,8 +108,8 @@ ISSUE_KEYWORDS = (
 
 CODE_REQUEST_KEYWORDS = (
     "!code",
-    "!???",
-    "???",
+    "!\u043a\u043e\u0434",
+    "\u043a\u043e\u0434",
     "code",
     "2fa",
     "otp",
@@ -116,27 +117,29 @@ CODE_REQUEST_KEYWORDS = (
     "steamguard",
     "guard code",
     "steamguard code",
-    "???? ????",
 )
 ACCOUNT_REQUEST_KEYWORDS = (
     "!acc",
-    "!???",
+    "!\u0430\u043a\u043a",
     "!account",
-    "?????",
-    "??????",
-    "??????",
-    "??????",
+    "\u0430\u043a\u043a",
+    "\u0430\u043a\u043a\u0430\u0443\u043d\u0442",
+    "\u043b\u043e\u0433\u0438\u043d",
+    "\u043f\u0430\u0440\u043e\u043b\u044c",
     "credentials",
     "details",
 )
 ACCOUNT_ACTION_KEYWORDS = (
-    "???",
-    "?????",
-    "??????",
-    "??????",
-    "?????",
-    "??????",
-    "?????",
+    "\u0434\u0430\u0439",
+    "\u0432\u044b\u0434\u0430\u0439",
+    "\u043f\u043e\u043a\u0430\u0436\u0438",
+    "\u0441\u043a\u0438\u043d\u044c",
+    "\u043d\u0443\u0436\u0435\u043d",
+    "\u043d\u0443\u0436\u043d\u043e",
+    "\u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c",
+    "send",
+    "show",
+    "give",
 )
 
 ISSUE_REPLY = (
@@ -156,17 +159,17 @@ ISSUE_NO_RENTAL_REPLY = (
     "\u0434\u0430\u043d\u043d\u044b\u0435."
 )
 COMMANDS_HELP = (
-    "Команды:\n"
-    "!acc / !акк — данные аккаунта\n"
-    "!code / !код — код Steam Guard\n"
-    "!stock / !сток — наличие аккаунтов\n"
-    "!extend / !продлить <часы> <номер_лота> — продлить аренду\n"
-    "!cancel / !отмена <ID> — отменить аренду\n"
-    "!bonus / !бонус — бонус за отзыв (5★)"
+    "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
+    "!acc / !\u0430\u043a\u043a \u2014 \u0434\u0430\u043d\u043d\u044b\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430\n"
+    "!code / !\u043a\u043e\u0434 \u2014 \u043a\u043e\u0434 Steam Guard\n"
+    "!stock / !\u0441\u0442\u043e\u043a \u2014 \u043d\u0430\u043b\u0438\u0447\u0438\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432\n"
+    "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <\u043d\u043e\u043c\u0435\u0440_\u043b\u043e\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
+    "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
+    "!bonus / !\u0431\u043e\u043d\u0443\u0441 \u2014 \u0431\u043e\u043d\u0443\u0441 \u0437\u0430 \u043e\u0442\u0437\u044b\u0432 (5\u2605)"
 )
 COMMANDS_INLINE = (
-    "Команды: !acc/!акк, !code/!код, !stock/!сток, !extend/!продлить, "
-    "!cancel/!отмена, !bonus/!бонус"
+    "\u041a\u043e\u043c\u0430\u043d\u0434\u044b: !acc/!\u0430\u043a\u043a, !code/!\u043a\u043e\u0434, !stock/!\u0441\u0442\u043e\u043a, !extend/!\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, "
+    "!cancel/!\u043e\u0442\u043c\u0435\u043d\u0430, !bonus/!\u0431\u043e\u043d\u0443\u0441"
 )
 
 
@@ -531,7 +534,7 @@ class FunpayBot:
         lowered = text.lower()
         if any(keyword in lowered for keyword in ACCOUNT_REQUEST_KEYWORDS):
             return True
-        if any(k in lowered for k in ("???", "???????", "account")) and any(
+        if any(k in lowered for k in ("\u0430\u043a\u043a", "\u0430\u043a\u043a\u0430\u0443\u043d\u0442", "account")) and any(
             keyword in lowered for keyword in ACCOUNT_ACTION_KEYWORDS
         ):
             return True
@@ -714,8 +717,20 @@ class FunpayBot:
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
         return cleaned.strip(" -\u2014")
 
+    def _clean_account_label(self, text: Optional[str]) -> str:
+        if not text:
+            return ""
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        cleaned = cleaned.translate(
+            str.maketrans({"\u3010": " ", "\u3011": " ", "[": " ", "]": " ", "(": " ", ")": " "})
+        )
+        cleaned = ACCOUNT_LABEL_NOISE_RE.sub("", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        cleaned = cleaned.strip(" -\u2014")
+        return cleaned
+
     def _display_account_name(self, name: Optional[str]) -> str:
-        cleaned = self._redact_mmr_label(name or "")
+        cleaned = self._clean_account_label(name or "")
         return cleaned or "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
 
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1242,14 +1257,14 @@ class FunpayBot:
         )
 
         message = (
-            "Ваш аккаунт:\n"
+            "\u0412\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442:\n"
             f"ID: {account['id']}\n"
-            f"Название: {display_name}\n"
-            f"Логин: {account['login']}\n"
-            f"Пароль: {account['password']}\n"
-            f"Аренда: {duration_label}\n\n"
+            f"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435: {display_name}\n"
+            f"\u041b\u043e\u0433\u0438\u043d: {account['login']}\n"
+            f"\u041f\u0430\u0440\u043e\u043b\u044c: {account['password']}\n"
+            f"\u0410\u0440\u0435\u043d\u0434\u0430: {duration_label}\n\n"
             f"{COMMANDS_HELP}\n\n"
-            "Если нужна помощь — напишите в чат.",
+            "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c \u2014 \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442."
         )
         if note:
             message = f"{note}\n\n{message}"
@@ -1963,13 +1978,16 @@ class FunpayBot:
         if available_lots:
             lines = [USER.stock_title]
             for account in available_lots:
-                lot_label = f"№{account['lot_number']}"
                 display_name = self._display_account_name(account.get("account_name"))
+                if display_name == "\u0430\u043a\u043a\u0430\u0443\u043d\u0442":
+                    lot_number = account.get("lot_number")
+                    if lot_number:
+                        display_name = f"\u0410\u043a\u043a\u0430\u0443\u043d\u0442 \u2116{lot_number}"
                 lot_url = account.get("lot_url")
                 if lot_url:
-                    lines.append(f"{display_name} - {lot_label} - {lot_url}")
+                    lines.append(f"{display_name} - {lot_url}")
                 else:
-                    lines.append(f"{display_name} - {lot_label}")
+                    lines.append(f"{display_name}")
             return "\n".join(lines)
 
         all_lots = self._db.get_all_lot_accounts(self._user_id)
