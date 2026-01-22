@@ -318,6 +318,7 @@ const App: React.FC = () => {
               id: a.id ?? idx,
               name: (() => {
                 const preferred =
+                  a.account_name ??
                   a.account ??
                   a.acc_name ??
                   a.title ??
