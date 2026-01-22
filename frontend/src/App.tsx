@@ -19,8 +19,8 @@ type AccountRow = {
   login?: string;
   password?: string;
   steamId?: string;
-  rentalOwner?: string | null;
   name?: string;
+  mmr?: number | string | null;
 };
 
 type RentalRow = {
@@ -319,8 +319,8 @@ const App: React.FC = () => {
               name: a.name ?? a.login ?? `Account ${idx + 1}`,
               login: a.login ?? "",
               password: a.password ?? a.pass ?? "",
-              steamId: a.steamid ?? a.steam_id ?? "",
-              rentalOwner: a.rental_owner ?? a.renter ?? null,
+              steamId: a.steamId ?? a.steamid ?? a.steam_id ?? a.id ?? "",
+              mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
             }))
           );
         }
@@ -512,37 +512,29 @@ const App: React.FC = () => {
                     <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                       <div className="mb-4 flex items-center justify-between">
                         <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
-                        <div className="flex gap-2">
-                          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</div>
-                        </div>
                       </div>
-                      <div className="grid grid-cols-6 gap-3 text-xs font-semibold text-neutral-500">
+                      <div className="grid grid-cols-6 gap-3 text-xs font-semibold text-neutral-500 px-1">
                         <span>Name</span>
                         <span>Login</span>
                         <span>Password</span>
                         <span>Steam ID</span>
-                        <span>Rental owner</span>
+                        <span>MMR</span>
                         <span className="text-right">State</span>
                       </div>
-                      <div className="mt-3 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "420px" }}>
+                      <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                         {accountsTable.map((acc) => {
-                          const rented = acc.rentalOwner && acc.rentalOwner !== "";
                           return (
                             <div
                               key={acc.id}
-                              className="grid grid-cols-6 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm"
+                              className="grid grid-cols-6 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                             >
                               <span className="truncate font-semibold text-neutral-900">{acc.name || "Account"}</span>
                               <span className="truncate text-neutral-700">{acc.login || "—"}</span>
                               <span className="truncate text-neutral-700">{acc.password || "—"}</span>
                               <span className="truncate text-neutral-700">{acc.steamId || "—"}</span>
-                              <span className="truncate text-neutral-700">{acc.rentalOwner || "—"}</span>
-                              <span
-                                className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${
-                                  rented ? "bg-emerald-50 text-emerald-600" : "bg-neutral-100 text-neutral-600"
-                                }`}
-                              >
-                                {rented ? "Rented Out" : "Available"}
+                              <span className="truncate text-neutral-700">{acc.mmr ?? "—"}</span>
+                              <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
+                                Available
                               </span>
                             </div>
                           );
@@ -568,13 +560,13 @@ const App: React.FC = () => {
                         <span>Hero</span>
                         <span className="text-right">Presence</span>
                       </div>
-                      <div className="mt-3 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "420px" }}>
+                      <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                         {rentalsTable.map((r) => {
                           const pill = statusPill(r.status);
                           return (
                             <div
                               key={r.id}
-                              className="grid grid-cols-7 items-center gap-2 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-3 text-sm"
+                              className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                             >
                               <span className="truncate font-semibold text-neutral-900">{r.id ?? "—"}</span>
                               <span className="truncate text-neutral-800">{r.accountName || "—"}</span>
