@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -553,13 +554,19 @@ class FunpayBot:
         )
         safe_orders: List[Dict[str, Any]] = []
         for item in order_history:
+            amount = item.get("amount")
+            price = item.get("price")
+            if isinstance(amount, Decimal):
+                amount = int(amount)
+            if isinstance(price, Decimal):
+                price = float(price)
             safe_orders.append(
                 {
                     "order_id": item.get("order_id"),
                     "account_name": self._redact_mmr_label(item.get("account_name")),
                     "lot_number": item.get("lot_number"),
-                    "amount": item.get("amount"),
-                    "price": item.get("price"),
+                    "amount": amount,
+                    "price": price,
                     "action": item.get("action"),
                     "created_at": self._format_datetime(item.get("created_at")),
                 }
