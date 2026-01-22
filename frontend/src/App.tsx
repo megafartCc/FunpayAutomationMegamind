@@ -121,6 +121,42 @@ const NAV_ITEMS = [
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
 
+const CardUsersIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M21 19.9999C21 18.2583 19.3304 16.7767 17 16.2275M15 20C15 17.7909 12.3137 16 9 16C5.68629 16 3 17.7909 3 20M15 13C17.2091 13 19 11.2091 19 9C19 6.79086 17.2091 5 15 5M9 13C6.79086 13 5 11.2091 5 9C5 6.79086 6.79086 5 9 5C11.2091 5 13 6.79086 13 9C13 11.2091 11.2091 13 9 13Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const CardCloudCheckIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M15 11L11 15L9 13M23 15C23 12.7909 21.2091 11 19 11C18.9764 11 18.9532 11.0002 18.9297 11.0006C18.4447 7.60802 15.5267 5 12 5C9.20335 5 6.79019 6.64004 5.66895 9.01082C3.06206 9.18144 1 11.3498 1 13.9999C1 16.7613 3.23858 19.0001 6 19.0001L19 19C21.2091 19 23 17.2091 23 15Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const CardBarsIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M19.5 5.5V18.5M12 3.5V18.5M4.5 9.5V18.5M22 18.5H2"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const navIdToPath: Record<string, string> = {
   overview: "/dashboard",
   rentals: "/rentals",
@@ -137,6 +173,13 @@ const pathToNavId = (path: string): string => {
   const found = Object.entries(navIdToPath).find(([, p]) => p === clean);
   return found?.[0] || "overview";
 };
+
+const overviewCards = [
+  { title: "Total Accounts", value: "1,240", delta: "+12%", deltaTone: "positive", Icon: CardUsersIcon },
+  { title: "Active Rentals", value: "312", delta: "-3%", deltaTone: "negative", Icon: CardUsersIcon },
+  { title: "Free Accounts", value: "428", delta: "+6%", deltaTone: "positive", Icon: CardCloudCheckIcon },
+  { title: "Past 24 hours", value: "89", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
+];
 
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
@@ -269,9 +312,11 @@ const App: React.FC = () => {
               </aside>
               <main className="relative flex-1 bg-white">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
-                <div className="pl-10 pr-10 pt-6">
-                  <div className="mb-6 flex items-center justify-between">
-                    <h2 className="text-lg font-semibold text-neutral-700">Скоро тут будет контент</h2>
+                <div className="pl-10 pr-10 pt-5">
+                  <div className="flex items-center justify-between gap-6">
+                    <div>
+                      <h1 className="text-2xl font-semibold text-neutral-900">Dashboard</h1>
+                    </div>
                     <label className="relative flex h-11 w-80 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path
@@ -290,7 +335,37 @@ const App: React.FC = () => {
                       />
                     </label>
                   </div>
-                  <div className="h-px w-full bg-neutral-200" />
+                  <div className="mt-4 h-px w-full bg-neutral-200" />
+                  <div className="mt-6">
+                    <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                      {overviewCards.map((card) => (
+                        <motion.div
+                          key={card.title}
+                          className="group relative rounded-xl border border-neutral-200 bg-white p-4 shadow-sm shadow-neutral-200/60"
+                          whileHover={{ y: -2, scale: 1.01 }}
+                          transition={{ duration: 0.15, ease: EASE }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
+                              <card.Icon />
+                            </div>
+                            <div
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                                card.deltaTone === "negative"
+                                  ? "bg-rose-50 text-rose-600"
+                                  : "bg-emerald-50 text-emerald-600"
+                              }`}
+                            >
+                              {card.delta}
+                            </div>
+                          </div>
+                          <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
+                          <div className="mt-2 text-2xl font-semibold text-neutral-900">{card.value}</div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </main>
             </div>
