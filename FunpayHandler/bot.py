@@ -24,7 +24,6 @@ from backend.config import (
     AI_SUMMARY_ENABLED,
     AI_SUMMARY_MAX_CHARS,
     AI_SUMMARY_TRIGGER,
-    REQUIRE_PAID_ORDER,
     RENTAL_CHECK_INTERVAL,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
@@ -320,12 +319,6 @@ class FunpayBot:
         self.refresh_session()
         self._last_refresh_ts = time.time()
 
-        if REQUIRE_PAID_ORDER and not hasattr(events.EventTypes, "ORDER_PAID"):
-            logger.warning(
-                "REQUIRE_PAID_ORDER is enabled but ORDER_PAID event is not available; "
-                "orders will not be processed."
-            )
-
         thread = threading.Thread(target=self._check_rental_expiration_loop, daemon=True)
         thread.start()
         logger.info("Rental expiration checker started.")
@@ -339,21 +332,6 @@ class FunpayBot:
 
                 if event.type is events.EventTypes.NEW_ORDER:
                     self._handle_new_order(event)
-                elif hasattr(events.EventTypes, "ORDER_PAID") and event.type is events.EventTypes.ORDER_PAID:
-                    self._handle_order_paid(event)
-                elif hasattr(events.EventTypes, "ORDER_STATUS_CHANGED") and event.type is events.EventTypes.ORDER_STATUS_CHANGED:
-                    order = getattr(event, "order", None)
-                    status = getattr(order, "status", None)
-                    if status is types.OrderStatuses.PAID:
-                        if order is not None:
-                            self._log_order_status(order, "paid", "ORDER_STATUS_CHANGED")
-                        self._process_order(event, source="ORDER_STATUS_CHANGED")
-                    elif status is types.OrderStatuses.CLOSED:
-                        if order is not None:
-                            self._log_order_status(order, "closed", "ORDER_STATUS_CHANGED")
-                    elif status is types.OrderStatuses.REFUNDED:
-                        if order is not None:
-                            self._log_order_status(order, "refunded", "ORDER_STATUS_CHANGED")
 
                 if event.type is events.EventTypes.NEW_MESSAGE:
                     self._handle_new_message(event)
@@ -534,9 +512,6 @@ class FunpayBot:
         }
 
     def _handle_new_order(self, event: Any) -> None:
-        if REQUIRE_PAID_ORDER:
-            logger.info("Skipping NEW_ORDER delivery; waiting for ORDER_PAID.")
-            return
         self._process_order(event, source="NEW_ORDER")
 
     def _handle_order_paid(self, event: Any) -> None:
