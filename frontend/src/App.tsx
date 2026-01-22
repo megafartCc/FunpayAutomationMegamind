@@ -448,7 +448,7 @@ const App: React.FC = () => {
               </aside>
               <main className="relative flex-1 bg-white border-t border-neutral-200">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
-                <div className="absolute left-0 right-0 top-[78px] h-px bg-neutral-300" />
+                <div className="absolute left-0 right-0 top-[78px] h-px bg-neutral-200" />
                 <div className="pl-10 pr-10 pt-5 pb-12">
                   <div className="flex items-center justify-between gap-6">
                     <div>
