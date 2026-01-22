@@ -36,12 +36,11 @@ from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
-from AIModel.memory_store import get_memory_store
-from AIModel.telemetry import get_telemetry
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR.parent / "Public"
+FRONTEND_DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
 
 app = FastAPI(title="FunpaySeller")
 
@@ -451,7 +450,8 @@ class PresenceCache:
 
 presence_cache = PresenceCache()
 
-app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
+if FRONTEND_ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
 
 
 @app.on_event("startup")
@@ -1143,33 +1143,6 @@ def chat_history(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/api/ai/memory/{owner}", dependencies=[Depends(require_admin)])
-def ai_memory(owner: str, request: Request, limit: int = 20) -> dict:
-    if not owner:
-        raise HTTPException(status_code=400, detail="Owner is required")
-    uid = current_user_id(request)
-    try:
-        limit_value = max(1, min(int(limit), 200))
-    except Exception:
-        limit_value = 20
-    store = get_memory_store()
-    state = store.get_summary_state(owner, uid)
-    return {
-        "owner": owner,
-        "summary": state.get("summary"),
-        "last_message_time": state.get("last_seen_at"),
-        "facts": store.get_facts(owner, uid),
-        "messages": store.get_recent_messages(owner, limit_value, uid),
-    }
-
-
-@app.get("/api/ai/metrics", dependencies=[Depends(require_admin)])
-def ai_metrics(request: Request) -> dict:
-    _ = current_user_id(request)
-    telemetry = get_telemetry()
-    return telemetry.snapshot()
-
-
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
@@ -1202,18 +1175,19 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/ai-dashboard", include_in_schema=False)
-def ai_dashboard() -> FileResponse:
-    return FileResponse(PUBLIC_DIR / "ai-dashboard.html")
-
-
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
-    return FileResponse(PUBLIC_DIR / "index.html")
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Frontend build not found")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa_fallback(path: str) -> FileResponse:
-    if path.startswith(("api", "static")):
+    if path.startswith(("api", "assets")):
         raise HTTPException(status_code=404)
-    return FileResponse(PUBLIC_DIR / "index.html")
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Frontend build not found")
