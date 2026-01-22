@@ -11,7 +11,7 @@ from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -1175,12 +1175,35 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _frontend_build_missing_response() -> HTMLResponse:
+    message = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Frontend build missing</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 40px; color: #1f2937; }
+      code, pre { background: #f3f4f6; padding: 12px; border-radius: 6px; display: block; }
+      h1 { font-size: 24px; margin-bottom: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Frontend build not found</h1>
+    <p>The React frontend has not been built yet. Build it and redeploy:</p>
+    <pre>cd frontend
+npm install
+npm run build</pre>
+  </body>
+</html>"""
+    return HTMLResponse(message, status_code=503)
+
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    raise HTTPException(status_code=404, detail="Frontend build not found")
+    return _frontend_build_missing_response()
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -1190,4 +1213,4 @@ def spa_fallback(path: str) -> FileResponse:
     index_path = FRONTEND_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    raise HTTPException(status_code=404, detail="Frontend build not found")
+    return _frontend_build_missing_response()
