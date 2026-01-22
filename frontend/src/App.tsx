@@ -221,14 +221,14 @@ const App: React.FC = () => {
                           type="button"
                           onClick={() => setActiveNav(item.id)}
                           className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
-                          whileHover={{ y: -1 }}
-                          transition={{ duration: 0.15, ease: EASE }}
+                          whileHover={{ scale: 1.01 }}
+                          transition={{ type: "spring", stiffness: 320, damping: 30 }}
                         >
                           {isActive && (
                             <motion.span
                               layoutId="navHighlight"
-                              className="absolute inset-0 rounded-xl bg-neutral-900 text-white shadow-lg shadow-neutral-900/20"
-                              transition={{ duration: 0.25, ease: EASE }}
+                              className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
+                              transition={{ type: "spring", stiffness: 280, damping: 26 }}
                             />
                           )}
                           <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
@@ -243,8 +243,30 @@ const App: React.FC = () => {
                   </AnimatePresence>
                 </nav>
               </aside>
-              <main className="flex-1 bg-white">
-                <div className="px-10 py-10 text-lg font-semibold text-neutral-400">Скоро тут будет контент</div>
+              <main className="relative flex-1 bg-white">
+                <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
+                <div className="px-10 py-8">
+                  <div className="mb-8 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-neutral-700">Скоро тут будет контент</h2>
+                    <label className="relative flex h-11 w-72 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path
+                          d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z"
+                          stroke="#9CA3AF"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path d="M21 21L16.65 16.65" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <input
+                        type="search"
+                        placeholder="Search..."
+                        className="w-full bg-transparent text-neutral-700 placeholder:text-neutral-400 outline-none"
+                      />
+                    </label>
+                  </div>
+                </div>
               </main>
             </div>
           </motion.div>
