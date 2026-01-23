@@ -21,38 +21,15 @@ type ActiveRentalsTableProps = {
   matchStartCache: React.MutableRefObject<Map<string, number>>;
 };
 
-const getMatchCacheKey = (item: Rental) => {
-  if (!item) return null;
-  if (item.steamid) return `steam-${item.steamid}`;
-  if (Number.isFinite(Number(item.id))) return `acc-${item.id}`;
-  return null;
-};
-
-const getMatchSecondsForItem = (
-  item: Rental,
-  now: number,
-  matchStartCache: Map<string, number>
-) => {
-  const key = getMatchCacheKey(item);
-  if (!item?.in_match) {
-    if (key) matchStartCache.delete(key);
-    return null;
-  }
-  if (!key) return null;
+const getMatchSecondsForItem = (item: Rental) => {
   const rawSeconds = Number(item?.match_seconds);
-  if (Number.isFinite(rawSeconds) && rawSeconds > 0) {
-    matchStartCache.set(key, now - rawSeconds * 1000);
-  } else if (!matchStartCache.has(key)) {
-    matchStartCache.set(key, now);
-  }
-  const startAt = matchStartCache.get(key);
-  if (!Number.isFinite(startAt)) return null;
-  return Math.max(0, Math.floor((now - (startAt ?? now)) / 1000));
+  if (!Number.isFinite(rawSeconds)) return null;
+  return Math.max(0, Math.floor(rawSeconds));
 };
 
 const ActiveRentalsTable: React.FC<ActiveRentalsTableProps> = ({ rentals, tick, matchStartCache }) => {
-  const now = Date.now();
   void tick;
+  void matchStartCache;
 
   if (!rentals.length) {
     return (
@@ -81,7 +58,7 @@ const ActiveRentalsTable: React.FC<ActiveRentalsTableProps> = ({ rentals, tick, 
         </thead>
         <tbody>
           {rentals.map((item) => {
-            const matchSeconds = getMatchSecondsForItem(item, now, matchStartCache.current);
+            const matchSeconds = getMatchSecondsForItem(item);
             const rentalEnd = getRentalEndTimestamp(item);
             const remainingSeconds = Number.isFinite(rentalEnd)
               ? Math.max(0, Math.floor(((rentalEnd ?? 0) - now) / 1000))

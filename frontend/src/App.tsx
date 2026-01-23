@@ -32,15 +32,15 @@ type AccountRow = {
 type RentalRow = {
   id?: string | number;
   accountName?: string;
+  login?: string | null;
   buyer?: string;
   durationSec?: number | null;
-  startedAt?: string;
+  startedAt?: string | number | null;
   status?: string;
   hero?: string;
   steamId?: string;
   presence?: PresenceData | null;
   presenceLabel?: string | null;
-  presenceObservedAt?: number | null;
   chatUrl?: string | null;
 };
 
@@ -95,6 +95,9 @@ const extractSteamId = (a: any): string => {
   }
   return stringDirect || "";
 };
+
+const normalizeKey = (value?: string | number | null) =>
+  value === null || value === undefined ? "" : String(value).trim().toLowerCase();
 
 const DashboardIcon = () => (
   <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -235,6 +238,7 @@ const NAV_ITEMS = [
   { id: "notifications", label: "Notifications", Icon: NotificationsIcon },
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
+const BOTTOM_NAV_IDS = new Set(["notifications", "settings"]);
 
 const CardUsersIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -355,6 +359,7 @@ const App: React.FC = () => {
     () => localStorage.getItem("adminUser") || sessionStorage.getItem("adminUser") || ""
   );
   const [tick, setTick] = useState(0);
+  const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
 
   const api = useMemo(
@@ -374,6 +379,36 @@ const App: React.FC = () => {
   );
 
   const apiFetch = api.apiFetch;
+
+  const rentedAccountLookup = useMemo(() => {
+    const ids = new Set<string>();
+    const logins = new Set<string>();
+    const names = new Set<string>();
+    const steamIds = new Set<string>();
+    rentalsTable.forEach((r) => {
+      if (r.id !== undefined && r.id !== null) ids.add(String(r.id));
+      const loginKey = normalizeKey(r.login);
+      if (loginKey) logins.add(loginKey);
+      const nameKey = normalizeKey(r.accountName);
+      if (nameKey) names.add(nameKey);
+      const steamKey = normalizeKey(r.steamId);
+      if (steamKey) steamIds.add(steamKey);
+    });
+    return { ids, logins, names, steamIds };
+  }, [rentalsTable]);
+
+  const isAccountRented = (acc: AccountRow) => {
+    const idKey = acc.id !== undefined && acc.id !== null ? String(acc.id) : "";
+    const loginKey = normalizeKey(acc.login);
+    const nameKey = normalizeKey(acc.name);
+    const steamKey = normalizeKey(acc.steamId);
+    return (
+      (idKey && rentedAccountLookup.ids.has(idKey)) ||
+      (loginKey && rentedAccountLookup.logins.has(loginKey)) ||
+      (nameKey && rentedAccountLookup.names.has(nameKey)) ||
+      (steamKey && rentedAccountLookup.steamIds.has(steamKey))
+    );
+  };
 
   useEffect(() => {
     const targetNav = pathToNavId(pathname);
@@ -518,7 +553,6 @@ const App: React.FC = () => {
                 r.presence_label;
               const matchSecondsRaw = Number(r.match_seconds);
               const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
-              const presenceFetchedAt = hasPresence ? Date.now() : null;
               const presence = hasPresence
                 ? {
                     in_match: !!r.in_match,
@@ -526,7 +560,6 @@ const App: React.FC = () => {
                     hero_name: r.hero_name ?? null,
                     match_time: r.match_time ?? null,
                     match_seconds: matchSeconds,
-                    fetched_at: presenceFetchedAt,
                   }
                 : null;
               const derivedStatus = presence
@@ -548,6 +581,7 @@ const App: React.FC = () => {
               return {
                 id: r.id ?? idx,
                 accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
+                login: r.login ?? null,
                 buyer: r.owner ?? r.buyer ?? r.rented_by ?? "",
                 durationSec,
                 startedAt: r.started_at ?? r.start_time ?? r.created_at ?? r.rental_start ?? r.rental_start_time,
@@ -564,7 +598,6 @@ const App: React.FC = () => {
                   (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
                 presence,
                 presenceLabel: r.presence_label ?? null,
-                presenceObservedAt: presenceFetchedAt,
               };
             })
           );
@@ -640,20 +673,38 @@ const App: React.FC = () => {
     return () => clearInterval(id);
   }, [token]);
 
-  const parseDateTime = (value?: string) => {
-    if (!value) return null;
-    let normalized = value.includes(" ") ? value.replace(" ", "T") : value;
+  const parseDateTime = (value?: string | number | null) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return null;
+      const ms = value < 1e12 ? value * 1000 : value;
+      return ms;
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric)) return null;
+      const ms = numeric < 1e12 ? numeric * 1000 : numeric;
+      return ms;
+    }
+    let normalized = raw.includes(" ") ? raw.replace(" ", "T") : raw;
     normalized = normalized.replace(/\.(\d{3})\d+/, ".$1");
     const parsed = new Date(normalized);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed.getTime();
   };
 
-  const formatDuration = (seconds: number | null | undefined, startedAt?: string) => {
+  const formatDuration = (
+    seconds: number | null | undefined,
+    startedAt?: string | number | null,
+    nowMs?: number
+  ) => {
     let remaining = seconds ?? 0;
-    if (startedAt && seconds != null) {
+    if (startedAt !== null && startedAt !== undefined && seconds != null) {
       const startedAtMs = parseDateTime(startedAt);
-      const elapsed = startedAtMs ? Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)) : 0;
+      const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
+      const elapsed = startedAtMs ? Math.max(0, Math.floor((currentMs - startedAtMs) / 1000)) : 0;
       remaining = Math.max(0, seconds - elapsed);
     }
     const h = Math.floor(remaining / 3600)
@@ -681,18 +732,20 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const getLiveMatchSeconds = (presence?: PresenceData | null, observedAt?: number | null) => {
-    const base = presence?.match_seconds;
-    if (!Number.isFinite(base)) return null;
-    if (!observedAt) return Math.floor(base || 0);
-    const delta = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
-    return Math.floor((base || 0) + delta);
+  const getMatchTimeDisplay = (presence?: PresenceData | null) => {
+    if (!presence) return null;
+    const rawSeconds = presence.match_seconds;
+    if (Number.isFinite(rawSeconds)) return formatMatchTime(rawSeconds);
+    const raw = presence.match_time;
+    if (raw === null || raw === undefined) return null;
+    const cleaned = String(raw).trim();
+    return cleaned ? cleaned : null;
   };
 
-  const formatStartTime = (value?: string) => {
-    if (!value) return "";
+  const formatStartTime = (value?: string | number | null) => {
+    if (value === null || value === undefined || value === "") return "";
     const ts = parseDateTime(value);
-    if (!ts) return value;
+    if (!ts) return String(value);
     return new Date(ts).toLocaleTimeString();
   };
 
@@ -938,7 +991,7 @@ const App: React.FC = () => {
                 <div className="text-lg font-semibold tracking-tight text-neutral-900">Funpay Automation</div>
                 <nav className="relative mt-8 flex flex-1 flex-col space-y-2">
                   <AnimatePresence>
-                    {NAV_ITEMS.filter((i) => i.id !== "settings").map((item) => {
+                    {NAV_ITEMS.filter((i) => !BOTTOM_NAV_IDS.has(i.id)).map((item) => {
                       const isActive = activeNav === item.id;
                       return (
                         <motion.button
@@ -971,13 +1024,11 @@ const App: React.FC = () => {
                       );
                     })}
                   </AnimatePresence>
-                  {(() => {
-                    const item = NAV_ITEMS.find((i) => i.id === "settings");
-                    if (!item) return null;
-                    const isActive = activeNav === item.id;
-                    return (
-                      <div className="mt-auto pb-4">
-                        <AnimatePresence>
+                  <div className="mt-auto space-y-2 pb-4">
+                    <AnimatePresence>
+                      {NAV_ITEMS.filter((i) => BOTTOM_NAV_IDS.has(i.id)).map((item) => {
+                        const isActive = activeNav === item.id;
+                        return (
                           <motion.button
                             key={item.id}
                             type="button"
@@ -1005,10 +1056,10 @@ const App: React.FC = () => {
                               {item.label}
                             </span>
                           </motion.button>
-                        </AnimatePresence>
-                      </div>
-                    );
-                  })()}
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
                 </nav>
               </aside>
               <main className="relative flex-1 bg-white">
@@ -1331,33 +1382,6 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                          <div className="mb-4 flex items-center justify-between">
-                            
-                          </div>
-                          <div className="space-y-3">
-                            {notifications.slice(0, 6).map((n) => (
-                              <div
-                                key={n.id}
-                                className="rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3 text-sm text-neutral-800"
-                              >
-                                <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500">
-                                  <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
-                                  <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
-                                </div>
-                                <div className="text-neutral-900">{n.message || "-"}</div>
-                                <div className="text-xs text-neutral-500">
-                                  Owner: {n.owner || "-"} - Account: {n.accountId || "-"}
-                                </div>
-                              </div>
-                            ))}
-                            {notifications.length === 0 && (
-                              <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                                No notifications yet.
-                              </div>
-                            )}
-                          </div>
-                        </div>
                       </div>
                     </motion.div>
                   ) : activeNav === "add" ? (
@@ -1418,17 +1442,17 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const isLive = !!presence && (presence.in_match || presence.in_game);
-                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const liveSeconds = isLive ? getLiveMatchSeconds(presence, observedAt) : null;
-                            const timer = liveSeconds != null ? formatMatchTime(liveSeconds) : "-";
+                            const timer = getMatchTimeDisplay(presence) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
                                 : "Offline";
                             const pill = statusPill(presenceLabel);
-                            const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
+                            const timeLeft =
+                              r.durationSec != null && r.startedAt != null
+                                ? formatDuration(r.durationSec, r.startedAt, now)
+                                : "-";
                             return (
                               <motion.div
                                 key={r.id ?? idx}
@@ -1464,12 +1488,12 @@ const App: React.FC = () => {
                                     href={`${PRESENCE_BASE}/${r.steamId}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                    className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
                                   >
                                     {presenceLabel}
                                   </a>
                                 ) : (
-                                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                  <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
                                     {presenceLabel}
                                   </span>
                                 )}
@@ -1694,6 +1718,9 @@ const App: React.FC = () => {
                             </div>
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {accountsTable.map((acc, idx) => {
+                            const rented = isAccountRented(acc);
+                            const stateLabel = rented ? "Rented out" : "Available";
+                            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
                             return (
                               <motion.div
                                 key={acc.id ?? idx}
@@ -1712,8 +1739,8 @@ const App: React.FC = () => {
                                   {acc.steamId || ""}
                                 </span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
-                                <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-                                  Available
+                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>
+                                  {stateLabel}
                                 </span>
                               </motion.div>
                             );
@@ -1750,6 +1777,9 @@ const App: React.FC = () => {
                             </div>
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {accountsTable.map((acc, idx) => {
+                            const rented = isAccountRented(acc);
+                            const stateLabel = rented ? "Rented out" : "Available";
+                            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
                             return (
                               <motion.div
                                 key={acc.id ?? idx}
@@ -1768,8 +1798,8 @@ const App: React.FC = () => {
                                   {acc.steamId || ""}
                                 </span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
-                                <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-                                  Available
+                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>
+                                  {stateLabel}
                                 </span>
                               </motion.div>
                             );
@@ -1806,17 +1836,17 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const isLive = !!presence && (presence.in_match || presence.in_game);
-                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const liveSeconds = isLive ? getLiveMatchSeconds(presence, observedAt) : null;
-                            const timer = liveSeconds != null ? formatMatchTime(liveSeconds) : "-";
+                            const timer = getMatchTimeDisplay(presence) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
                                 : "Offline";
                             const pill = statusPill(presenceLabel);
-                            const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
+                            const timeLeft =
+                              r.durationSec != null && r.startedAt != null
+                                ? formatDuration(r.durationSec, r.startedAt, now)
+                                : "-";
                             return (
                               <motion.div
                                 key={r.id ?? idx}
@@ -1852,12 +1882,12 @@ const App: React.FC = () => {
                                     href={`${PRESENCE_BASE}/${r.steamId}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                    className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
                                   >
                                     {presenceLabel}
                                   </a>
                                 ) : (
-                                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                  <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
                                     {presenceLabel}
                                   </span>
                                 )}
@@ -1893,5 +1923,4 @@ type PresenceData = {
   hero_name?: string | null;
   match_time?: string | null;
   match_seconds?: number | null;
-  fetched_at?: number | null;
 };
