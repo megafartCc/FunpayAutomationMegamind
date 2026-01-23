@@ -905,7 +905,7 @@ const App: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <div className="lg:col-span-3 min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                      <div className="lg:col-span-3 flex min-h-[520px] max-h-[78vh] flex-col rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                         <div className="mb-3 flex items-center justify-between">
                           <div>
                             <h3 className="text-lg font-semibold text-neutral-900">Conversation</h3>
@@ -914,7 +914,7 @@ const App: React.FC = () => {
                             </p>
                           </div>
                         </div>
-                        <div className="flex min-h-[620px] flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
+                        <div className="flex flex-1 flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
                           <div className="flex-1 space-y-3 overflow-y-auto pr-2">
                             {chatLoading && (
                               <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
@@ -947,7 +947,7 @@ const App: React.FC = () => {
                               e.preventDefault();
                               sendChatMessage();
                             }}
-                            className="mt-auto grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
+                            className="mt-1 grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
                           >
                             <textarea
                               value={chatInput}
