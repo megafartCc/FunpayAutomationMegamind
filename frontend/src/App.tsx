@@ -495,10 +495,14 @@ const App: React.FC = () => {
                   </AnimatePresence>
                 </nav>
               </aside>
-              <main className="relative flex-1 bg-white border-t border-neutral-200">
+              <main className="relative flex-1 bg-white">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
                 <div className="absolute left-0 right-0 top-[78px] h-px bg-neutral-200" />
-                <div className="pl-10 pr-10 pt-5 pb-12">
+                <motion.div
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } }}
+                  className="pl-10 pr-10 pt-5 pb-12"
+                >
                   <div className="flex items-center justify-between gap-6">
                     <div>
                       <h1 className="text-2xl font-semibold text-neutral-900">Dashboard</h1>
@@ -659,7 +663,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                </div>
+                </motion.div>
               </main>
             </div>
           </motion.div>
