@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import Toast from "./components/common/Toast";
 import LoginPage from "./pages/LoginPage";
@@ -27,6 +27,10 @@ type AccountRow = {
   steamId?: string;
   name?: string;
   mmr?: number | string | null;
+  owner?: string | null;
+  rentalStart?: string | null;
+  rentalDurationMinutes?: number | null;
+  rentalDurationHours?: number | null;
 };
 
 type RentalRow = {
@@ -335,6 +339,11 @@ const App: React.FC = () => {
     past24: null,
   });
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | number | null>(null);
+  const [assignOwner, setAssignOwner] = useState("");
+  const [extendHours, setExtendHours] = useState("");
+  const [extendMinutes, setExtendMinutes] = useState("");
+  const [accountActionBusy, setAccountActionBusy] = useState(false);
   const [rentalsTable, setRentalsTable] = useState<RentalRow[]>([]);
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -381,6 +390,23 @@ const App: React.FC = () => {
   );
 
   const apiFetch = api.apiFetch;
+
+  const selectedAccount = useMemo(() => {
+    if (selectedAccountId === null || selectedAccountId === undefined) return null;
+    return accountsTable.find((acc) => String(acc.id) === String(selectedAccountId)) || null;
+  }, [accountsTable, selectedAccountId]);
+
+  useEffect(() => {
+    if (!selectedAccount) {
+      setAssignOwner("");
+      return;
+    }
+    const owner =
+      selectedAccount.owner && String(selectedAccount.owner).trim().toUpperCase() !== "OTHER_ACCOUNT"
+        ? selectedAccount.owner
+        : "";
+    setAssignOwner(owner);
+  }, [selectedAccount]);
 
   useEffect(() => {
     let active = true;
@@ -431,6 +457,8 @@ const App: React.FC = () => {
     const loginKey = normalizeKey(acc.login);
     const nameKey = normalizeKey(acc.name);
     const steamKey = normalizeKey(acc.steamId);
+    const ownerKey = normalizeKey(acc.owner);
+    if (ownerKey) return true;
     return (
       (idKey && rentedAccountLookup.ids.has(idKey)) ||
       (loginKey && rentedAccountLookup.logins.has(loginKey)) ||
@@ -494,166 +522,174 @@ const App: React.FC = () => {
     setProfileName("");
   };
 
-  useEffect(() => {
-    const loadOverview = async () => {
-      try {
-        const [stats, activeRentals, accounts] = await Promise.all([
-          apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence,chat").catch(() => ({ items: [] })),
-          apiFetch<{ items: unknown[] }>(
-            "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
-          ).catch(() => ({ items: [] })),
-        ]);
+  const loadOverview = useCallback(async () => {
+    try {
+      const [stats, activeRentals, accounts] = await Promise.all([
+        apiFetch<Record<string, number>>("/api/stats").catch(() => null),
+        apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence,chat").catch(() => ({ items: [] })),
+        apiFetch<{ items: unknown[] }>(
+          "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
+        ).catch(() => ({ items: [] })),
+      ]);
 
-        const totalAccounts =
-          stats?.accounts_total ??
-          (Array.isArray(accounts?.items) ? accounts.items.length : null);
+      const totalAccounts =
+        stats?.accounts_total ??
+        (Array.isArray(accounts?.items) ? accounts.items.length : null);
 
-        const active =
-          stats?.active_rentals ??
-          (Array.isArray(activeRentals?.items) ? activeRentals.items.length : null);
+      const active =
+        stats?.active_rentals ??
+        (Array.isArray(activeRentals?.items) ? activeRentals.items.length : null);
 
-        const past24 = stats?.rentals_last24 ?? null;
+      const past24 = stats?.rentals_last24 ?? null;
 
-        const freeAccounts =
-          stats?.free_accounts ??
-          (totalAccounts != null && active != null ? Math.max(totalAccounts - active, 0) : null);
+      const freeAccounts =
+        stats?.free_accounts ??
+        (totalAccounts != null && active != null ? Math.max(totalAccounts - active, 0) : null);
 
-        setOverview({
-          totalAccounts,
-          activeRentals: active,
-          freeAccounts,
-          past24,
-        });
+      setOverview({
+        totalAccounts,
+        activeRentals: active,
+        freeAccounts,
+        past24,
+      });
 
-        const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
-        const accountSteamMap = new Map<string, string>();
+      const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
+      const accountSteamMap = new Map<string, string>();
 
-        // inventory table
-        if (accountsList.length) {
-          const mappedAccounts = accountsList.map((a, idx) => {
-            const name = (() => {
-              const preferred =
-                a.account_name ??
-                a.account ??
-                a.acc_name ??
-                a.title ??
-                a.name ??
-                a.login ??
-                "";
-              const cleaned = String(preferred).trim();
-              return cleaned || `ID ${a.id ?? idx}`;
-            })();
-            const login = a.login ?? "";
-            const steamId = extractSteamId(a);
-            if (steamId) {
-              if (login) accountSteamMap.set(login, steamId);
-              accountSteamMap.set(name, steamId);
-            }
-            return {
-              id: a.id ?? idx,
-              name,
-              login,
-              password: a.password ?? a.pass ?? "",
-              steamId,
-              mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
-            };
-          });
-          setAccountsTable(mappedAccounts);
-        }
-
-        // rentals table
-        if (Array.isArray(activeRentals?.items)) {
-          setRentalsTable(
-            (activeRentals.items as any[]).map((r, idx) => {
-              const hasPresence =
-                r.in_match !== undefined ||
-                r.in_game !== undefined ||
-                r.match_time ||
-                r.match_seconds !== undefined ||
-                r.hero_name ||
-                r.presence_label;
-              const matchSecondsRaw = Number(r.match_seconds);
-              const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
-              const presenceFetchedAt = hasPresence ? Date.now() : null;
-              const presence = hasPresence
-                ? {
-                    in_match: !!r.in_match,
-                    in_game: !!r.in_game,
-                    hero_name: r.hero_name ?? null,
-                    match_time: r.match_time ?? null,
-                    match_seconds: matchSeconds,
-                    fetched_at: presenceFetchedAt,
-                  }
-                : null;
-              const derivedStatus = presence
-                ? presence.in_match
-                  ? "In match"
-                  : presence.in_game
-                    ? "In game"
-                    : "Offline"
-                : "";
-              const durationSec = (() => {
-                const explicit = Number(r.duration_sec ?? r.duration_seconds ?? r.seconds);
-                if (Number.isFinite(explicit) && explicit >= 0) return explicit;
-                const minutesRaw = Number(r.rental_duration_minutes ?? r.rental_minutes);
-                if (Number.isFinite(minutesRaw) && minutesRaw > 0) return minutesRaw * 60;
-                const hoursRaw = Number(r.rental_duration);
-                if (Number.isFinite(hoursRaw) && hoursRaw > 0) return hoursRaw * 3600;
-                return null;
-              })();
-              return {
-                id: r.id ?? idx,
-                accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
-                login: r.login ?? null,
-                buyer: r.owner ?? r.buyer ?? r.rented_by ?? "",
-                durationSec,
-                startedAt: r.started_at ?? r.start_time ?? r.created_at ?? r.rental_start ?? r.rental_start_time,
-                status: derivedStatus,
-                hero: r.hero ?? r.character ?? "",
-                chatUrl: r.chat_url ?? r.chatUrl ?? r.chat ?? r.chat_link ?? null,
-                steamId:
-                  r.steamid ??
-                  r.steam_id ??
-                  r.steamId ??
-                  extractSteamId(r) ??
-                  extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }) ??
-                  (r.login ? accountSteamMap.get(r.login) : undefined) ??
-                  (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
-                presence,
-                presenceLabel: r.presence_label ?? null,
-                presenceObservedAt: presenceFetchedAt,
-              };
-            })
+      // inventory table
+      if (accountsList.length) {
+        const mappedAccounts = accountsList.map((a, idx) => {
+          const name = (() => {
+            const preferred =
+              a.account_name ??
+              a.account ??
+              a.acc_name ??
+              a.title ??
+              a.name ??
+              a.login ??
+              "";
+            const cleaned = String(preferred).trim();
+            return cleaned || `ID ${a.id ?? idx}`;
+          })();
+          const login = a.login ?? "";
+          const steamId = extractSteamId(a);
+          if (steamId) {
+            if (login) accountSteamMap.set(login, steamId);
+            accountSteamMap.set(name, steamId);
+          }
+          const durationHoursRaw = Number(a.rental_duration ?? a.rental_hours ?? a.duration_hours);
+          const durationMinutesRaw = Number(
+            a.rental_duration_minutes ?? a.rental_minutes ?? a.duration_minutes
           );
-        }
-      } catch {
-        // ignore overview load errors
+          return {
+            id: a.id ?? idx,
+            name,
+            login,
+            password: a.password ?? a.pass ?? "",
+            steamId,
+            mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
+            owner: a.owner ?? null,
+            rentalStart: a.rental_start ?? a.rentalStart ?? null,
+            rentalDurationMinutes: Number.isFinite(durationMinutesRaw) ? durationMinutesRaw : null,
+            rentalDurationHours: Number.isFinite(durationHoursRaw) ? durationHoursRaw : null,
+          };
+        });
+        setAccountsTable(mappedAccounts);
       }
-    };
 
-    const loadNotifications = async () => {
-      try {
+      // rentals table
+      if (Array.isArray(activeRentals?.items)) {
+        setRentalsTable(
+          (activeRentals.items as any[]).map((r, idx) => {
+            const hasPresence =
+              r.in_match !== undefined ||
+              r.in_game !== undefined ||
+              r.match_time ||
+              r.match_seconds !== undefined ||
+              r.hero_name ||
+              r.presence_label;
+            const matchSecondsRaw = Number(r.match_seconds);
+            const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
+            const presenceFetchedAt = hasPresence ? Date.now() : null;
+            const presence = hasPresence
+              ? {
+                  in_match: !!r.in_match,
+                  in_game: !!r.in_game,
+                  hero_name: r.hero_name ?? null,
+                  match_time: r.match_time ?? null,
+                  match_seconds: matchSeconds,
+                  fetched_at: presenceFetchedAt,
+                }
+              : null;
+            const derivedStatus = presence
+              ? presence.in_match
+                ? "In match"
+                : presence.in_game
+                  ? "In game"
+                  : "Offline"
+              : "";
+            const durationSec = (() => {
+              const explicit = Number(r.duration_sec ?? r.duration_seconds ?? r.seconds);
+              if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+              const minutesRaw = Number(r.rental_duration_minutes ?? r.rental_minutes);
+              if (Number.isFinite(minutesRaw) && minutesRaw > 0) return minutesRaw * 60;
+              const hoursRaw = Number(r.rental_duration);
+              if (Number.isFinite(hoursRaw) && hoursRaw > 0) return hoursRaw * 3600;
+              return null;
+            })();
+            return {
+              id: r.id ?? idx,
+              accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
+              login: r.login ?? null,
+              buyer: r.owner ?? r.buyer ?? r.rented_by ?? "",
+              durationSec,
+              startedAt: r.started_at ?? r.start_time ?? r.created_at ?? r.rental_start ?? r.rental_start_time,
+              status: derivedStatus,
+              hero: r.hero ?? r.character ?? "",
+              chatUrl: r.chat_url ?? r.chatUrl ?? r.chat ?? r.chat_link ?? null,
+              steamId:
+                r.steamid ??
+                r.steam_id ??
+                r.steamId ??
+                extractSteamId(r) ??
+                extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }) ??
+                (r.login ? accountSteamMap.get(r.login) : undefined) ??
+                (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
+              presence,
+              presenceLabel: r.presence_label ?? null,
+              presenceObservedAt: presenceFetchedAt,
+            };
+          })
+        );
+      }
+    } catch {
+      // ignore overview load errors
+    }
+  }, [apiFetch]);
+
+  const loadNotifications = useCallback(async () => {
+    try {
       const data = await apiFetch<{ items: any[] }>("/api/notifications?limit=50").catch(() => ({ items: [] }));
-        const mapped: NotificationItem[] = (data.items || []).map((n, idx) => ({
-          id: n.id ?? idx,
-          level: n.level ?? n.type ?? "info",
-          message: n.message ?? n.text ?? "",
-          createdAt: n.created_at ?? n.time ?? "",
-          owner: n.owner ?? n.user ?? "",
-          accountId: n.account_id ?? n.account ?? "",
-        }));
-        setNotifications(mapped);
-      } catch {
-        setNotifications([]);
-      }
-    };
+      const mapped: NotificationItem[] = (data.items || []).map((n, idx) => ({
+        id: n.id ?? idx,
+        level: n.level ?? n.type ?? "info",
+        message: n.message ?? n.text ?? "",
+        createdAt: n.created_at ?? n.time ?? "",
+        owner: n.owner ?? n.user ?? "",
+        accountId: n.account_id ?? n.account ?? "",
+      }));
+      setNotifications(mapped);
+    } catch {
+      setNotifications([]);
+    }
+  }, [apiFetch]);
 
+  useEffect(() => {
     if (token) {
       loadOverview();
       loadNotifications();
     }
-  }, [token, apiFetch]);
+  }, [token, loadOverview, loadNotifications]);
 
   // load chat list when on chats tab
   useEffect(() => {
@@ -852,6 +888,96 @@ const App: React.FC = () => {
       await Promise.all([loadOverview()]);
     } finally {
       setSubmittingAccount(false);
+    }
+  };
+
+  const handleAssignAccount = async () => {
+    if (!selectedAccount) {
+      showToast("Select an account first.", "error");
+      return;
+    }
+    if (accountActionBusy) return;
+    const owner = assignOwner.trim();
+    if (!owner) {
+      showToast("Enter a buyer username.", "error");
+      return;
+    }
+    const accountId = selectedAccount.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid account selected.", "error");
+      return;
+    }
+    setAccountActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/assign`, {
+        method: "POST",
+        body: JSON.stringify({ owner }),
+      });
+      showToast("Rental assigned.");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to assign rental.", "error");
+    } finally {
+      setAccountActionBusy(false);
+    }
+  };
+
+  const handleExtendAccount = async () => {
+    if (!selectedAccount) {
+      showToast("Select an account first.", "error");
+      return;
+    }
+    if (accountActionBusy) return;
+    const accountId = selectedAccount.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid account selected.", "error");
+      return;
+    }
+    const hoursValue = parseInt(extendHours, 10);
+    const minutesValue = parseInt(extendMinutes, 10);
+    const hours = Number.isFinite(hoursValue) && hoursValue > 0 ? hoursValue : 0;
+    const minutes = Number.isFinite(minutesValue) && minutesValue > 0 ? minutesValue : 0;
+    if (!hours && !minutes) {
+      showToast("Enter a time extension.", "error");
+      return;
+    }
+    setAccountActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/extend`, {
+        method: "POST",
+        body: JSON.stringify({ hours, minutes }),
+      });
+      showToast("Rental extended.");
+      setExtendHours("");
+      setExtendMinutes("");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to extend rental.", "error");
+    } finally {
+      setAccountActionBusy(false);
+    }
+  };
+
+  const handleReleaseAccount = async () => {
+    if (!selectedAccount) {
+      showToast("Select an account first.", "error");
+      return;
+    }
+    if (accountActionBusy) return;
+    const accountId = selectedAccount.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid account selected.", "error");
+      return;
+    }
+    setAccountActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/release`, { method: "POST" });
+      showToast("Rental released.");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to release rental.", "error");
+    } finally {
+      setAccountActionBusy(false);
     }
   };
 
@@ -1738,60 +1864,255 @@ const App: React.FC = () => {
                       animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
                       className="mt-8"
                     >
-                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="mb-4 flex items-center justify-between">
-                          <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <div className="min-w-[1000px]">
-                            <div
-                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
-                              style={{ gridTemplateColumns: INVENTORY_GRID }}
-                            >
-                              <span>ID</span>
-                              <span>Name</span>
-                              <span>Login</span>
-                              <span>Password</span>
-                              <span>Steam ID</span>
-                              <span>MMR</span>
-                              <span className="text-right">State</span>
+                      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
+                              <p className="text-xs text-neutral-500">Select an account to manage rentals.</p>
                             </div>
-                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
-                          {accountsTable.map((acc, idx) => {
-                            const rented = isAccountRented(acc);
-                            const stateLabel = rented ? "Rented out" : "Available";
-                            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
-                            return (
-                              <motion.div
-                                key={acc.id ?? idx}
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid min-w-full items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                            {selectedAccount ? (
+                              <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                                Selected ID {selectedAccount.id ?? "-"}
+                              </span>
+                            ) : (
+                              <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                                No account selected
+                              </span>
+                            )}
+                          </div>
+                          <div className="overflow-x-auto">
+                            <div className="min-w-[1000px]">
+                              <div
+                                className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
                                 style={{ gridTemplateColumns: INVENTORY_GRID }}
                               >
-                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
-                                <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
-                                  {acc.name || "Account"}
-                                </span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>{acc.login || ""}</span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>{acc.password || ""}</span>
-                                <span className="min-w-0 truncate font-mono text-xs leading-tight text-neutral-800 tabular-nums" title={acc.steamId || ""}>
-                                  {acc.steamId || ""}
-                                </span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
-                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>
-                                  {stateLabel}
-                                </span>
-                              </motion.div>
-                            );
-                          })}
-                          {accountsTable.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              No accounts loaded yet.
-                            </div>
-                          )}
+                                <span>ID</span>
+                                <span>Name</span>
+                                <span>Login</span>
+                                <span>Password</span>
+                                <span>Steam ID</span>
+                                <span>MMR</span>
+                                <span className="text-right">State</span>
+                              </div>
+                              <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
+                                {accountsTable.map((acc, idx) => {
+                                  const rented = isAccountRented(acc);
+                                  const stateLabel = rented ? "Rented out" : "Available";
+                                  const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+                                  const rowId = acc.id ?? idx;
+                                  const isSelected =
+                                    selectedAccountId !== null && String(selectedAccountId) === String(rowId);
+                                  return (
+                                    <motion.div
+                                      key={rowId}
+                                      role="button"
+                                      tabIndex={0}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          setSelectedAccountId((prev) =>
+                                            prev !== null && String(prev) === String(rowId) ? null : rowId
+                                          );
+                                        }
+                                      }}
+                                      onClick={() =>
+                                        setSelectedAccountId((prev) =>
+                                          prev !== null && String(prev) === String(rowId) ? null : rowId
+                                        )
+                                      }
+                                      initial={{ opacity: 0, y: 10 }}
+                                      animate={{
+                                        opacity: 1,
+                                        y: 0,
+                                        transition: { duration: 0.25, delay: idx * 0.03, ease: EASE },
+                                      }}
+                                      className={`grid min-w-full items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
+                                        isSelected
+                                          ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
+                                          : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                      } cursor-pointer`}
+                                      style={{ gridTemplateColumns: INVENTORY_GRID }}
+                                    >
+                                      <span className="min-w-0 font-semibold text-neutral-900" title={String(rowId)}>
+                                        {rowId}
+                                      </span>
+                                      <span
+                                        className="min-w-0 truncate font-semibold leading-tight text-neutral-900"
+                                        title={acc.name || "Account"}
+                                      >
+                                        {acc.name || "Account"}
+                                      </span>
+                                      <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>
+                                        {acc.login || ""}
+                                      </span>
+                                      <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>
+                                        {acc.password || ""}
+                                      </span>
+                                      <span
+                                        className="min-w-0 truncate font-mono text-xs leading-tight text-neutral-800 tabular-nums"
+                                        title={acc.steamId || ""}
+                                      >
+                                        {acc.steamId || ""}
+                                      </span>
+                                      <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>
+                                        {acc.mmr ?? ""}
+                                      </span>
+                                      <span
+                                        className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}
+                                      >
+                                        {stateLabel}
+                                      </span>
+                                    </motion.div>
+                                  );
+                                })}
+                                {accountsTable.length === 0 && (
+                                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                    No accounts loaded yet.
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
+                        </div>
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-4 flex items-center justify-between">
+                            <h3 className="text-lg font-semibold text-neutral-900">Rental controls</h3>
+                            <span className="text-xs text-neutral-500">
+                              {selectedAccount ? "Ready" : "Select an account"}
+                            </span>
+                          </div>
+                          {selectedAccount ? (
+                            (() => {
+                              const rented = isAccountRented(selectedAccount);
+                              const stateLabel = rented ? "Rented out" : "Available";
+                              const stateClass = rented
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-emerald-50 text-emerald-600";
+                              const ownerRaw = selectedAccount.owner ? String(selectedAccount.owner).trim() : "";
+                              const ownerKey = normalizeKey(ownerRaw);
+                              const ownerLabel =
+                                ownerKey && ownerKey !== "other_account"
+                                  ? ownerRaw
+                                  : ownerKey === "other_account"
+                                    ? "Reserved"
+                                    : "-";
+                              const startMs = parseDateTime(selectedAccount.rentalStart);
+                              const startLabel = startMs ? new Date(startMs).toLocaleString() : "-";
+                              const totalMinutes =
+                                selectedAccount.rentalDurationMinutes ??
+                                (selectedAccount.rentalDurationHours ? selectedAccount.rentalDurationHours * 60 : null);
+                              const hoursLabel =
+                                typeof totalMinutes === "number" && totalMinutes >= 0
+                                  ? `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`
+                                  : "-";
+                              const canAssign = !ownerKey;
+                              const canExtend = ownerKey && ownerKey !== "other_account";
+                              const canRelease = !!ownerKey;
+                              return (
+                                <div className="space-y-4">
+                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                          Selected account
+                                        </div>
+                                        <div className="mt-1 text-sm font-semibold text-neutral-900">
+                                          {selectedAccount.name || "Account"}
+                                        </div>
+                                      </div>
+                                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>
+                                        {stateLabel}
+                                      </span>
+                                    </div>
+                                    <div className="mt-3 grid gap-1 text-xs text-neutral-600">
+                                      <span>Login: {selectedAccount.login || "-"}</span>
+                                      <span>Steam ID: {selectedAccount.steamId || "-"}</span>
+                                      <span>Owner: {ownerLabel}</span>
+                                      <span>Rental start: {startLabel}</span>
+                                      <span>Duration: {hoursLabel}</span>
+                                    </div>
+                                  </div>
+                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                                    <div className="mb-2 text-sm font-semibold text-neutral-800">Assign rental</div>
+                                    <p className="text-xs text-neutral-500">
+                                      The countdown starts after the buyer requests the code.
+                                    </p>
+                                    <div className="mt-3 space-y-3">
+                                      <input
+                                        value={assignOwner}
+                                        onChange={(e) => setAssignOwner(e.target.value)}
+                                        placeholder="Buyer username"
+                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                      />
+                                      <button
+                                        onClick={handleAssignAccount}
+                                        disabled={accountActionBusy || !assignOwner.trim() || !canAssign}
+                                        className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                                      >
+                                        Assign rental
+                                      </button>
+                                      {!canAssign && (
+                                        <div className="text-xs text-neutral-500">
+                                          Release the account before assigning a new buyer.
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                                    <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                      <input
+                                        value={extendHours}
+                                        onChange={(e) => setExtendHours(e.target.value)}
+                                        placeholder="Hours"
+                                        type="number"
+                                        min="0"
+                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                      />
+                                      <input
+                                        value={extendMinutes}
+                                        onChange={(e) => setExtendMinutes(e.target.value)}
+                                        placeholder="Minutes"
+                                        type="number"
+                                        min="0"
+                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                      />
+                                    </div>
+                                    <button
+                                      onClick={handleExtendAccount}
+                                      disabled={accountActionBusy || !canExtend}
+                                      className="mt-3 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                                    >
+                                      Extend time
+                                    </button>
+                                    {!canExtend && (
+                                      <div className="mt-2 text-xs text-neutral-500">
+                                        Extension is available only for active rentals.
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                                    <div className="mb-2 text-sm font-semibold text-neutral-800">End rental</div>
+                                    <p className="text-xs text-neutral-500">
+                                      Clears the owner and stops the rental immediately.
+                                    </p>
+                                    <button
+                                      onClick={handleReleaseAccount}
+                                      disabled={accountActionBusy || !canRelease}
+                                      className="mt-3 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                                    >
+                                      Release rental
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              Select an account to unlock rental actions.
+                            </div>
+                          )}
                         </div>
                       </div>
                     </motion.div>
@@ -1820,15 +2141,37 @@ const App: React.FC = () => {
                             const rented = isAccountRented(acc);
                             const stateLabel = rented ? "Rented out" : "Available";
                             const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+                            const rowId = acc.id ?? idx;
+                            const isSelected =
+                              selectedAccountId !== null && String(selectedAccountId) === String(rowId);
                             return (
                               <motion.div
-                                key={acc.id ?? idx}
+                                key={rowId}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    setSelectedAccountId((prev) =>
+                                      prev !== null && String(prev) === String(rowId) ? null : rowId
+                                    );
+                                  }
+                                }}
+                                onClick={() =>
+                                  setSelectedAccountId((prev) =>
+                                    prev !== null && String(prev) === String(rowId) ? null : rowId
+                                  )
+                                }
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className={`grid items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
+                                  isSelected
+                                    ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
+                                    : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                } cursor-pointer`}
                                 style={{ gridTemplateColumns: INVENTORY_GRID, minWidth: "100%" }}
                               >
-                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
+                                <span className="min-w-0 font-semibold text-neutral-900" title={String(rowId)}>{rowId}</span>
                                 <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
                                   {acc.name || "Account"}
                                 </span>
