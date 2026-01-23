@@ -15,6 +15,7 @@ from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1084,15 +1085,16 @@ def _payload_etag(payload: Any) -> str:
 
 
 def _etag_response(request: Request, payload: Any) -> Response:
-    etag = _payload_etag(payload)
+    encoded_payload = jsonable_encoder(payload)
+    etag = _payload_etag(encoded_payload)
     headers = {
         "ETag": etag,
-        "Cache-Control": "private, max-age=0, must-revalidate",
+        "Cache-Control": "private, max-age=0, must-revalidate, stale-while-revalidate=30, stale-if-error=300",
         "Vary": "Cookie",
     }
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
-    return JSONResponse(content=payload, headers=headers)
+    return JSONResponse(content=encoded_payload, headers=headers)
 
 
 def _format_match_time(seconds: int | float | None) -> str | None:
