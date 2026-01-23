@@ -24,17 +24,19 @@ type AccountRow = {
   mmr?: number | string | null;
 };
 
-type RentalRow = {
-  id?: string | number;
-  accountName?: string;
-  buyer?: string;
-  durationSec?: number;
-  startedAt?: string;
-  status?: string;
-  hero?: string;
-};
+  type RentalRow = {
+    id?: string | number;
+    accountName?: string;
+    buyer?: string;
+    durationSec?: number;
+    startedAt?: string;
+    status?: string;
+    hero?: string;
+    steamId?: string;
+    presence?: PresenceData | null;
+  };
 
-type NotificationItem = {
+  type NotificationItem = {
   id?: string | number;
   level?: string;
   message?: string;
@@ -307,6 +309,7 @@ const App: React.FC = () => {
     () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
   );
   const [submittingAccount, setSubmittingAccount] = useState(false);
+  const [presenceCache, setPresenceCache] = useState<Record<string, PresenceData>>({});
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -338,6 +341,29 @@ const App: React.FC = () => {
       setPathname(desired);
     }
   }, [token, pathname]);
+
+  // fetch presence for rentals
+  useEffect(() => {
+    const ids = rentalsTable
+      .map((r) => r.steamId)
+      .filter((id): id is string => !!id && !(presenceCache as any)[id]);
+    if (!ids.length) return;
+    const controller = new AbortController();
+    const base = (process.env.REACT_APP_PRESENCE_URL || "/presence").replace(/\/$/, "");
+    Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(`${base}/${id}`, { signal: controller.signal });
+          if (!res.ok) throw new Error("bad status");
+          const data = (await res.json()) as PresenceData;
+          setPresenceCache((prev) => ({ ...prev, [id]: data }));
+        } catch {
+          // ignore per-id errors
+        }
+      })
+    );
+    return () => controller.abort();
+  }, [rentalsTable]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
@@ -437,6 +463,12 @@ const App: React.FC = () => {
               startedAt: r.started_at ?? r.start_time ?? r.created_at,
               status: r.status ?? r.presence ?? "",
               hero: r.hero ?? r.character ?? "",
+              steamId:
+                r.steamid ??
+                r.steam_id ??
+                r.steamId ??
+                extractSteamId(r) ??
+                extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }),
             }))
           );
         }
@@ -1087,24 +1119,27 @@ const App: React.FC = () => {
                         <div className="text-sm text-neutral-500">Updated live every minute</div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
+                        <div className="grid grid-cols-8 gap-2 text-xs font-semibold text-neutral-500">
                           <span>ID</span>
                           <span>Account</span>
                           <span>Buyer</span>
                           <span>Started</span>
                           <span>Remaining</span>
                           <span>Hero</span>
+                          <span>Timer</span>
                           <span className="text-right">Presence</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
+                            const presence = r.steamId ? presenceCache[r.steamId] : null;
+                            const timer = presence?.match_time || "";
                             return (
                               <motion.div
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid grid-cols-8 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                               >
                                 <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="truncate text-neutral-800">{r.accountName || ""}</span>
@@ -1115,8 +1150,15 @@ const App: React.FC = () => {
                                 <span className="truncate font-mono text-neutral-900">
                                   {formatDuration(r.durationSec ?? null, r.startedAt)}
                                 </span>
-                                <span className="truncate text-neutral-700">{r.hero || ""}</span>
-                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{pill.label}</span>
+                                <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
+                                <span className="truncate font-mono text-neutral-700">{timer}</span>
+                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                  {presence?.in_match
+                                    ? "In match"
+                                    : presence?.in_game
+                                      ? "In game"
+                                      : pill.label}
+                                </span>
                               </motion.div>
                             );
                           })}
@@ -1335,3 +1377,9 @@ const App: React.FC = () => {
 };
 
 export default App;
+type PresenceData = {
+  in_game?: boolean;
+  in_match?: boolean;
+  hero_name?: string | null;
+  match_time?: string | null;
+};
