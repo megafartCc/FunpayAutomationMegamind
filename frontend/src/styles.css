@@ -9,7 +9,9 @@
     @apply font-sans;
   }
   .dark body {
-    @apply bg-slate-950 text-slate-100;
+    background:
+      radial-gradient(1400px 900px at 15% -10%, #1e293b 0%, #0b1220 55%, #05070d 100%);
+    color: #e2e8f0;
   }
 }
 
@@ -62,45 +64,51 @@ input[type="password"]::-ms-clear {
 
 @layer utilities {
   .dark .bg-white {
-    @apply bg-slate-900;
+    background-color: #0f172a;
   }
   .dark .bg-neutral-50 {
-    @apply bg-slate-900/70;
+    background-color: #0b1220;
   }
   .dark .bg-neutral-100 {
-    @apply bg-slate-800;
+    background-color: #111827;
   }
   .dark .text-neutral-900 {
-    @apply text-slate-50;
+    color: #f8fafc;
   }
   .dark .text-neutral-800 {
-    @apply text-slate-100;
+    color: #e2e8f0;
   }
   .dark .text-neutral-700 {
-    @apply text-slate-200;
+    color: #cbd5f5;
   }
   .dark .text-neutral-600 {
-    @apply text-slate-300;
+    color: #94a3b8;
   }
   .dark .text-neutral-500 {
-    @apply text-slate-400;
+    color: #94a3b8;
   }
   .dark .text-neutral-400 {
-    @apply text-slate-500;
+    color: #64748b;
   }
   .dark .text-slate-900 {
-    @apply text-slate-100;
+    color: #e2e8f0;
   }
   .dark .text-slate-800 {
-    @apply text-slate-200;
+    color: #cbd5f5;
   }
   .dark .border-neutral-200 {
-    @apply border-slate-700;
+    border-color: #1e293b;
   }
   .dark .border-neutral-100 {
-    @apply border-slate-800;
+    border-color: #162033;
   }
   .dark .border-neutral-300 {
-    @apply border-slate-700;
+    border-color: #243149;
+  }
+  .dark .shadow-neutral-200\/70 {
+    box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.9);
+  }
+  .dark .shadow-neutral-200 {
+    box-shadow: 0 12px 28px -24px rgba(15, 23, 42, 0.85);
   }
 }

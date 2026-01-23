@@ -766,10 +766,15 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const getMatchTimeDisplay = (presence?: PresenceData | null) => {
+  const getMatchTimeDisplay = (presence?: PresenceData | null, observedAt?: number | null, nowMs?: number) => {
     if (!presence) return null;
     const rawSeconds = presence.match_seconds;
-    if (Number.isFinite(rawSeconds)) return formatMatchTime(rawSeconds);
+    if (Number.isFinite(rawSeconds)) {
+      const base = Math.floor(rawSeconds);
+      const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
+      const delta = observedAt ? Math.max(0, Math.floor((currentMs - observedAt) / 1000)) : 0;
+      return formatMatchTime(base + delta);
+    }
     const raw = presence.match_time;
     if (raw === null || raw === undefined) return null;
     const cleaned = String(raw).trim();
@@ -1388,7 +1393,7 @@ const App: React.FC = () => {
                         <div className="mb-3">
                           <h3 className="text-lg font-semibold text-neutral-900">Funpay Profile Settings</h3>
                         </div>
-                        <div className="space-y-3">
+                        <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
                           <ToggleRow label="Auto Raise" enabled={autoRaise} onChange={setAutoRaise} />
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
@@ -1482,7 +1487,8 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1876,7 +1882,8 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game

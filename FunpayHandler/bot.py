@@ -423,6 +423,13 @@ class FunpayBot:
         cleaned = self._clean_account_label(name or "")
         return cleaned or "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
 
+    def _format_rental_status(self, account: dict, current_time: datetime) -> tuple[str | None, str]:
+        rental_start = account.get("rental_start")
+        if not rental_start:
+            return None, "\u043d\u0435 \u043d\u0430\u0447\u0430\u0442\u043e (\u043e\u0436\u0438\u0434\u0430\u0435\u043c !\u043a\u043e\u0434)"
+        _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+        return expiry_str, remaining_str
+
     def _handle_new_order(self, event: Any) -> None:
         self._process_order(event, source="NEW_ORDER")
 
@@ -600,7 +607,7 @@ class FunpayBot:
 
             refreshed = self._db.get_account_by_id(account["id"])
             current_time = datetime.now(tz=MOSCOW_TZ)
-            _, expiry_str, remaining_str = get_remaining_time(refreshed, current_time)
+            expiry_str, remaining_str = self._format_rental_status(refreshed, current_time)
             duration_label = format_duration_minutes(unit_minutes * amount)
             display_name = self._display_account_name(account.get("account_name"))
 
@@ -618,7 +625,8 @@ class FunpayBot:
                 f"Лот: №{lot_number}\n"
                 f"ID: {account['id']}\n"
                 f"Аккаунт: {display_name}\n"
-                f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}{note}",
+                + (f"Истекает: {expiry_str} МСК | " if expiry_str else "")
+                + f"Осталось: {remaining_str}{note}",
             )
             self._db.log_order_event(
                 order_id=str(event.order.id),
@@ -739,21 +747,18 @@ class FunpayBot:
 
         account = self._db.get_account_by_id(rental["id"])
         if account:
-            rental_start = account["rental_start"]
-            if isinstance(rental_start, datetime):
-                start_dt = rental_start
-            else:
-                start_dt = datetime.strptime(rental_start, "%Y-%m-%d %H:%M:%S")
-            duration_minutes = get_duration_minutes(account)
-            expiry_time = start_dt + timedelta(minutes=duration_minutes)
-            acc.send_message(
-                chat_id,
-                f"ID: {rental['id']}\n"
-                f"Логин: {rental['login']}\n"
-                f"Пароль: {rental['password']}\n"
-                f"Истекает: {expiry_time.strftime('%H:%M:%S')} МСК\n"
-                f"{COMMANDS_INLINE}",
-            )
+            current_time = datetime.now(tz=MOSCOW_TZ)
+            expiry_str, remaining_str = self._format_rental_status(account, current_time)
+            lines = [
+                f"ID: {rental['id']}",
+                f"Логин: {rental['login']}",
+                f"Пароль: {rental['password']}",
+            ]
+            if expiry_str:
+                lines.append(f"Истекает: {expiry_str} МСК")
+            lines.append(f"Осталось: {remaining_str}")
+            lines.append(f"{COMMANDS_INLINE}")
+            acc.send_message(chat_id, "\n".join(lines))
 
         send_message_to_admin(
             "RENTAL EXTENDED\n\n"
@@ -1098,7 +1103,7 @@ class FunpayBot:
             choice = match_account_choice(raw_text, accounts)
             if choice:
                 current_time = datetime.now(tz=MOSCOW_TZ)
-                _, expiry_str, remaining_str = get_remaining_time(choice, current_time)
+                expiry_str, remaining_str = self._format_rental_status(choice, current_time)
                 display_name = self._display_account_name(choice.get("account_name"))
                 acc.send_message(
                     chat_id,
@@ -1107,7 +1112,8 @@ class FunpayBot:
                     + f"Аккаунт: {display_name}\n"
                     + f"Логин: {choice['login']}\n"
                     + f"Пароль: {choice['password']}\n"
-                    + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
+                    + (f"Истекает: {expiry_str} МСК | " if expiry_str else "")
+                    + f"Осталось: {remaining_str}",
                 )
                 self._pending_account_choice.pop(owner, None)
             else:
@@ -1156,7 +1162,7 @@ class FunpayBot:
             current_time = datetime.now(tz=MOSCOW_TZ)
             if len(accounts) == 1:
                 account = accounts[0]
-                _, expiry_str, remaining_str = get_remaining_time(account, current_time)
+                expiry_str, remaining_str = self._format_rental_status(account, current_time)
                 display_name = self._display_account_name(account.get("account_name"))
                 acc.send_message(
                     chat_id,
@@ -1165,15 +1171,19 @@ class FunpayBot:
                     + f"Аккаунт: {display_name}\n"
                     + f"Логин: {account['login']}\n"
                     + f"Пароль: {account['password']}\n"
-                    + f"Истекает: {expiry_str} МСК | Осталось: {remaining_str}",
+                    + (f"Истекает: {expiry_str} МСК | " if expiry_str else "")
+                    + f"Осталось: {remaining_str}",
                 )
                 return
 
             lines = [USER.choose_account_prompt]
             for account in accounts:
-                _, _, remaining_str = get_remaining_time(account, current_time)
+                expiry_str, remaining_str = self._format_rental_status(account, current_time)
                 display_name = self._display_account_name(account.get("account_name"))
-                lines.append(f"{account['id']}) {display_name} ({account['login']}) — осталось {remaining_str}")
+                if expiry_str:
+                    lines.append(f"{account['id']}) {display_name} ({account['login']}) — осталось {remaining_str}")
+                else:
+                    lines.append(f"{account['id']}) {display_name} ({account['login']}) — не начато (ожидаем !код)")
             self._pending_account_choice[owner] = accounts
             acc.send_message(chat_id, "\n".join(lines))
         except Exception as exc:
