@@ -454,6 +454,7 @@ const CACHE_TTLS = {
   chatList: 15 * 1000,
   chatHistory: 8 * 1000,
   orders: 5 * 60 * 1000,
+  blacklist: 2 * 60 * 1000,
 };
 
 const readCache = <T,>(key: string, maxAgeMs?: number) => {
@@ -1140,30 +1141,35 @@ const App: React.FC = () => {
     [token, swrFetch, mapChatMessages]
   );
 
-  const loadBlacklist = async (query?: string) => {
-    if (!token) return;
-    setBlacklistLoading(true);
-    try {
+  const loadBlacklist = useCallback(
+    async (query?: string, revalidate = false) => {
+      if (!token) return;
       const trimmed = (query ?? "").trim();
+      const cacheKey = `${CACHE_PREFIX}blacklist:${encodeURIComponent(trimmed || "all")}`;
       const url = trimmed ? `/api/blacklist?query=${encodeURIComponent(trimmed)}` : "/api/blacklist";
-      const data = await apiFetch<{ items: any[] }>(url).catch(() => ({ items: [] }));
-      const mapped: BlacklistEntry[] = (data.items || [])
-        .map((item, idx) => ({
-          id: item.id ?? idx,
-          owner: String(item.owner ?? "").trim(),
-          reason: item.reason ?? null,
-          createdAt: item.created_at ?? item.createdAt ?? null,
-        }))
-        .filter((item) => item.owner);
-      setBlacklistEntries(mapped);
-      setBlacklistSelected((prev) => prev.filter((owner) => mapped.some((entry) => entry.owner === owner)));
-    } catch (error) {
-      showToast((error as Error).message || "Failed to load blacklist", "error");
-      setBlacklistEntries([]);
-    } finally {
-      setBlacklistLoading(false);
-    }
-  };
+      await swrFetch<BlacklistEntry[]>({
+        key: cacheKey,
+        url,
+        ttl: CACHE_TTLS.blacklist,
+        revalidate,
+        onLoading: setBlacklistLoading,
+        onData: (items) => {
+          setBlacklistEntries(items);
+          setBlacklistSelected((prev) => prev.filter((owner) => items.some((entry) => entry.owner === owner)));
+        },
+        map: (data) =>
+          (data.items || [])
+            .map((item: any, idx: number) => ({
+              id: item.id ?? idx,
+              owner: String(item.owner ?? "").trim(),
+              reason: item.reason ?? null,
+              createdAt: item.created_at ?? item.createdAt ?? null,
+            }))
+            .filter((item: BlacklistEntry) => item.owner),
+      });
+    },
+    [token, swrFetch]
+  );
 
   useEffect(() => {
     if (token) {
@@ -1318,10 +1324,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
     const handle = setTimeout(() => {
-      loadBlacklist(blacklistQuery);
+      loadBlacklist(blacklistQuery, true);
     }, 250);
     return () => clearTimeout(handle);
-  }, [token, sessionKey, activeNav, blacklistQuery]);
+  }, [token, sessionKey, activeNav, blacklistQuery, loadBlacklist]);
 
   useEffect(() => {
     if (!token || activeNav !== "funpay-stats") return;
@@ -2177,7 +2183,7 @@ const App: React.FC = () => {
       setBlacklistOwner("");
       setBlacklistOrderId("");
       setBlacklistReason("");
-      loadBlacklist(blacklistQuery);
+      loadBlacklist(blacklistQuery, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to add user", "error");
     } finally {
@@ -2236,7 +2242,7 @@ const App: React.FC = () => {
       });
       showToast("Blacklist entry updated.");
       cancelEditBlacklist();
-      loadBlacklist(blacklistQuery);
+      loadBlacklist(blacklistQuery, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to update entry", "error");
     }
@@ -2254,7 +2260,7 @@ const App: React.FC = () => {
       });
       showToast("Selected users removed from blacklist.");
       setBlacklistSelected([]);
-      loadBlacklist(blacklistQuery);
+      loadBlacklist(blacklistQuery, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to unblacklist users", "error");
     }
@@ -3048,12 +3054,12 @@ const App: React.FC = () => {
                             <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
                               {blacklistEntries.length} blocked
                             </span>
-                            <button
-                              onClick={() => loadBlacklist(blacklistQuery)}
-                              className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
-                            >
-                              Refresh
-                            </button>
+                              <button
+                                onClick={() => loadBlacklist(blacklistQuery, true)}
+                                className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+                              >
+                                Refresh
+                              </button>
                           </div>
                         </div>
                         <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
