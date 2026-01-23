@@ -33,6 +33,15 @@ type RentalRow = {
   hero?: string;
 };
 
+type NotificationItem = {
+  id?: string | number;
+  level?: string;
+  message?: string;
+  createdAt?: string;
+  owner?: string;
+  accountId?: string | number;
+};
+
 const extractSteamId = (a: any): string => {
   const direct =
     a?.steamId ??
@@ -81,7 +90,7 @@ const DashboardIcon = () => (
   </svg>
 );
 
-const RentalsIcon = () => (
+const FunpayStatisticsIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
       d="M20 21C20 18.2386 16.4183 16 12 16C7.58172 16 4 18.2386 4 21M12 13C9.23858 13 7 10.7614 7 8C7 5.23858 9.23858 3 12 3C14.7614 3 17 5.23858 17 8C17 10.7614 14.7614 13 12 13Z"
@@ -90,6 +99,28 @@ const RentalsIcon = () => (
       strokeLinecap="round"
       strokeLinejoin="round"
     />
+  </svg>
+);
+
+const RentalsIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 472 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <g clipPath="url(#clip0_1_355)">
+      <path d="M12 2.4C13.1705 2.38788 14.3332 2.59127 15.43 3" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M21 8.57001C21.4087 9.66685 21.6121 10.8295 21.6 12" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M21.6 12C21.6 13.8987 21.037 15.7548 19.9821 17.3335C18.9273 18.9122 17.428 20.1426 15.6738 20.8692C13.9196 21.5958 11.9894 21.786 10.1272 21.4155C8.26494 21.0451 6.55439 20.1308 5.2118 18.7882C3.86922 17.4456 2.95491 15.7351 2.58449 13.8729C2.21407 12.0106 2.40418 10.0804 3.13079 8.32623C3.85739 6.57206 5.08784 5.07275 6.66655 4.01789C8.24527 2.96302 10.1013 2.39999 12 2.39999" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 1.5V3.3" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 20.7V22.5" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M22.5 12H20.7" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.3 12H1.5" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M15.43 10.92V14.1" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M15.97 12.58H12.91V9.89999" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.15997 10.47C8.15997 10.47 9.15997 9.46999 10.09 10.11C11.79 11.33 8.25997 14.11 8.25997 14.11H10.76" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+    </g>
+    <defs>
+      <clipPath id="clip0_1_355">
+        <rect width="24" height="24" fill="white" />
+      </clipPath>
+    </defs>
   </svg>
 );
 
@@ -173,6 +204,7 @@ const SettingsIcon = () => (
 );
 
 const NAV_ITEMS = [
+  { id: "funpay-stats", label: "Funpay Statistics", Icon: FunpayStatisticsIcon },
   { id: "overview", label: "Dashboard", Icon: DashboardIcon },
   { id: "rentals", label: "Active Rentals", Icon: RentalsIcon },
   { id: "inventory", label: "Inventory", Icon: InventoryIcon },
@@ -187,6 +219,18 @@ const CardUsersIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
       d="M21 19.9999C21 18.2583 19.3304 16.7767 17 16.2275M15 20C15 17.7909 12.3137 16 9 16C5.68629 16 3 17.7909 3 20M15 13C17.2091 13 19 11.2091 19 9C19 6.79086 17.2091 5 15 5M9 13C6.79086 13 5 11.2091 5 9C5 6.79086 6.79086 5 9 5C11.2091 5 13 6.79086 13 9C13 11.2091 11.2091 13 9 13Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const FunpayStatsIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M20 21C20 18.2386 16.4183 16 12 16C7.58172 16 4 18.2386 4 21M12 13C9.23858 13 7 10.7614 7 8C7 5.23858 9.23858 3 12 3C14.7614 3 17 5.23858 17 8C17 10.7614 14.7614 13 12 13Z"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
@@ -220,6 +264,7 @@ const CardBarsIcon = () => (
 );
 
 const navIdToPath: Record<string, string> = {
+  "funpay-stats": "/funpay-stats",
   overview: "/dashboard",
   rentals: "/rentals",
   inventory: "/inventory",
@@ -243,6 +288,8 @@ const overviewCards = [
   { key: "past24", title: "Past 24 hours", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
 ];
 
+const INVENTORY_GRID = "72px 260px 220px 210px 210px 90px 110px";
+
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
   const [pathname, setPathname] = useState(() => window.location.pathname);
@@ -260,6 +307,10 @@ const App: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<string | number | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatListLoading, setChatListLoading] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [autoRaise, setAutoRaise] = useState<boolean>(() => localStorage.getItem("autoRaise") === "1");
+  const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -398,8 +449,26 @@ const App: React.FC = () => {
       }
     };
 
+    const loadNotifications = async () => {
+      try {
+        const data = await apiFetch<{ items: any[] }>("/api/notifications?limit=50").catch(() => ({ items: [] }));
+        const mapped: NotificationItem[] = (data.items || []).map((n, idx) => ({
+          id: n.id ?? idx,
+          level: n.level ?? n.type ?? "info",
+          message: n.message ?? n.text ?? "",
+          createdAt: n.created_at ?? n.time ?? "",
+          owner: n.owner ?? n.user ?? "",
+          accountId: n.account_id ?? n.account ?? "",
+        }));
+        setNotifications(mapped);
+      } catch {
+        setNotifications([]);
+      }
+    };
+
     if (token) {
       loadOverview();
+      loadNotifications();
     }
   }, [token, apiFetch]);
 
@@ -414,6 +483,14 @@ const App: React.FC = () => {
     if (!token || activeNav !== "chats") return;
     loadChatHistory(selectedChat);
   }, [token, activeNav, selectedChat]);
+
+  useEffect(() => {
+    localStorage.setItem("autoRaise", autoRaise ? "1" : "0");
+  }, [autoRaise]);
+
+  useEffect(() => {
+    localStorage.setItem("autoOnline", autoOnline ? "1" : "0");
+  }, [autoOnline]);
 
   // tick for live timers
   useEffect(() => {
@@ -447,6 +524,35 @@ const App: React.FC = () => {
     if (lower.includes("off") || lower === "") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
     return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
   };
+
+  const ToggleRow: React.FC<{
+    label: string;
+    description?: string;
+    enabled: boolean;
+    onChange: (next: boolean) => void;
+  }> = ({ label, description, enabled, onChange }) => (
+    <button
+      type="button"
+      onClick={() => onChange(!enabled)}
+      className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-left transition hover:border-neutral-300"
+    >
+      <div className="space-y-1">
+        <div className="text-sm font-semibold text-neutral-900">{label}</div>
+        {description && <div className="text-xs text-neutral-500">{description}</div>}
+      </div>
+      <div
+        className={`relative flex h-7 w-12 items-center rounded-full ${
+          enabled ? "bg-emerald-500" : "bg-neutral-300"
+        } transition`}
+      >
+        <span
+          className={`absolute left-1 h-5 w-5 rounded-full bg-white shadow transition ${
+            enabled ? "translate-x-5" : "translate-x-0"
+          }`}
+        />
+      </div>
+    </button>
+  );
 
   const loadChats = async () => {
     if (!token) return;
@@ -484,6 +590,33 @@ const App: React.FC = () => {
       setChatMessages(mapped);
     } finally {
       setChatLoading(false);
+    }
+  };
+
+  const sendChatMessage = async () => {
+    const text = chatInput.trim();
+    if (!text || !selectedChat) {
+      showToast("Select a chat and type a message.", "error");
+      return;
+    }
+    setChatInput("");
+    const optimistic: ChatMessage = {
+      id: `local-${Date.now()}`,
+      author: "You",
+      text,
+      sentAt: new Date().toLocaleTimeString(),
+      byBot: true,
+    };
+    setChatMessages((prev) => [...prev, optimistic]);
+    try {
+      await apiFetch(`/api/chats/${selectedChat}/send`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      });
+      loadChatHistory(selectedChat);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to send", "error");
+      setChatMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
     }
   };
 
@@ -560,7 +693,9 @@ const App: React.FC = () => {
                 >
                   <div className="flex items-center justify-between gap-6">
                     <div>
-                      <h1 className="text-2xl font-semibold text-neutral-900">Dashboard</h1>
+                      <h1 className="text-2xl font-semibold text-neutral-900">
+                        {NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard"}
+                      </h1>
                     </div>
                     <label className="relative flex h-11 w-80 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -580,43 +715,69 @@ const App: React.FC = () => {
                       />
                     </label>
                   </div>
-                  <div className="-mx-10 mt-4 h-px bg-neutral-200" />
-                  <div className="mt-6">
-                    <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                      {overviewCards.map((card) => {
-                        const value = (overview as Record<string, number | null>)[card.key] ?? null;
-                        return (
-                          <motion.div
-                            key={card.title}
-                            className="group relative rounded-xl border border-neutral-200 bg-white p-4 shadow-sm shadow-neutral-200/60"
-                            whileHover={{ y: -2, scale: 1.01 }}
-                            transition={{ duration: 0.15, ease: EASE }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
-                                <card.Icon />
-                              </div>
-                            <div
-                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                                card.deltaTone === "negative"
-                                  ? "bg-rose-50 text-rose-600"
-                                  : "bg-emerald-50 text-emerald-600"
-                              }`}
+                  {(activeNav === "overview" || activeNav === "funpay-stats") && (
+                    <div className="mt-6">
+                      <div className="mb-4 text-lg font-semibold text-neutral-800">
+                        {activeNav === "funpay-stats" ? "Funpay Statistics" : "Overview"}
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        {overviewCards.map((card) => {
+                          const value = (overview as Record<string, number | null>)[card.key] ?? null;
+                          return (
+                            <motion.div
+                              key={card.title}
+                              className="group relative rounded-xl border border-neutral-200 bg-white p-4 shadow-sm shadow-neutral-200/60"
+                              whileHover={{ y: -2, scale: 1.01 }}
+                              transition={{ duration: 0.15, ease: EASE }}
                             >
-                              {card.delta}
+                              <div className="flex items-center justify-between">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
+                                  <card.Icon />
+                                </div>
+                                <div
+                                  className={`rounded-full px-3 py-1 text-xs font-semibold ${card.deltaTone === "negative" ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-600"}`}
+                                >
+                                  {card.delta}
+                                </div>
+                              </div>
+                              <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
+                              <div className="mt-2 text-2xl font-semibold text-neutral-900">
+                                {value === null ? "–" : value.toLocaleString()}
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                      {activeNav === "funpay-stats" && (
+                        <div className="mt-6 grid gap-4 lg:grid-cols-3">
+                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
+                            <div className="text-sm font-semibold text-neutral-700">Active Rental Ratio</div>
+                            <div className="mt-2 text-3xl font-bold text-neutral-900">
+                              {overview.totalAccounts && overview.activeRentals
+                                ? `${Math.round((overview.activeRentals / overview.totalAccounts) * 100)}%`
+                                : "–"}
                             </div>
-                            </div>
-                            <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
-                          <div className="mt-2 text-2xl font-semibold text-neutral-900">
-                            {value === null ? "" : value.toLocaleString()}
+                            <div className="mt-1 text-xs text-neutral-500">Active / Total accounts</div>
                           </div>
-                          </motion.div>
-                        );
-                      })}
+                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
+                            <div className="text-sm font-semibold text-neutral-700">Free Accounts</div>
+                            <div className="mt-2 text-3xl font-bold text-neutral-900">
+                              {overview.freeAccounts === null ? "–" : overview.freeAccounts}
+                            </div>
+                            <div className="mt-1 text-xs text-neutral-500">Available for issuance</div>
+                          </div>
+                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
+                            <div className="text-sm font-semibold text-neutral-700">Rentals Last 24h</div>
+                            <div className="mt-2 text-3xl font-bold text-neutral-900">
+                              {overview.past24 === null ? "–" : overview.past24}
+                            </div>
+                            <div className="mt-1 text-xs text-neutral-500">Completed in past day</div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  {activeNav === "chats" ? (
+                  )}
+                  {activeNav === "funpay-stats" ? null : activeNav === "chats" ? (
                     <motion.div
                       key="chats"
                       initial={{ opacity: 0, y: 12 }}
@@ -731,6 +892,91 @@ const App: React.FC = () => {
                                 </div>
                               ))}
                           </div>
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              sendChatMessage();
+                            }}
+                            className="grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
+                          >
+                            <textarea
+                              value={chatInput}
+                              onChange={(e) => setChatInput(e.target.value)}
+                              placeholder={selectedChat ? "Type a message..." : "Select a chat to start typing"}
+                              disabled={!selectedChat}
+                              rows={2}
+                              className="w-full resize-none rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800 outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="submit"
+                                disabled={!selectedChat || !chatInput.trim()}
+                                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                              >
+                                Send
+                              </button>
+                            </div>
+                          </form>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "settings" ? (
+                    <motion.div
+                      key="settings"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 grid gap-6 lg:grid-cols-2"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4">
+                          <h3 className="text-lg font-semibold text-neutral-900">Funpay Profile Settings</h3>
+                          <p className="text-sm text-neutral-500">
+                            Toggles inspired by FunPay Cardinal. Values are saved locally.
+                          </p>
+                        </div>
+                        <div className="space-y-3">
+                          <ToggleRow
+                            label="Auto Raise"
+                            description="Automatically bump lots on FunPay when possible."
+                            enabled={autoRaise}
+                            onChange={setAutoRaise}
+                          />
+                          <ToggleRow
+                            label="Auto Online"
+                            description="Keep profile presence online. (UI only for now)"
+                            enabled={autoOnline}
+                            onChange={setAutoOnline}
+                          />
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">System notifications</h3>
+                            <p className="text-sm text-neutral-500">Latest events from the bot.</p>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          {notifications.slice(0, 6).map((n) => (
+                            <div
+                              key={n.id}
+                              className="rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3 text-sm text-neutral-800"
+                            >
+                              <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500">
+                                <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
+                                <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
+                              </div>
+                              <div className="text-neutral-900">{n.message || "—"}</div>
+                              <div className="text-xs text-neutral-500">
+                                Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
+                              </div>
+                            </div>
+                          ))}
+                          {notifications.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No notifications yet.
+                            </div>
+                          )}
                         </div>
                       </div>
                     </motion.div>
@@ -741,8 +987,8 @@ const App: React.FC = () => {
                           <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         </div>
                         <div
-                          className="grid gap-3 px-4 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: "60px 320px 200px 200px 220px 80px 110px" }}
+                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: INVENTORY_GRID }}
                         >
                           <span>ID</span>
                           <span>Name</span>
@@ -757,16 +1003,16 @@ const App: React.FC = () => {
                             return (
                               <div
                                 key={acc.id}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                                style={{ gridTemplateColumns: "60px 320px 200px 200px 220px 80px 110px" }}
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                style={{ gridTemplateColumns: INVENTORY_GRID }}
                               >
                                 <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
-                                <span className="min-w-0 break-words whitespace-normal font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
+                                <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
                                   {acc.name || "Account"}
                                 </span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>{acc.login || ""}</span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>{acc.password || ""}</span>
-                                <span className="min-w-0 max-w-[210px] truncate font-mono text-[13px] leading-tight text-neutral-800" title={acc.steamId || ""}>
+                                <span className="min-w-0 truncate font-mono text-xs leading-tight text-neutral-800 tabular-nums" title={acc.steamId || ""}>
                                   {acc.steamId || ""}
                                 </span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
