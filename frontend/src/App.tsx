@@ -382,6 +382,41 @@ const ORDERS_GRID =
   "minmax(120px,0.9fr) minmax(160px,1fr) minmax(180px,1.2fr) minmax(180px,1.2fr) minmax(120px,0.8fr) minmax(110px,0.7fr) minmax(110px,0.7fr) minmax(160px,1fr) minmax(110px,0.7fr)";
 const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
+const CACHE_PREFIX = "fpa_cache:";
+const STATS_CACHE_KEY = `${CACHE_PREFIX}funpay_stats`;
+const CHAT_LIST_CACHE_KEY = `${CACHE_PREFIX}chat_list`;
+const CHAT_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}chat_history:`;
+const ORDERS_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}orders_history:`;
+const CACHE_TTLS = {
+  stats: 10 * 60 * 1000,
+  chatList: 60 * 1000,
+  chatHistory: 30 * 1000,
+  orders: 5 * 60 * 1000,
+};
+
+const readCache = <T,>(key: string, maxAgeMs?: number) => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { ts?: number; data?: T; etag?: string } | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    const ts = Number(parsed.ts);
+    if (!Number.isFinite(ts)) return null;
+    const isStale = maxAgeMs ? Date.now() - ts > maxAgeMs : false;
+    const etag = typeof parsed.etag === "string" ? parsed.etag : undefined;
+    return { data: parsed.data as T, ts, isStale, etag };
+  } catch {
+    return null;
+  }
+};
+
+const writeCache = <T,>(key: string, data: T, etag?: string) => {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data, etag }));
+  } catch {
+    // ignore cache writes
+  }
+};
 
 const App: React.FC = () => {
   const [token, setToken] = useState("");
@@ -461,7 +496,7 @@ const App: React.FC = () => {
     []
   );
 
-  const apiFetch = api.apiFetch;
+  const { apiFetch, apiFetchWithMeta } = api;
 
   const selectedAccount = useMemo(() => {
     if (selectedAccountId === null || selectedAccountId === undefined) return null;
@@ -687,17 +722,25 @@ const App: React.FC = () => {
       if (Array.isArray(activeRentals?.items)) {
         setRentalsTable(
           (activeRentals.items as any[]).map((r, idx) => {
+            const matchTimeRaw = r.match_time ?? r.matchTime ?? null;
+            const matchTime = matchTimeRaw ? String(matchTimeRaw) : null;
+            const matchSecondsRaw = Number(r.match_seconds ?? r.matchSeconds ?? r.matchtime);
+            const matchSeconds = Number.isFinite(matchSecondsRaw) ? Math.max(0, Math.floor(matchSecondsRaw)) : null;
             const hasPresence =
               r.in_match !== undefined ||
               r.in_game !== undefined ||
               r.hero_name ||
-              r.presence_label;
+              r.presence_label ||
+              matchTime !== null ||
+              matchSeconds !== null;
             const presenceFetchedAt = hasPresence ? Date.now() : null;
             const presence = hasPresence
               ? {
                   in_match: !!r.in_match,
                   in_game: !!r.in_game,
                   hero_name: r.hero_name ?? null,
+                  match_time: matchTime,
+                  match_seconds: matchSeconds,
                   fetched_at: presenceFetchedAt,
                 }
               : null;
@@ -766,41 +809,71 @@ const App: React.FC = () => {
 
   const loadFunpayStats = useCallback(
     async (force = false) => {
-      setFunpayStatsLoading(true);
+      const cached = !force ? readCache<FunpayStatsPayload>(STATS_CACHE_KEY, CACHE_TTLS.stats) : null;
+      if (cached?.data) {
+        setFunpayStats(cached.data);
+      }
+      setFunpayStatsLoading(!cached?.data);
       try {
         const qs = new URLSearchParams();
         if (force) qs.set("refresh", "1");
         const query = qs.toString();
         const url = query ? `/api/funpay/stats?${query}` : "/api/funpay/stats";
-        const data = await apiFetch<FunpayStatsPayload>(url).catch(() => null);
-        if (data) {
-          setFunpayStats({
-            balance: data.balance ?? null,
-            balance_series: data.balance_series ?? [],
-            orders: data.orders ?? { daily: [], weekly: [], monthly: [] },
-            reviews: data.reviews ?? { daily: [], weekly: [], monthly: [] },
-            generated_at: data.generated_at ?? null,
-          });
+        const headers: Record<string, string> = {};
+        if (cached?.etag) headers["If-None-Match"] = cached.etag;
+        const result = await apiFetchWithMeta<FunpayStatsPayload>(url, {
+          headers: Object.keys(headers).length ? headers : undefined,
+        }).catch(() => null);
+        if (!result) return;
+        if (result.status === 304 && cached?.data) {
+          writeCache(STATS_CACHE_KEY, cached.data, cached.etag);
+          return;
+        }
+        if (result.data) {
+          const next = {
+            balance: result.data.balance ?? null,
+            balance_series: result.data.balance_series ?? [],
+            orders: result.data.orders ?? { daily: [], weekly: [], monthly: [] },
+            reviews: result.data.reviews ?? { daily: [], weekly: [], monthly: [] },
+            generated_at: result.data.generated_at ?? null,
+          };
+          setFunpayStats(next);
+          const etag = result.headers.get("etag") || cached?.etag;
+          writeCache(STATS_CACHE_KEY, next, etag || undefined);
         }
       } finally {
         setFunpayStatsLoading(false);
       }
     },
-    [apiFetch]
+    [apiFetchWithMeta]
   );
 
   const loadOrdersHistory = useCallback(
     async (queryText: string) => {
-      setOrdersLoading(true);
+      const trimmedQuery = queryText.trim();
+      const cacheKey = `${ORDERS_HISTORY_CACHE_PREFIX}${encodeURIComponent(trimmedQuery || "all")}`;
+      const cached = readCache<OrderHistoryItem[]>(cacheKey, CACHE_TTLS.orders);
+      if (cached?.data) {
+        setOrdersHistory(cached.data);
+      }
+      setOrdersLoading(!cached?.data);
       try {
         const qs = new URLSearchParams();
-        if (queryText) qs.set("query", queryText);
+        if (trimmedQuery) qs.set("query", trimmedQuery);
         qs.set("limit", "200");
         qs.set("fast", "1");
-        const data = await apiFetch<{ items: any[] }>(`/api/orders/history?${qs.toString()}`).catch(() => ({
-          items: [],
-        }));
-        const mapped: OrderHistoryItem[] = (data.items || []).map((item, idx) => ({
+        const headers: Record<string, string> = {};
+        if (cached?.etag) headers["If-None-Match"] = cached.etag;
+        const result = await apiFetchWithMeta<{ items: any[] }>(`/api/orders/history?${qs.toString()}`, {
+          headers: Object.keys(headers).length ? headers : undefined,
+        }).catch(() => null);
+        if (!result) return;
+        if (result.status === 304 && cached?.data) {
+          writeCache(cacheKey, cached.data, cached.etag);
+          return;
+        }
+        const payload = result.data ?? { items: [] };
+        const mapped: OrderHistoryItem[] = (payload.items || []).map((item, idx) => ({
           id: item.id ?? idx,
           orderId: item.order_id ?? item.orderId ?? "",
           buyer: item.buyer ?? item.owner ?? "",
@@ -817,13 +890,15 @@ const App: React.FC = () => {
           lotNumber: item.lot_number ?? item.lotNumber ?? null,
         }));
         setOrdersHistory(mapped);
+        const etag = result.headers.get("etag") || cached?.etag;
+        writeCache(cacheKey, mapped, etag || undefined);
       } catch {
         setOrdersHistory([]);
       } finally {
         setOrdersLoading(false);
       }
     },
-    [apiFetch]
+    [apiFetchWithMeta]
   );
 
   useEffect(() => {
@@ -942,6 +1017,64 @@ const App: React.FC = () => {
       .toString()
       .padStart(2, "0");
     return `${h}:${m}:${s}`;
+  };
+
+  const parseMatchTimeSeconds = (value?: string | null) => {
+    if (!value) return null;
+    const parts = String(value)
+      .trim()
+      .split(":")
+      .map((part) => Number(part));
+    if (parts.some((part) => !Number.isFinite(part))) return null;
+    if (parts.length === 2) {
+      const [minutes, seconds] = parts;
+      if (minutes < 0 || seconds < 0 || seconds >= 60) return null;
+      return Math.floor(minutes * 60 + seconds);
+    }
+    if (parts.length === 3) {
+      const [hours, minutes, seconds] = parts;
+      if (hours < 0 || minutes < 0 || minutes >= 60 || seconds < 0 || seconds >= 60) return null;
+      return Math.floor(hours * 3600 + minutes * 60 + seconds);
+    }
+    return null;
+  };
+
+  const formatMatchTimeSeconds = (seconds?: number | null) => {
+    if (!Number.isFinite(seconds)) return null;
+    const total = Math.max(0, Math.floor(seconds || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    if (hours) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+    return `${minutes}:${String(secs).padStart(2, "0")}`;
+  };
+
+  const getMatchSecondsFromPresence = (presence?: PresenceData | null, nowMs?: number) => {
+    if (!presence || !presence.in_match) return null;
+    const rawSeconds = Number(presence.match_seconds);
+    const baseSeconds = Number.isFinite(rawSeconds)
+      ? Math.max(0, Math.floor(rawSeconds))
+      : parseMatchTimeSeconds(presence.match_time ?? null);
+    if (baseSeconds === null) return null;
+    const fetchedAt = Number(presence.fetched_at);
+    if (Number.isFinite(fetchedAt) && fetchedAt > 0) {
+      const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
+      const elapsed = Math.max(0, Math.floor((currentMs - fetchedAt) / 1000));
+      return baseSeconds + elapsed;
+    }
+    return baseSeconds;
+  };
+
+  const getMatchTimeLabel = (presence?: PresenceData | null, nowMs?: number) => {
+    if (!presence || !presence.in_match) return "-";
+    const seconds = getMatchSecondsFromPresence(presence, nowMs);
+    if (seconds !== null) {
+      const formatted = formatMatchTimeSeconds(seconds);
+      if (formatted) return formatted;
+    }
+    return presence.match_time ? String(presence.match_time) : "-";
   };
 
   const formatStartTime = (value?: string | number | null) => {
@@ -1260,7 +1393,7 @@ const App: React.FC = () => {
               selectedRental.durationSec != null && selectedRental.startedAt != null
                 ? formatDuration(selectedRental.durationSec, selectedRental.startedAt, now)
                 : "-";
-            const matchTime = "Placeholder";
+            const matchTime = getMatchTimeLabel(presence, now);
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
             return (
               <div className="space-y-4">
@@ -1376,10 +1509,27 @@ const App: React.FC = () => {
 
   const loadChats = async () => {
     if (!token) return;
-    setChatListLoading(true);
+    const cached = readCache<ChatItem[]>(CHAT_LIST_CACHE_KEY, CACHE_TTLS.chatList);
+    if (cached?.data) {
+      setChats(cached.data);
+      if ((selectedChat === null || selectedChat === undefined) && cached.data.length) {
+        setSelectedChat(cached.data[0].id);
+      }
+    }
+    setChatListLoading(!cached?.data);
     try {
-      const data = await apiFetch<{ items: any[] }>("/api/chats?fast=1").catch(() => ({ items: [] }));
-      const mapped: ChatItem[] = (data.items || []).map((c, idx) => ({
+      const headers: Record<string, string> = {};
+      if (cached?.etag) headers["If-None-Match"] = cached.etag;
+      const result = await apiFetchWithMeta<{ items: any[] }>("/api/chats?fast=1", {
+        headers: Object.keys(headers).length ? headers : undefined,
+      }).catch(() => null);
+      if (!result) return;
+      if (result.status === 304 && cached?.data) {
+        writeCache(CHAT_LIST_CACHE_KEY, cached.data, cached.etag);
+        return;
+      }
+      const payload = result.data ?? { items: [] };
+      const mapped: ChatItem[] = (payload.items || []).map((c, idx) => ({
         id: c.id ?? idx,
         name: c.name || c.chat_name || `Chat ${idx + 1}`,
         last: c.last_message_text || c.preview || "",
@@ -1387,6 +1537,8 @@ const App: React.FC = () => {
         unread: !!c.unread,
       }));
       setChats(mapped);
+      const etag = result.headers.get("etag") || cached?.etag;
+      writeCache(CHAT_LIST_CACHE_KEY, mapped, etag || undefined);
       if ((selectedChat === null || selectedChat === undefined) && mapped.length) {
         setSelectedChat(mapped[0].id);
       }
@@ -1557,10 +1709,25 @@ const App: React.FC = () => {
 
   const loadChatHistory = async (chatId: string | number | null) => {
     if (!token || !chatId) return;
-    setChatLoading(true);
+    const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
+    const cached = readCache<ChatMessage[]>(cacheKey, CACHE_TTLS.chatHistory);
+    if (cached?.data) {
+      setChatMessages(cached.data);
+    }
+    setChatLoading(!cached?.data);
     try {
-      const data = await apiFetch<{ items: any[] }>(`/api/chats/${chatId}/history?limit=80`).catch(() => ({ items: [] }));
-      const mapped: ChatMessage[] = (data.items || []).map((m, idx) => ({
+      const headers: Record<string, string> = {};
+      if (cached?.etag) headers["If-None-Match"] = cached.etag;
+      const result = await apiFetchWithMeta<{ items: any[] }>(`/api/chats/${chatId}/history?limit=80`, {
+        headers: Object.keys(headers).length ? headers : undefined,
+      }).catch(() => null);
+      if (!result) return;
+      if (result.status === 304 && cached?.data) {
+        writeCache(cacheKey, cached.data, cached.etag);
+        return;
+      }
+      const payload = result.data ?? { items: [] };
+      const mapped: ChatMessage[] = (payload.items || []).map((m, idx) => ({
         id: m.id ?? idx,
         author: m.author || m.user || (m.by_bot ? "Bot" : "User"),
         text: m.text || m.body || "",
@@ -1568,6 +1735,8 @@ const App: React.FC = () => {
         byBot: !!m.by_bot,
       }));
       setChatMessages(mapped);
+      const etag = result.headers.get("etag") || cached?.etag;
+      writeCache(cacheKey, mapped, etag || undefined);
     } finally {
       setChatLoading(false);
     }
@@ -2295,7 +2464,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = "Placeholder";
+                            const timer = getMatchTimeLabel(presence, now);
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -2956,7 +3125,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = "Placeholder";
+                            const timer = getMatchTimeLabel(presence, now);
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game

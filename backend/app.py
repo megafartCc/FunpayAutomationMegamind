@@ -1,5 +1,6 @@
 import html as html_module
 import json
+import hashlib
 import os
 import random
 import re
@@ -14,7 +15,7 @@ from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -853,7 +854,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
     )
     review_counts = db.get_review_counts_by_day(user_id, STATS_SERIES_DAYS)
 
-    return {
+    payload = {
         "balance": latest,
         "balance_series": balance_series,
         "orders": {
@@ -868,6 +869,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
         },
         "generated_at": now,
     }
+    return _etag_response(request, payload)
 
 
 @app.get("/api/orders/history", dependencies=[Depends(require_admin)])
@@ -1033,7 +1035,8 @@ def orders_history(
     merged = list(dedup.values())
     merged.sort(key=lambda row: created_key(row.get("created_at")), reverse=True)
 
-    return {"items": merged}
+    payload = {"items": merged}
+    return _etag_response(request, payload)
 
 
 @app.get("/api/blacklist", dependencies=[Depends(require_admin)])
@@ -1067,6 +1070,29 @@ def blacklist_clear(request: Request) -> dict:
     uid = current_user_id(request)
     removed = db.clear_blacklist(uid)
     return {"removed": removed}
+
+
+def _payload_etag(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _etag_response(request: Request, payload: Any) -> Response:
+    etag = _payload_etag(payload)
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "private, max-age=0, must-revalidate",
+        "Vary": "Cookie",
+    }
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(content=payload, headers=headers)
 
 
 def _format_match_time(seconds: int | float | None) -> str | None:
@@ -1631,14 +1657,14 @@ def chats(
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
             chat_cache.refresh_chats_async(user_id, token)
-        return {"items": cached}
+        return _etag_response(request, {"items": cached})
 
     try:
         items = chat_cache.refresh_chats_sync(user_id, token)
-        return {"items": items}
+        return _etag_response(request, {"items": items})
     except Exception as exc:
         if cached is not None:
-            return {"items": cached}
+            return _etag_response(request, {"items": cached})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1660,14 +1686,14 @@ def chat_history(
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
             chat_cache.refresh_history_async(user_id, chat_id, token)
-        return {"items": cached[-limit:]}
+        return _etag_response(request, {"items": cached[-limit:]})
 
     try:
         items = chat_cache.refresh_history_sync(user_id, chat_id, token)
-        return {"items": items[-limit:]}
+        return _etag_response(request, {"items": items[-limit:]})
     except Exception as exc:
         if cached is not None:
-            return {"items": cached[-limit:]}
+            return _etag_response(request, {"items": cached[-limit:]})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
