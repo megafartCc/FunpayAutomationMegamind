@@ -315,6 +315,7 @@ const App: React.FC = () => {
   );
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [presenceCache, setPresenceCache] = useState<Record<string, PresenceData>>({});
+  const [presenceURL, setPresenceURL] = useState<string>(() => PRESENCE_BASE);
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -355,6 +356,7 @@ const App: React.FC = () => {
     if (!ids.length) return;
     const controller = new AbortController();
     const base = PRESENCE_BASE;
+    setPresenceURL(base);
     Promise.all(
       ids.map(async (id) => {
         try {
@@ -1150,6 +1152,11 @@ const App: React.FC = () => {
                             const pill = statusPill(r.status);
                             const presence = r.steamId ? presenceCache[r.steamId] : null;
                             const timer = presence?.match_time || "";
+                            const presenceLabel = presence?.in_match
+                              ? "In match"
+                              : presence?.in_game
+                                ? "In game"
+                                : pill.label;
                             return (
                               <motion.div
                                 key={r.id ?? idx}
@@ -1168,15 +1175,21 @@ const App: React.FC = () => {
                                 </span>
                                 <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
                                 <span className={`truncate text-neutral-700`}>
-                                  {presence?.in_match ? "In match" : presence?.in_game ? "In game" : pill.label}
+                                  {presenceLabel}
                                 </span>
-                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
-                                  {presence?.in_match
-                                    ? "In match"
-                                    : presence?.in_game
-                                      ? "In game"
-                                      : pill.label}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (r.steamId) {
+                                      window.open(`${presenceURL}/${r.steamId}`, "_blank", "noopener");
+                                    }
+                                  }}
+                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className} ${
+                                    r.steamId ? "hover:underline" : ""
+                                  }`}
+                                >
+                                  {presenceLabel}
+                                </button>
                               </motion.div>
                             );
                           })}
