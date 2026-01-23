@@ -1069,7 +1069,7 @@ const App: React.FC = () => {
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } }}
                   className="pl-10 pr-10 pt-5 pb-12"
                 >
-                  <div className="flex items-center justify-between gap-6 border-b border-neutral-200 pb-4">
+                  <div className="-mx-10 flex items-center justify-between gap-6 border-b border-neutral-200 px-10 pb-4">
                     <div>
                       <h1 className="text-2xl font-semibold text-neutral-900">{activeLabel}</h1>
                     </div>
