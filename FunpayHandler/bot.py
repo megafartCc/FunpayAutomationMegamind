@@ -1339,6 +1339,10 @@ class FunpayBot:
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
+            full_target = self._db.get_account_by_id(int(target_account.get("id")), self._user_id)
+            if full_target:
+                target_account = full_target
+
             rental_start = target_account.get("rental_start")
             if not rental_start:
                 acc.send_message(
