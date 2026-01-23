@@ -45,6 +45,12 @@ type RentalRow = {
   chatUrl?: string | null;
 };
 
+type MatchTimerState = {
+  startAtMs: number;
+  lastSeenMs: number;
+  heroKey?: string | null;
+};
+
 type NotificationItem = {
   id?: string | number;
   level?: string;
@@ -362,6 +368,16 @@ const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
+  const matchTimerCache = useMemo(() => new Map<string, MatchTimerState>(), []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (uiMode === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [uiMode]);
 
   const api = useMemo(
     () =>
@@ -749,24 +765,65 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const getLiveMatchSeconds = (
-    presence?: PresenceData | null,
-    observedAt?: number | null,
-    nowMs?: number
-  ) => {
-    const base = presence?.match_seconds;
-    if (!Number.isFinite(base)) return null;
-    if (!observedAt) return Math.floor(base || 0);
-    const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
-    const delta = Math.max(0, Math.floor((currentMs - observedAt) / 1000));
-    return Math.floor((base || 0) + delta);
+  const MATCH_GRACE_MS = 5 * 60 * 1000;
+
+  const getMatchCacheKey = (rental: RentalRow) => {
+    if (rental.steamId) return `steam-${rental.steamId}`;
+    const loginKey = normalizeKey(rental.login);
+    if (loginKey) return `login-${loginKey}`;
+    const nameKey = normalizeKey(rental.accountName);
+    if (nameKey) return `acc-${nameKey}`;
+    if (rental.id !== null && rental.id !== undefined) return `id-${rental.id}`;
+    return null;
   };
 
-  const getMatchTimeDisplay = (presence?: PresenceData | null, observedAt?: number | null, nowMs?: number) => {
-    if (!presence) return null;
-    const liveSeconds = getLiveMatchSeconds(presence, observedAt, nowMs);
-    if (liveSeconds != null) return formatMatchTime(liveSeconds);
+  const getLocalMatchSeconds = (rental: RentalRow, nowMs: number) => {
+    const key = getMatchCacheKey(rental);
+    if (!key) return null;
+    const presence = rental.presence ?? null;
+    const inMatch = !!presence?.in_match;
+    const heroKey = normalizeKey(presence?.hero_name ?? rental.hero ?? "");
+    const cached = matchTimerCache.get(key);
+
+    if (inMatch) {
+      const rawSeconds = Number(presence?.match_seconds);
+      const hasApiSeconds = Number.isFinite(rawSeconds) && rawSeconds >= 0;
+      const heroChanged = heroKey && cached?.heroKey && heroKey !== cached.heroKey;
+      let startAtMs = cached?.startAtMs;
+
+      if (heroChanged) {
+        startAtMs = nowMs;
+      } else if (hasApiSeconds) {
+        startAtMs = nowMs - Math.floor(rawSeconds) * 1000;
+      }
+
+      if (!Number.isFinite(startAtMs)) {
+        startAtMs = nowMs;
+      }
+
+      matchTimerCache.set(key, {
+        startAtMs,
+        lastSeenMs: nowMs,
+        heroKey: heroKey || cached?.heroKey || null,
+      });
+      return Math.max(0, Math.floor((nowMs - startAtMs) / 1000));
+    }
+
+    if (cached) {
+      if (nowMs - cached.lastSeenMs > MATCH_GRACE_MS) {
+        matchTimerCache.delete(key);
+        return null;
+      }
+      return Math.max(0, Math.floor((nowMs - cached.startAtMs) / 1000));
+    }
+
     return null;
+  };
+
+  const getMatchTimeDisplay = (rental: RentalRow, nowMs: number) => {
+    const seconds = getLocalMatchSeconds(rental, nowMs);
+    if (seconds == null) return null;
+    return formatMatchTime(seconds);
   };
 
   const formatStartTime = (value?: string | number | null) => {
@@ -1016,42 +1073,44 @@ const App: React.FC = () => {
             <div className="flex min-h-screen">
               <aside className="relative flex w-[280px] shrink-0 flex-col border-r border-neutral-100 bg-white px-6 pb-10 pt-10 shadow-[12px_0_40px_-32px_rgba(0,0,0,0.15)]">
                 <div className="text-lg font-semibold tracking-tight text-neutral-900">Funpay Automation</div>
-                <nav className="relative mt-8 flex flex-1 flex-col space-y-2">
-                  <AnimatePresence>
-                    {NAV_ITEMS.filter((i) => !BOTTOM_NAV_IDS.has(i.id)).map((item) => {
-                      const isActive = activeNav === item.id;
-                      return (
-                        <motion.button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveNav(item.id);
-                            const nextPath = navIdToPath[item.id] || "/dashboard";
-                            window.history.replaceState(null, "", nextPath);
-                            setPathname(nextPath);
-                          }}
-                          className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
-                          whileHover={{ scale: 1.01 }}
-                          transition={{ type: "spring", stiffness: 320, damping: 30 }}
-                        >
-                          {isActive && (
-                            <motion.span
-                              layoutId="navHighlight"
-                              className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
-                              transition={{ type: "spring", stiffness: 280, damping: 26 }}
-                            />
-                          )}
-                          <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
-                            <item.Icon />
-                          </span>
-                          <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
-                            {item.label}
-                          </span>
-                        </motion.button>
-                      );
-                    })}
-                  </AnimatePresence>
-                  <div className="mt-auto space-y-2 pb-4">
+                <nav className="relative mt-8 flex flex-1 flex-col">
+                  <div className="flex flex-col space-y-2">
+                    <AnimatePresence>
+                      {NAV_ITEMS.filter((i) => !BOTTOM_NAV_IDS.has(i.id)).map((item) => {
+                        const isActive = activeNav === item.id;
+                        return (
+                          <motion.button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setActiveNav(item.id);
+                              const nextPath = navIdToPath[item.id] || "/dashboard";
+                              window.history.replaceState(null, "", nextPath);
+                              setPathname(nextPath);
+                            }}
+                            className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
+                            whileHover={{ scale: 1.01 }}
+                            transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                          >
+                            {isActive && (
+                              <motion.span
+                                layoutId="navHighlight"
+                                className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
+                                transition={{ type: "spring", stiffness: 280, damping: 26 }}
+                              />
+                            )}
+                            <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
+                              <item.Icon />
+                            </span>
+                            <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
+                              {item.label}
+                            </span>
+                          </motion.button>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
+                  <div className="mt-auto flex flex-col space-y-2 pb-2">
                     <AnimatePresence>
                       {NAV_ITEMS.filter((i) => BOTTOM_NAV_IDS.has(i.id)).map((item) => {
                         const isActive = activeNav === item.id;
@@ -1469,8 +1528,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
+                            const timer = getMatchTimeDisplay(r, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1864,8 +1922,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
+                            const timer = getMatchTimeDisplay(r, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
