@@ -39,6 +39,7 @@ type AccountRow = {
     hero?: string;
     steamId?: string;
     presence?: PresenceData | null;
+    presenceLabel?: string | null;
   };
 
   type NotificationItem = {
@@ -351,6 +352,7 @@ const App: React.FC = () => {
   // fetch presence for rentals
   useEffect(() => {
     const ids = rentalsTable
+      .filter((r) => !r.presence)
       .map((r) => r.steamId)
       .filter((id): id is string => !!id && !(presenceCache as any)[id]);
     if (!ids.length) return;
@@ -407,7 +409,7 @@ const App: React.FC = () => {
       try {
         const [stats, activeRentals, accounts] = await Promise.all([
           apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&include_steamid=1&include_mafile=1").catch(() => ({ items: [] })),
+          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence").catch(() => ({ items: [] })),
           apiFetch<{ items: unknown[] }>(
             "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
           ).catch(() => ({ items: [] })),
@@ -473,23 +475,48 @@ const App: React.FC = () => {
         // rentals table
         if (Array.isArray(activeRentals?.items)) {
           setRentalsTable(
-            (activeRentals.items as any[]).map((r, idx) => ({
-              id: r.id ?? idx,
-              accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
-              buyer: r.buyer ?? r.rented_by ?? "",
-              durationSec: r.duration ?? r.duration_sec ?? r.seconds ?? null,
-              startedAt: r.started_at ?? r.start_time ?? r.created_at,
-              status: r.status ?? r.presence ?? "",
-              hero: r.hero ?? r.character ?? "",
-              steamId:
-                r.steamid ??
-                r.steam_id ??
-                r.steamId ??
-                extractSteamId(r) ??
-                extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }) ??
-                (r.login ? accountSteamMap.get(r.login) : undefined) ??
-                (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
-            }))
+            (activeRentals.items as any[]).map((r, idx) => {
+              const hasPresence =
+                r.in_match !== undefined ||
+                r.in_game !== undefined ||
+                r.match_time ||
+                r.hero_name ||
+                r.presence_label;
+              const presence = hasPresence
+                ? {
+                    in_match: !!r.in_match,
+                    in_game: !!r.in_game,
+                    hero_name: r.hero_name ?? null,
+                    match_time: r.match_time ?? null,
+                  }
+                : null;
+              const derivedStatus = presence
+                ? presence.in_match
+                  ? "In match"
+                  : presence.in_game
+                    ? "In game"
+                    : "Offline"
+                : r.status ?? r.presence ?? "";
+              return {
+                id: r.id ?? idx,
+                accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
+                buyer: r.buyer ?? r.rented_by ?? "",
+                durationSec: r.duration ?? r.duration_sec ?? r.seconds ?? null,
+                startedAt: r.started_at ?? r.start_time ?? r.created_at,
+                status: derivedStatus,
+                hero: r.hero ?? r.character ?? "",
+                steamId:
+                  r.steamid ??
+                  r.steam_id ??
+                  r.steamId ??
+                  extractSteamId(r) ??
+                  extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }) ??
+                  (r.login ? accountSteamMap.get(r.login) : undefined) ??
+                  (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
+                presence,
+                presenceLabel: r.presence_label ?? null,
+              };
+            })
           );
         }
       } catch {
@@ -1149,13 +1176,13 @@ const App: React.FC = () => {
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
-                            const presence = r.steamId ? presenceCache[r.steamId] : null;
+                            const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
                             const timer = presence?.match_time || "";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
-                                : pill.label;
+                                : r.presenceLabel || pill.label;
                             return (
                               <motion.div
                                 key={r.id ?? idx}
@@ -1366,13 +1393,13 @@ const App: React.FC = () => {
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
-                            const presence = r.steamId ? presenceCache[r.steamId] : null;
+                            const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
                             const timer = presence?.match_time || "";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
-                                : pill.label;
+                                : r.presenceLabel || pill.label;
                             return (
                               <motion.div
                                 key={r.id ?? idx}
@@ -1395,7 +1422,7 @@ const App: React.FC = () => {
                                   onClick={() => {
                                     if (r.steamId) window.open(`${presenceURL}/${r.steamId}`, "_blank", "noopener");
                                   }}
-                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${presenceLabel === "Offline" ? "bg-rose-50 text-rose-600" : pill.className} ${
+                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className} ${
                                     r.steamId ? "hover:underline cursor-pointer" : "opacity-60 cursor-not-allowed"
                                   }`}
                                   title={r.steamId ? `${presenceURL}/${r.steamId}` : "No SteamID found for this rental"}

@@ -1043,11 +1043,12 @@ def active_rentals(
 ) -> dict:
     uid = current_user_id(request)
     expand_set = {part.strip().lower() for part in (expand or "").split(",") if part.strip()}
-    include_presence = "presence" in expand_set or "all" in expand_set
+    include_presence = "presence" in expand_set or "all" in expand_set or not expand_set
     include_chat = "chat" in expand_set or "all" in expand_set
     max_age = max(0.0, float(max_age))
 
-    items = db.get_active_users(uid, include_mafile=include_presence)
+    include_mafile = include_presence or include_steamid
+    items = db.get_active_users(uid, include_mafile=include_mafile)
     token = (getattr(request.state, "user", None) or {}).get("golden_key")
 
     chat_map = {}
