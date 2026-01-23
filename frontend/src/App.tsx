@@ -1137,14 +1137,13 @@ const App: React.FC = () => {
                         <div className="text-sm text-neutral-500">Updated live every minute</div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="grid grid-cols-8 gap-2 text-xs font-semibold text-neutral-500">
+                        <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
                           <span>ID</span>
                           <span>Account</span>
                           <span>Buyer</span>
                           <span>Started</span>
                           <span>Match Time</span>
                           <span>Hero</span>
-                          <span>Status</span>
                           <span className="text-right">Presence</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
@@ -1379,7 +1378,7 @@ const App: React.FC = () => {
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid grid-cols-8 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                               >
                                 <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="truncate text-neutral-800">{r.accountName || ""}</span>
@@ -1391,15 +1390,15 @@ const App: React.FC = () => {
                                   {timer || "—"}
                                 </span>
                                 <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <span className={`truncate text-neutral-700`}>{presenceLabel}</span>
                                 <button
                                   type="button"
                                   onClick={() => {
                                     if (r.steamId) window.open(`${presenceURL}/${r.steamId}`, "_blank", "noopener");
                                   }}
-                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className} ${
-                                    r.steamId ? "hover:underline" : ""
+                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${presenceLabel === "Offline" ? "bg-rose-50 text-rose-600" : pill.className} ${
+                                    r.steamId ? "hover:underline cursor-pointer" : "opacity-60 cursor-not-allowed"
                                   }`}
+                                  title={r.steamId ? `${presenceURL}/${r.steamId}` : "No SteamID found for this rental"}
                                 >
                                   {presenceLabel}
                                 </button>
