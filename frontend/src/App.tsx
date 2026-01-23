@@ -609,7 +609,7 @@ const App: React.FC = () => {
                             </div>
                             <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
                           <div className="mt-2 text-2xl font-semibold text-neutral-900">
-                            {value === null ? "—" : value.toLocaleString()}
+                            {value === null ? "" : value.toLocaleString()}
                           </div>
                           </motion.div>
                         );
@@ -741,8 +741,8 @@ const App: React.FC = () => {
                           <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         </div>
                         <div
-                          className="grid gap-3 px-1 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: "70px 360px 220px 200px 230px 80px 110px" }}
+                          className="grid gap-3 px-4 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: "60px 320px 200px 200px 220px 80px 110px" }}
                         >
                           <span>ID</span>
                           <span>Name</span>
@@ -758,18 +758,18 @@ const App: React.FC = () => {
                               <div
                                 key={acc.id}
                                 className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                                style={{ gridTemplateColumns: "70px 360px 220px 200px 230px 80px 110px" }}
+                                style={{ gridTemplateColumns: "60px 320px 200px 200px 220px 80px 110px" }}
                               >
-                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "—")}>{acc.id ?? "—"}</span>
+                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
                                 <span className="min-w-0 break-words whitespace-normal font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
                                   {acc.name || "Account"}
                                 </span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.login || "—"}>{acc.login || "—"}</span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.password || "—"}>{acc.password || "—"}</span>
-                                <span className="min-w-0 max-w-[210px] truncate font-mono text-[13px] leading-tight text-neutral-800" title={acc.steamId || "—"}>
-                                  {acc.steamId || "—"}
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>{acc.login || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>{acc.password || ""}</span>
+                                <span className="min-w-0 max-w-[210px] truncate font-mono text-[13px] leading-tight text-neutral-800" title={acc.steamId || ""}>
+                                  {acc.steamId || ""}
                                 </span>
-                                <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? "—"}>{acc.mmr ?? "—"}</span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
                                 <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
                                   Available
                                 </span>
@@ -805,16 +805,16 @@ const App: React.FC = () => {
                                 key={r.id}
                                 className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                               >
-                                <span className="truncate font-semibold text-neutral-900">{r.id ?? "—"}</span>
-                                <span className="truncate text-neutral-800">{r.accountName || "—"}</span>
-                                <span className="truncate text-neutral-700">{r.buyer || "—"}</span>
+                                <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="truncate text-neutral-800">{r.accountName || ""}</span>
+                                <span className="truncate text-neutral-700">{r.buyer || ""}</span>
                                 <span className="truncate text-neutral-600">
-                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : "—"}
+                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : ""}
                                 </span>
                                 <span className="truncate font-mono text-neutral-900">
                                   {formatDuration(r.durationSec ?? null, r.startedAt)}
                                 </span>
-                                <span className="truncate text-neutral-700">{r.hero || "—"}</span>
+                                <span className="truncate text-neutral-700">{r.hero || ""}</span>
                                 <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{pill.label}</span>
                               </div>
                             );
