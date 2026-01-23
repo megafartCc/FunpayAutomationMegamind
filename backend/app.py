@@ -1039,6 +1039,7 @@ def active_rentals(
     expand: str = "",
     fast: bool = True,
     max_age: float = PRESENCE_TTL,
+    include_steamid: bool = False,
 ) -> dict:
     uid = current_user_id(request)
     expand_set = {part.strip().lower() for part in (expand or "").split(",") if part.strip()}
@@ -1075,12 +1076,15 @@ def active_rentals(
                     chat_map = {}
 
     for item in items:
-        if include_presence:
+        steamid64 = None
+        if include_presence or include_steamid:
             steamid64 = _steamid64_from_mafile(item.get("mafile_json"))
             item["steamid"] = str(steamid64) if steamid64 is not None else None
-            item.update(_presence_for_steamid_cached(steamid64, max_age=max_age, fast=fast))
         else:
             item["steamid"] = None
+
+        if include_presence:
+            item.update(_presence_for_steamid_cached(steamid64, max_age=max_age, fast=fast))
 
         item.pop("mafile_json", None)
 
