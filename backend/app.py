@@ -38,7 +38,13 @@ from FunPayAPI.common import enums as fp_enums
 from backend.logger import logger
 from backend.notifications import list_notifications
 from backend.realtime import manager as realtime_manager
-from backend.realtime import publish_chat_message, set_chat_cache, set_event_loop
+from backend.realtime import (
+    publish_chat_message,
+    set_chat_cache,
+    set_event_loop,
+    broadcast_to_user,
+    broadcast_to_user_chat,
+)
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
@@ -239,8 +245,8 @@ def _extract_avatar_url(html: str | None) -> str | None:
         return url
     return None
 db = MySQLDB()
-CHAT_LIST_TTL = 2.0
-CHAT_HISTORY_TTL = 1.0
+CHAT_LIST_TTL = 30.0
+CHAT_HISTORY_TTL = 10.0
 CHAT_HISTORY_MAX = 200
 PRESENCE_TTL = 10.0
 PRESENCE_OFFLINE_GRACE = 45.0
@@ -450,7 +456,7 @@ class ChatCache:
         self._set_history(user_id, chat_id, items)
         return items
 
-    def refresh_chats_async(self, user_id: int, token: str) -> None:
+    def refresh_chats_async(self, user_id: int, token: str, on_done=None) -> None:
         with self._lock:
             if user_id in self._refreshing_chats:
                 return
@@ -460,6 +466,11 @@ class ChatCache:
             try:
                 items = self._fetch_chats(token)
                 self._set_chats(user_id, items)
+                if on_done:
+                    try:
+                        on_done(items)
+                    except Exception as exc:
+                        logger.warning(f"chats_async on_done failed for user {user_id}: {exc}")
             except Exception as exc:
                 logger.warning(f"Failed to refresh chats cache for user {user_id}: {exc}")
             finally:
@@ -468,7 +479,7 @@ class ChatCache:
 
         Thread(target=runner, daemon=True).start()
 
-    def refresh_history_async(self, user_id: int, chat_id: int, token: str) -> None:
+    def refresh_history_async(self, user_id: int, chat_id: int, token: str, on_done=None) -> None:
         key = (user_id, chat_id)
         with self._lock:
             if key in self._refreshing_histories:
@@ -479,6 +490,11 @@ class ChatCache:
             try:
                 items = self._fetch_history(token, chat_id)
                 self._set_history(user_id, chat_id, items)
+                if on_done:
+                    try:
+                        on_done(items)
+                    except Exception as exc:
+                        logger.warning(f"history_async on_done failed for user {user_id}, chat {chat_id}: {exc}")
             except Exception as exc:
                 logger.warning(f"Failed to refresh history cache for user {user_id}, chat {chat_id}: {exc}")
             finally:
@@ -2106,13 +2122,20 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         if token:
             cached, ts = chat_cache.get_cached_chats(int(user_id))
             now = time.time()
-            if cached is None or ts is None or now - ts > CHAT_LIST_TTL:
-                try:
-                    items = chat_cache.refresh_chats_sync(int(user_id), token)
-                except Exception:
-                    items = cached or []
-            else:
+            fresh = cached is not None and ts is not None and now - ts <= CHAT_LIST_TTL
+            if fresh:
                 items = cached or []
+            else:
+                # send quickly with whatever we have (maybe empty) then refresh async
+                items = cached or []
+                chat_cache.refresh_chats_async(
+                    int(user_id),
+                    token,
+                    on_done=lambda updated: broadcast_to_user(
+                        int(user_id),
+                        {"type": "chats:list", "items": _attach_admin_call_counts(updated, int(user_id))},
+                    ),
+                )
             items = _attach_admin_call_counts(items, int(user_id))
         await websocket.send_json({"type": "chats:list", "items": items})
 
@@ -2144,13 +2167,25 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 if token:
                     cached, ts = chat_cache.get_cached_history(int(user_id), chat_id)
                     now = time.time()
-                    if cached is None or ts is None or now - ts > CHAT_HISTORY_TTL:
-                        try:
-                            history_items = chat_cache.refresh_history_sync(int(user_id), chat_id, token)
-                        except Exception:
-                            history_items = cached or []
+                    fresh = cached is not None and ts is not None and now - ts <= CHAT_HISTORY_TTL
+                    if fresh:
+                        history_items = cached or []
                     else:
                         history_items = cached or []
+                        chat_cache.refresh_history_async(
+                            int(user_id),
+                            chat_id,
+                            token,
+                            on_done=lambda updated: broadcast_to_user_chat(
+                                int(user_id),
+                                chat_id,
+                                {
+                                    "type": "chat:history",
+                                    "chat_id": chat_id,
+                                    "items": _annotate_admin_calls(updated[-CHAT_HISTORY_MAX:]),
+                                },
+                            ),
+                        )
                 history_items = _annotate_admin_calls(history_items[-CHAT_HISTORY_MAX:])
                 await websocket.send_json(
                     {"type": "chat:history", "chat_id": chat_id, "items": history_items}
