@@ -517,11 +517,18 @@ const App: React.FC = () => {
     return `${h}:${m}:${s}`;
   };
 
-  const statusPill = (status?: string) => {
+  const statusPill = (status?: string | boolean) => {
+    if (typeof status === "boolean") {
+      return status
+        ? { className: "bg-emerald-50 text-emerald-600", label: "Online" }
+        : { className: "bg-rose-50 text-rose-600", label: "Offline" };
+    }
     const lower = (status || "").toLowerCase();
     if (lower.includes("match")) return { className: "bg-emerald-50 text-emerald-600", label: "In match" };
     if (lower.includes("game")) return { className: "bg-amber-50 text-amber-600", label: "In game" };
-    if (lower.includes("off") || lower === "") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
+    if (lower.includes("online") || lower === "1" || lower === "true") return { className: "bg-emerald-50 text-emerald-600", label: "Online" };
+    if (lower.includes("idle") || lower.includes("away")) return { className: "bg-amber-50 text-amber-600", label: "Idle" };
+    if (lower.includes("off") || lower === "" || lower === "0") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
     return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
   };
 
