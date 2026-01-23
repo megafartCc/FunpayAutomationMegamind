@@ -1,6 +1,7 @@
 import html as html_module
 import json
 import hashlib
+import asyncio
 import os
 import random
 import re
@@ -16,7 +17,7 @@ import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -1086,7 +1087,9 @@ def _payload_etag(payload: Any) -> str:
 
 def _etag_response(request: Request, payload: Any) -> Response:
     encoded_payload = jsonable_encoder(payload)
-    etag = _payload_etag(encoded_payload)
+    user = getattr(request.state, "user", None) or {}
+    user_id = user.get("id")
+    etag = _payload_etag({"user_id": user_id, "payload": encoded_payload})
     headers = {
         "ETag": etag,
         "Cache-Control": "private, max-age=0, must-revalidate, stale-while-revalidate=30, stale-if-error=300",
@@ -1670,6 +1673,47 @@ def chats(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/api/stream/chats", dependencies=[Depends(require_admin)])
+async def stream_chats(
+    request: Request,
+    max_age: float = CHAT_LIST_TTL,
+    interval: float = 2.5,
+) -> Response:
+    user_id, token = require_funpay_token(request)
+    max_age = max(0.0, float(max_age))
+    interval = max(1.0, float(interval))
+
+    async def event_stream():
+        last_etag = None
+        last_ping = time.time()
+        while True:
+            if await request.is_disconnected():
+                break
+            cached, ts = chat_cache.get_cached_chats(user_id)
+            now = time.time()
+            items = cached
+            if cached is None or ts is None or now - ts > max_age:
+                try:
+                    items = chat_cache.refresh_chats_sync(user_id, token)
+                except Exception:
+                    items = cached or []
+            payload = {"items": items or []}
+            encoded = jsonable_encoder(payload)
+            etag = _payload_etag({"user_id": user_id, "payload": encoded})
+            if etag != last_etag:
+                last_etag = etag
+                data = json.dumps(encoded, ensure_ascii=False)
+                yield f"event: chats\ndata: {data}\n\n"
+                last_ping = now
+            elif now - last_ping > 15:
+                yield ": ping\n\n"
+                last_ping = now
+            await asyncio.sleep(interval)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
 @app.get("/api/chats/{chat_id}/history", dependencies=[Depends(require_admin)])
 def chat_history(
     chat_id: int,
@@ -1697,6 +1741,50 @@ def chat_history(
         if cached is not None:
             return _etag_response(request, {"items": cached[-limit:]})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/stream/chats/{chat_id}/history", dependencies=[Depends(require_admin)])
+async def stream_chat_history(
+    chat_id: int,
+    request: Request,
+    limit: int = 80,
+    max_age: float = CHAT_HISTORY_TTL,
+    interval: float = 2.0,
+) -> Response:
+    user_id, token = require_funpay_token(request)
+    max_age = max(0.0, float(max_age))
+    interval = max(1.0, float(interval))
+    limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
+
+    async def event_stream():
+        last_etag = None
+        last_ping = time.time()
+        while True:
+            if await request.is_disconnected():
+                break
+            cached, ts = chat_cache.get_cached_history(user_id, chat_id)
+            now = time.time()
+            items = cached
+            if cached is None or ts is None or now - ts > max_age:
+                try:
+                    items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+                except Exception:
+                    items = cached or []
+            payload = {"items": (items or [])[-limit:]}
+            encoded = jsonable_encoder(payload)
+            etag = _payload_etag({"user_id": user_id, "payload": encoded})
+            if etag != last_etag:
+                last_etag = etag
+                data = json.dumps(encoded, ensure_ascii=False)
+                yield f"event: history\ndata: {data}\n\n"
+                last_ping = now
+            elif now - last_ping > 15:
+                yield ": ping\n\n"
+                last_ping = now
+            await asyncio.sleep(interval)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])

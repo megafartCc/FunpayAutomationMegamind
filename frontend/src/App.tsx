@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import Toast from "./components/common/Toast";
 import LoginPage from "./pages/LoginPage";
@@ -387,24 +387,46 @@ const STATS_CACHE_KEY = `${CACHE_PREFIX}funpay_stats`;
 const CHAT_LIST_CACHE_KEY = `${CACHE_PREFIX}chat_list`;
 const CHAT_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}chat_history:`;
 const ORDERS_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}orders_history:`;
+type CacheEntry<T> = { data: T; ts: number; etag?: string };
+const memoryCache = new Map<string, CacheEntry<any>>();
+const inflightRequests = new Map<string, Promise<CacheEntry<any> | null>>();
+const revalidateGuards = new Map<string, number>();
+const REVALIDATE_THROTTLE_MS = 4000;
 const CACHE_TTLS = {
   stats: 10 * 60 * 1000,
-  chatList: 60 * 1000,
-  chatHistory: 30 * 1000,
+  chatList: 15 * 1000,
+  chatHistory: 8 * 1000,
   orders: 5 * 60 * 1000,
 };
 
 const readCache = <T,>(key: string, maxAgeMs?: number) => {
   try {
+    let best: CacheEntry<T> | null = null;
+    const memory = memoryCache.get(key) as CacheEntry<T> | undefined;
+    if (memory?.ts && Number.isFinite(memory.ts)) {
+      best = memory;
+    }
     const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { ts?: number; data?: T; etag?: string } | null;
-    if (!parsed || typeof parsed !== "object") return null;
-    const ts = Number(parsed.ts);
-    if (!Number.isFinite(ts)) return null;
-    const isStale = maxAgeMs ? Date.now() - ts > maxAgeMs : false;
-    const etag = typeof parsed.etag === "string" ? parsed.etag : undefined;
-    return { data: parsed.data as T, ts, isStale, etag };
+    if (raw) {
+      const parsed = JSON.parse(raw) as { ts?: number; data?: T; etag?: string } | null;
+      if (parsed && typeof parsed === "object") {
+        const ts = Number(parsed.ts);
+        if (Number.isFinite(ts)) {
+          const entry: CacheEntry<T> = {
+            data: parsed.data as T,
+            ts,
+            etag: typeof parsed.etag === "string" ? parsed.etag : undefined,
+          };
+          if (!best || entry.ts > best.ts) {
+            best = entry;
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    memoryCache.set(key, best);
+    const isStale = maxAgeMs ? Date.now() - best.ts > maxAgeMs : false;
+    return { data: best.data as T, ts: best.ts, isStale, etag: best.etag };
   } catch {
     return null;
   }
@@ -412,7 +434,9 @@ const readCache = <T,>(key: string, maxAgeMs?: number) => {
 
 const writeCache = <T,>(key: string, data: T, etag?: string) => {
   try {
-    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data, etag }));
+    const entry: CacheEntry<T> = { data, ts: Date.now(), etag };
+    memoryCache.set(key, entry);
+    localStorage.setItem(key, JSON.stringify(entry));
   } catch {
     // ignore cache writes
   }
@@ -454,6 +478,9 @@ const App: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<string | number | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatListLoading, setChatListLoading] = useState(false);
+  const [chatStreamActive, setChatStreamActive] = useState(false);
+  const chatListStreamRef = useRef<EventSource | null>(null);
+  const chatHistoryStreamRef = useRef<EventSource | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [ordersHistory, setOrdersHistory] = useState<OrderHistoryItem[]>([]);
@@ -497,6 +524,89 @@ const App: React.FC = () => {
   );
 
   const { apiFetch, apiFetchWithMeta } = api;
+
+  const swrFetch = useCallback(
+    async <T,>({
+      key,
+      url,
+      ttl,
+      revalidate = false,
+      onData,
+      onLoading,
+      map,
+    }: {
+      key: string;
+      url: string;
+      ttl: number;
+      revalidate?: boolean;
+      onData: (data: T) => void;
+      onLoading?: (loading: boolean) => void;
+      map?: (payload: any) => T;
+    }) => {
+      const cached = readCache<T>(key, ttl);
+      if (cached?.data) {
+        onData(cached.data);
+      }
+      if (onLoading) {
+        onLoading(!cached?.data);
+      }
+      const shouldRevalidate = revalidate || !cached || cached.isStale;
+      if (!shouldRevalidate) {
+        if (onLoading) onLoading(false);
+        return;
+      }
+      if (typeof navigator !== "undefined" && "onLine" in navigator && !navigator.onLine) {
+        if (onLoading) onLoading(false);
+        return;
+      }
+      if (revalidate) {
+        const last = revalidateGuards.get(key) || 0;
+        const nowTs = Date.now();
+        if (nowTs - last < REVALIDATE_THROTTLE_MS) {
+          if (onLoading) onLoading(false);
+          return;
+        }
+        revalidateGuards.set(key, nowTs);
+      }
+      const inflight = inflightRequests.get(key);
+      if (inflight) {
+        await inflight.catch(() => null);
+        if (onLoading) onLoading(false);
+        return;
+      }
+      const request = (async () => {
+        const headers: Record<string, string> = {};
+        if (cached?.etag) {
+          headers["If-None-Match"] = cached.etag;
+        }
+        const result = await apiFetchWithMeta<any>(url, {
+          headers: Object.keys(headers).length ? headers : undefined,
+        });
+        if (result.status === 304 && cached?.data) {
+          writeCache(key, cached.data, cached.etag);
+          return cached as CacheEntry<T>;
+        }
+        if (!result.data) return null;
+        const mapped = map ? map(result.data) : (result.data as T);
+        const etag = result.headers.get("etag") || cached?.etag;
+        writeCache(key, mapped, etag || undefined);
+        return { data: mapped, ts: Date.now(), etag: etag || undefined } as CacheEntry<T>;
+      })();
+      inflightRequests.set(key, request);
+      try {
+        const next = await request;
+        if (next?.data) {
+          onData(next.data);
+        }
+      } catch {
+        // keep cached data
+      } finally {
+        inflightRequests.delete(key);
+        if (onLoading) onLoading(false);
+      }
+    },
+    [apiFetchWithMeta]
+  );
 
   const selectedAccount = useMemo(() => {
     if (selectedAccountId === null || selectedAccountId === undefined) return null;
@@ -640,6 +750,30 @@ const App: React.FC = () => {
     setToken("");
     setProfileName("");
   };
+
+  const mapChatItems = useCallback(
+    (payload: any): ChatItem[] =>
+      (payload.items || []).map((c: any, idx: number) => ({
+        id: c.id ?? idx,
+        name: c.name || c.chat_name || `Chat ${idx + 1}`,
+        last: c.last_message_text || c.preview || "",
+        time: c.last_message_time || c.time || "",
+        unread: !!c.unread,
+      })),
+    []
+  );
+
+  const mapChatMessages = useCallback(
+    (payload: any): ChatMessage[] =>
+      (payload.items || []).map((m: any, idx: number) => ({
+        id: m.id ?? idx,
+        author: m.author || m.user || (m.by_bot ? "Bot" : "User"),
+        text: m.text || m.body || "",
+        sentAt: m.sent_time || m.sent_at || m.time || "",
+        byBot: !!m.by_bot,
+      })),
+    []
+  );
 
   const loadOverview = useCallback(async () => {
     try {
@@ -808,97 +942,65 @@ const App: React.FC = () => {
   }, [apiFetch]);
 
   const loadFunpayStats = useCallback(
-    async (force = false) => {
-      const cached = !force ? readCache<FunpayStatsPayload>(STATS_CACHE_KEY, CACHE_TTLS.stats) : null;
-      if (cached?.data) {
-        setFunpayStats(cached.data);
-      }
-      setFunpayStatsLoading(!cached?.data);
-      try {
-        const qs = new URLSearchParams();
-        if (force) qs.set("refresh", "1");
-        const query = qs.toString();
-        const url = query ? `/api/funpay/stats?${query}` : "/api/funpay/stats";
-        const headers: Record<string, string> = {};
-        if (cached?.etag) headers["If-None-Match"] = cached.etag;
-        const result = await apiFetchWithMeta<FunpayStatsPayload>(url, {
-          headers: Object.keys(headers).length ? headers : undefined,
-        }).catch(() => null);
-        if (!result) return;
-        if (result.status === 304 && cached?.data) {
-          writeCache(STATS_CACHE_KEY, cached.data, cached.etag);
-          return;
-        }
-        if (result.data) {
-          const next = {
-            balance: result.data.balance ?? null,
-            balance_series: result.data.balance_series ?? [],
-            orders: result.data.orders ?? { daily: [], weekly: [], monthly: [] },
-            reviews: result.data.reviews ?? { daily: [], weekly: [], monthly: [] },
-            generated_at: result.data.generated_at ?? null,
-          };
-          setFunpayStats(next);
-          const etag = result.headers.get("etag") || cached?.etag;
-          writeCache(STATS_CACHE_KEY, next, etag || undefined);
-        }
-      } finally {
-        setFunpayStatsLoading(false);
-      }
+    async (refresh = false, revalidate = false) => {
+      const qs = new URLSearchParams();
+      if (refresh) qs.set("refresh", "1");
+      const query = qs.toString();
+      const url = query ? `/api/funpay/stats?${query}` : "/api/funpay/stats";
+      await swrFetch<FunpayStatsPayload>({
+        key: STATS_CACHE_KEY,
+        url,
+        ttl: CACHE_TTLS.stats,
+        revalidate,
+        onLoading: setFunpayStatsLoading,
+        onData: setFunpayStats,
+        map: (data) => ({
+          balance: data.balance ?? null,
+          balance_series: data.balance_series ?? [],
+          orders: data.orders ?? { daily: [], weekly: [], monthly: [] },
+          reviews: data.reviews ?? { daily: [], weekly: [], monthly: [] },
+          generated_at: data.generated_at ?? null,
+        }),
+      });
     },
-    [apiFetchWithMeta]
+    [swrFetch]
   );
 
   const loadOrdersHistory = useCallback(
-    async (queryText: string) => {
+    async (queryText: string, revalidate = false) => {
       const trimmedQuery = queryText.trim();
       const cacheKey = `${ORDERS_HISTORY_CACHE_PREFIX}${encodeURIComponent(trimmedQuery || "all")}`;
-      const cached = readCache<OrderHistoryItem[]>(cacheKey, CACHE_TTLS.orders);
-      if (cached?.data) {
-        setOrdersHistory(cached.data);
-      }
-      setOrdersLoading(!cached?.data);
-      try {
-        const qs = new URLSearchParams();
-        if (trimmedQuery) qs.set("query", trimmedQuery);
-        qs.set("limit", "200");
-        qs.set("fast", "1");
-        const headers: Record<string, string> = {};
-        if (cached?.etag) headers["If-None-Match"] = cached.etag;
-        const result = await apiFetchWithMeta<{ items: any[] }>(`/api/orders/history?${qs.toString()}`, {
-          headers: Object.keys(headers).length ? headers : undefined,
-        }).catch(() => null);
-        if (!result) return;
-        if (result.status === 304 && cached?.data) {
-          writeCache(cacheKey, cached.data, cached.etag);
-          return;
-        }
-        const payload = result.data ?? { items: [] };
-        const mapped: OrderHistoryItem[] = (payload.items || []).map((item, idx) => ({
-          id: item.id ?? idx,
-          orderId: item.order_id ?? item.orderId ?? "",
-          buyer: item.buyer ?? item.owner ?? "",
-          accountName: item.account_name ?? item.accountName ?? "",
-          accountId: item.account_id ?? item.accountId ?? null,
-          login: item.login ?? null,
-          steamId: item.steam_id ?? item.steamid ?? item.steamId ?? null,
-          rentalMinutes: item.rental_minutes ?? item.rentalMinutes ?? null,
-          amount: item.amount ?? null,
-          price: item.price ?? null,
-          action: item.action ?? "",
-          createdAt: item.created_at ?? item.createdAt ?? null,
-          chatUrl: item.chat_url ?? item.chatUrl ?? null,
-          lotNumber: item.lot_number ?? item.lotNumber ?? null,
-        }));
-        setOrdersHistory(mapped);
-        const etag = result.headers.get("etag") || cached?.etag;
-        writeCache(cacheKey, mapped, etag || undefined);
-      } catch {
-        setOrdersHistory([]);
-      } finally {
-        setOrdersLoading(false);
-      }
+      const qs = new URLSearchParams();
+      if (trimmedQuery) qs.set("query", trimmedQuery);
+      qs.set("limit", "200");
+      qs.set("fast", "1");
+      await swrFetch<OrderHistoryItem[]>({
+        key: cacheKey,
+        url: `/api/orders/history?${qs.toString()}`,
+        ttl: CACHE_TTLS.orders,
+        revalidate,
+        onLoading: setOrdersLoading,
+        onData: setOrdersHistory,
+        map: (payload) =>
+          (payload.items || []).map((item: any, idx: number) => ({
+            id: item.id ?? idx,
+            orderId: item.order_id ?? item.orderId ?? "",
+            buyer: item.buyer ?? item.owner ?? "",
+            accountName: item.account_name ?? item.accountName ?? "",
+            accountId: item.account_id ?? item.accountId ?? null,
+            login: item.login ?? null,
+            steamId: item.steam_id ?? item.steamid ?? item.steamId ?? null,
+            rentalMinutes: item.rental_minutes ?? item.rentalMinutes ?? null,
+            amount: item.amount ?? null,
+            price: item.price ?? null,
+            action: item.action ?? "",
+            createdAt: item.created_at ?? item.createdAt ?? null,
+            chatUrl: item.chat_url ?? item.chatUrl ?? null,
+            lotNumber: item.lot_number ?? item.lotNumber ?? null,
+          })),
+      });
     },
-    [apiFetchWithMeta]
+    [swrFetch]
   );
 
   useEffect(() => {
@@ -911,14 +1013,108 @@ const App: React.FC = () => {
   // load chat list when on chats tab
   useEffect(() => {
     if (!token || activeNav !== "chats") return;
-    loadChats();
-  }, [token, activeNav]);
+    loadChats(true);
+  }, [token, activeNav, loadChats]);
 
   // load chat history when selection changes
   useEffect(() => {
     if (!token || activeNav !== "chats") return;
-    loadChatHistory(selectedChat);
-  }, [token, activeNav, selectedChat]);
+    loadChatHistory(selectedChat, true);
+  }, [token, activeNav, selectedChat, loadChatHistory]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "chats") {
+      if (chatListStreamRef.current) {
+        chatListStreamRef.current.close();
+        chatListStreamRef.current = null;
+      }
+      setChatStreamActive(false);
+      return;
+    }
+
+    const source = new EventSource("/api/stream/chats");
+    if (chatListStreamRef.current) {
+      chatListStreamRef.current.close();
+    }
+    chatListStreamRef.current = source;
+
+    const handleChats = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        const items = mapChatItems(payload);
+        setChats(items);
+        writeCache(CHAT_LIST_CACHE_KEY, items);
+        if (items.length) {
+          setSelectedChat((prev) => (prev === null || prev === undefined ? items[0].id : prev));
+        }
+        setChatStreamActive(true);
+      } catch {
+        // ignore stream parse errors
+      }
+    };
+
+    source.addEventListener("chats", handleChats as EventListener);
+    source.onopen = () => setChatStreamActive(true);
+    source.onerror = () => {
+      setChatStreamActive(false);
+      source.close();
+      if (chatListStreamRef.current === source) {
+        chatListStreamRef.current = null;
+      }
+    };
+
+    return () => {
+      source.removeEventListener("chats", handleChats as EventListener);
+      source.close();
+      if (chatListStreamRef.current === source) {
+        chatListStreamRef.current = null;
+      }
+      setChatStreamActive(false);
+    };
+  }, [token, activeNav, mapChatItems]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "chats" || !selectedChat) {
+      if (chatHistoryStreamRef.current) {
+        chatHistoryStreamRef.current.close();
+        chatHistoryStreamRef.current = null;
+      }
+      return;
+    }
+
+    const source = new EventSource(`/api/stream/chats/${selectedChat}/history`);
+    if (chatHistoryStreamRef.current) {
+      chatHistoryStreamRef.current.close();
+    }
+    chatHistoryStreamRef.current = source;
+
+    const handleHistory = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        const items = mapChatMessages(payload);
+        setChatMessages(items);
+        writeCache(`${CHAT_HISTORY_CACHE_PREFIX}${selectedChat}`, items);
+      } catch {
+        // ignore stream parse errors
+      }
+    };
+
+    source.addEventListener("history", handleHistory as EventListener);
+    source.onerror = () => {
+      source.close();
+      if (chatHistoryStreamRef.current === source) {
+        chatHistoryStreamRef.current = null;
+      }
+    };
+
+    return () => {
+      source.removeEventListener("history", handleHistory as EventListener);
+      source.close();
+      if (chatHistoryStreamRef.current === source) {
+        chatHistoryStreamRef.current = null;
+      }
+    };
+  }, [token, activeNav, selectedChat, mapChatMessages]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -930,16 +1126,89 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!token || activeNav !== "funpay-stats") return;
-    loadFunpayStats(false);
+    loadFunpayStats(false, true);
   }, [token, activeNav, loadFunpayStats]);
 
   useEffect(() => {
     if (!token || activeNav !== "orders") return;
     const handle = setTimeout(() => {
-      loadOrdersHistory(ordersQuery.trim());
+      loadOrdersHistory(ordersQuery.trim(), true);
     }, 250);
     return () => clearTimeout(handle);
   }, [token, activeNav, ordersQuery, loadOrdersHistory]);
+
+  const revalidateActive = useCallback(() => {
+    if (!token) return;
+    if (activeNav === "funpay-stats") {
+      loadFunpayStats(false, true);
+      return;
+    }
+    if (activeNav === "chats") {
+      loadChats(true);
+      loadChatHistory(selectedChat, true);
+      return;
+    }
+    if (activeNav === "orders") {
+      loadOrdersHistory(ordersQuery.trim(), true);
+    }
+  }, [
+    token,
+    activeNav,
+    selectedChat,
+    ordersQuery,
+    loadFunpayStats,
+    loadChats,
+    loadChatHistory,
+    loadOrdersHistory,
+  ]);
+
+  useEffect(() => {
+    if (!token) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        revalidateActive();
+      }
+    };
+    const handleOnline = () => revalidateActive();
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [token, revalidateActive]);
+
+  useEffect(() => {
+    if (!token) return;
+    let intervalId: number | undefined;
+    if (activeNav === "chats" && !chatStreamActive) {
+      intervalId = window.setInterval(() => {
+        loadChats(true);
+        loadChatHistory(selectedChat, true);
+      }, 15000);
+    } else if (activeNav === "orders") {
+      intervalId = window.setInterval(() => {
+        loadOrdersHistory(ordersQuery.trim(), true);
+      }, 60000);
+    } else if (activeNav === "funpay-stats") {
+      intervalId = window.setInterval(() => {
+        loadFunpayStats(false, true);
+      }, 120000);
+    }
+    return () => {
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, [
+    token,
+    activeNav,
+    selectedChat,
+    ordersQuery,
+    chatStreamActive,
+    loadChats,
+    loadChatHistory,
+    loadOrdersHistory,
+    loadFunpayStats,
+  ]);
 
   useEffect(() => {
     localStorage.setItem("autoRaise", autoRaise ? "1" : "0");
@@ -1507,45 +1776,26 @@ const App: React.FC = () => {
     </button>
   );
 
-  const loadChats = async () => {
-    if (!token) return;
-    const cached = readCache<ChatItem[]>(CHAT_LIST_CACHE_KEY, CACHE_TTLS.chatList);
-    if (cached?.data) {
-      setChats(cached.data);
-      if ((selectedChat === null || selectedChat === undefined) && cached.data.length) {
-        setSelectedChat(cached.data[0].id);
-      }
-    }
-    setChatListLoading(!cached?.data);
-    try {
-      const headers: Record<string, string> = {};
-      if (cached?.etag) headers["If-None-Match"] = cached.etag;
-      const result = await apiFetchWithMeta<{ items: any[] }>("/api/chats?fast=1", {
-        headers: Object.keys(headers).length ? headers : undefined,
-      }).catch(() => null);
-      if (!result) return;
-      if (result.status === 304 && cached?.data) {
-        writeCache(CHAT_LIST_CACHE_KEY, cached.data, cached.etag);
-        return;
-      }
-      const payload = result.data ?? { items: [] };
-      const mapped: ChatItem[] = (payload.items || []).map((c, idx) => ({
-        id: c.id ?? idx,
-        name: c.name || c.chat_name || `Chat ${idx + 1}`,
-        last: c.last_message_text || c.preview || "",
-        time: c.last_message_time || c.time || "",
-        unread: !!c.unread,
-      }));
-      setChats(mapped);
-      const etag = result.headers.get("etag") || cached?.etag;
-      writeCache(CHAT_LIST_CACHE_KEY, mapped, etag || undefined);
-      if ((selectedChat === null || selectedChat === undefined) && mapped.length) {
-        setSelectedChat(mapped[0].id);
-      }
-    } finally {
-      setChatListLoading(false);
-    }
-  };
+  const loadChats = useCallback(
+    async (revalidate = false) => {
+      if (!token) return;
+      await swrFetch<ChatItem[]>({
+        key: CHAT_LIST_CACHE_KEY,
+        url: "/api/chats?fast=1",
+        ttl: CACHE_TTLS.chatList,
+        revalidate,
+        onLoading: setChatListLoading,
+        onData: (items) => {
+          setChats(items);
+          if ((selectedChat === null || selectedChat === undefined) && items.length) {
+            setSelectedChat(items[0].id);
+          }
+        },
+        map: mapChatItems,
+      });
+    },
+    [token, selectedChat, swrFetch, mapChatItems]
+  );
 
   const handleCreateAccount = async (payload: Record<string, unknown>) => {
     if (!token) throw new Error("Not authorized");
@@ -1707,40 +1957,22 @@ const App: React.FC = () => {
     }
   };
 
-  const loadChatHistory = async (chatId: string | number | null) => {
-    if (!token || !chatId) return;
-    const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
-    const cached = readCache<ChatMessage[]>(cacheKey, CACHE_TTLS.chatHistory);
-    if (cached?.data) {
-      setChatMessages(cached.data);
-    }
-    setChatLoading(!cached?.data);
-    try {
-      const headers: Record<string, string> = {};
-      if (cached?.etag) headers["If-None-Match"] = cached.etag;
-      const result = await apiFetchWithMeta<{ items: any[] }>(`/api/chats/${chatId}/history?limit=80`, {
-        headers: Object.keys(headers).length ? headers : undefined,
-      }).catch(() => null);
-      if (!result) return;
-      if (result.status === 304 && cached?.data) {
-        writeCache(cacheKey, cached.data, cached.etag);
-        return;
-      }
-      const payload = result.data ?? { items: [] };
-      const mapped: ChatMessage[] = (payload.items || []).map((m, idx) => ({
-        id: m.id ?? idx,
-        author: m.author || m.user || (m.by_bot ? "Bot" : "User"),
-        text: m.text || m.body || "",
-        sentAt: m.sent_time || m.sent_at || m.time || "",
-        byBot: !!m.by_bot,
-      }));
-      setChatMessages(mapped);
-      const etag = result.headers.get("etag") || cached?.etag;
-      writeCache(cacheKey, mapped, etag || undefined);
-    } finally {
-      setChatLoading(false);
-    }
-  };
+  const loadChatHistory = useCallback(
+    async (chatId: string | number | null, revalidate = false) => {
+      if (!token || !chatId) return;
+      const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
+      await swrFetch<ChatMessage[]>({
+        key: cacheKey,
+        url: `/api/chats/${chatId}/history?limit=80`,
+        ttl: CACHE_TTLS.chatHistory,
+        revalidate,
+        onLoading: setChatLoading,
+        onData: setChatMessages,
+        map: mapChatMessages,
+      });
+    },
+    [token, swrFetch, mapChatMessages]
+  );
 
   const loadBlacklist = async (query?: string) => {
     if (!token) return;
@@ -1852,7 +2084,7 @@ const App: React.FC = () => {
         method: "POST",
         body: JSON.stringify({ text }),
       });
-      loadChatHistory(selectedChat);
+      loadChatHistory(selectedChat, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to send", "error");
       setChatMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
@@ -2059,7 +2291,7 @@ const App: React.FC = () => {
                           </div>
                         </div>
                         <button
-                          onClick={() => loadFunpayStats(true)}
+                          onClick={() => loadFunpayStats(true, true)}
                           className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-600"
                         >
                           Refresh
@@ -2204,7 +2436,7 @@ const App: React.FC = () => {
                           <button
                             onClick={() => {
                               setSelectedChat(null);
-                              loadChats();
+                              loadChats(true);
                             }}
                             className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
                           >
@@ -2726,7 +2958,7 @@ const App: React.FC = () => {
                             {ordersHistory.length} records
                           </span>
                           <button
-                            onClick={() => loadOrdersHistory(ordersQuery.trim())}
+                            onClick={() => loadOrdersHistory(ordersQuery.trim(), true)}
                             className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
                           >
                             Refresh
