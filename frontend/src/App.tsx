@@ -599,6 +599,8 @@ const App: React.FC = () => {
   const adminCallToastRef = useRef<number>(0);
   const selectedChatRef = useRef<string | number | null>(null);
   const chatHistoryRequestRef = useRef<number>(0);
+  const lastClearedChatRef = useRef<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -612,6 +614,28 @@ const App: React.FC = () => {
   useEffect(() => {
     selectedChatRef.current = selectedChat;
   }, [selectedChat]);
+
+  const clearAdminCall = useCallback(
+    async (chatId: string | number | null) => {
+      if (!token || chatId === null || chatId === undefined) return;
+      const chatKey = String(chatId);
+      const currentCount = adminCallCountsRef.current[chatKey] || 0;
+      if (lastClearedChatRef.current === chatKey && currentCount === 0) return;
+      lastClearedChatRef.current = chatKey;
+      adminCallCountsRef.current[chatKey] = 0;
+      setChats((prev) =>
+        prev.map((chat) =>
+          String(chat.id) === chatKey ? { ...chat, adminCalls: 0, adminLastCalledAt: null } : chat
+        )
+      );
+      try {
+        await apiFetch(`/api/admin-calls/${encodeURIComponent(chatKey)}/clear`, { method: "POST" });
+      } catch {
+        // ignore clear errors
+      }
+    },
+    [token, apiFetch]
+  );
 
   const api = useMemo(
     () =>
@@ -1410,26 +1434,20 @@ const App: React.FC = () => {
   }, [token, sessionKey, activeNav, selectedChat, mapChatMessages, scopedKey]);
 
   useEffect(() => {
-    if (!token || activeNav !== "chats" || !selectedChat) return;
-    const chatIdValue = selectedChat;
-    const chatKey = String(chatIdValue);
-    const existing = adminCallCountsRef.current[chatKey] || 0;
-    if (!existing) return;
-    const clearCall = async () => {
-      try {
-        await apiFetch(`/api/admin-calls/${encodeURIComponent(String(chatIdValue))}/clear`, { method: "POST" });
-        adminCallCountsRef.current[chatKey] = 0;
-        setChats((prev) =>
-          prev.map((chat) =>
-            String(chat.id) === chatKey ? { ...chat, adminCalls: 0, adminLastCalledAt: null } : chat
-          )
-        );
-      } catch {
-        // ignore clear errors
-      }
-    };
-    clearCall();
-  }, [token, activeNav, selectedChat, apiFetch]);
+    if (activeNav !== "chats") return;
+    if (!chatScrollRef.current) return;
+    const handle = window.requestAnimationFrame(() => {
+      const el = chatScrollRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [activeNav, selectedChat, chatMessages]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "chats" || selectedChat === null || selectedChat === undefined) return;
+    clearAdminCall(selectedChat);
+  }, [token, activeNav, selectedChat, clearAdminCall]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -2815,7 +2833,10 @@ const App: React.FC = () => {
                               .map((chat) => (
                                 <button
                                   key={chat.id}
-                                  onClick={() => setSelectedChat(chat.id)}
+                                  onClick={() => {
+                                    setSelectedChat(chat.id);
+                                    clearAdminCall(chat.id);
+                                  }}
                                   className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-3 text-left text-sm transition ${
                                     selectedChat === chat.id
                                       ? "border-neutral-300 bg-neutral-50"
@@ -2879,7 +2900,10 @@ const App: React.FC = () => {
                           </div>
                         </div>
                         <div className="flex flex-1 flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4 min-h-0">
-                          <div className="flex-1 space-y-3 overflow-y-auto pr-2 min-h-0">
+                            <div
+                              ref={chatScrollRef}
+                              className="flex-1 space-y-3 overflow-y-auto pr-2 min-h-0"
+                            >
                             {chatLoading && (
                               <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
                                 Loading messages...
