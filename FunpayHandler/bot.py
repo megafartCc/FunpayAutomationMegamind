@@ -1398,6 +1398,15 @@ class FunpayBot:
                 login,
                 account_name,
             ) = row
+            # Raw DB values keep sensitive fields encrypted; decrypt before using them.
+            try:
+                password = self._db._decrypt_value(password)
+            except Exception:
+                password = None
+            try:
+                mafile_json = self._db._decrypt_value(mafile_json)
+            except Exception:
+                mafile_json = None
             if not owner or owner == "OTHER_ACCOUNT":
                 continue
 
@@ -1594,17 +1603,20 @@ class FunpayBot:
         deauth_error: str | None = None
         try:
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
-                try:
-                    deauth_ok = asyncio.run(
-                        logout_all_steam_sessions(
-                            steam_login=steam_login,
-                            steam_password=password,
-                            mafile_json=mafile_json,
+                if not mafile_json or not password:
+                    deauth_error = "mafile_json/password missing (decrypt failed?)"
+                else:
+                    try:
+                        deauth_ok = asyncio.run(
+                            logout_all_steam_sessions(
+                                steam_login=steam_login,
+                                steam_password=password,
+                                mafile_json=mafile_json,
+                            )
                         )
-                    )
-                except Exception as exc:
-                    deauth_error = str(exc)
-                    logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
+                    except Exception as exc:
+                        deauth_error = str(exc)
+                        logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
 
             if AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE:
                 deauth_status = "ok" if deauth_ok else "failed"
