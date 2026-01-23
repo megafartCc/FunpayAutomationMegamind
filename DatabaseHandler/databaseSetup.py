@@ -2640,6 +2640,54 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def get_admin_call_counts_by_owner(self, user_id: int | None = None) -> dict:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT owner, count, last_called_at, chat_id
+                FROM admin_calls
+                WHERE user_id = ?
+                """,
+                (int(user_id or 0),),
+            )
+            rows = cursor.fetchall()
+            data = {}
+            for row in rows:
+                owner_key = str(row[0] or "").strip().lower()
+                if not owner_key:
+                    continue
+                data[owner_key] = {
+                    "owner": row[0],
+                    "count": int(row[1] or 0),
+                    "last_called_at": row[2],
+                    "chat_id": row[3],
+                }
+            return data
+        except Exception as exc:
+            logger.error(f"Error loading admin calls by owner: {exc}")
+            return {}
+        finally:
+            cursor.close()
+
+    def clear_admin_call(self, chat_id: int, user_id: int | None = None) -> bool:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                DELETE FROM admin_calls
+                WHERE user_id = ? AND chat_id = ?
+                """,
+                (int(user_id or 0), int(chat_id)),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            logger.error(f"Error clearing admin call for chat {chat_id}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
     def clear_blacklist(self, user_id: int | None = None) -> int:
         try:
             cursor = self._cursor()

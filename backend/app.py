@@ -1719,6 +1719,7 @@ def active_rentals(
     include_mafile = include_presence or include_steamid
     items = db.get_active_users(uid, include_mafile=include_mafile)
     token = (getattr(request.state, "user", None) or {}).get("golden_key")
+    admin_calls_by_owner = db.get_admin_call_counts_by_owner(uid)
 
     chat_map = {}
     if include_chat and token:
@@ -1763,6 +1764,15 @@ def active_rentals(
                 item["chat_url"] = None
         else:
             item["chat_url"] = None
+
+        owner = str(item.get("owner") or "").strip().lower()
+        if owner:
+            meta = admin_calls_by_owner.get(owner)
+            item["admin_calls"] = int(meta.get("count", 0)) if meta else 0
+            item["admin_last_called_at"] = meta.get("last_called_at") if meta else None
+        else:
+            item["admin_calls"] = 0
+            item["admin_last_called_at"] = None
 
     return {"items": items}
 
@@ -1854,6 +1864,13 @@ async def stream_chats(
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@app.post("/api/admin-calls/{chat_id}/clear", dependencies=[Depends(require_admin)])
+def clear_admin_call(chat_id: int, request: Request) -> dict:
+    uid = current_user_id(request)
+    cleared = db.clear_admin_call(chat_id, uid)
+    return {"cleared": bool(cleared)}
 
 
 @app.get("/api/chats/{chat_id}/history", dependencies=[Depends(require_admin)])

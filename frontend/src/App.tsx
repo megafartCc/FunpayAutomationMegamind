@@ -48,6 +48,8 @@ type RentalRow = {
   presenceLabel?: string | null;
   presenceObservedAt?: number | null;
   chatUrl?: string | null;
+  adminCalls?: number;
+  adminLastCalledAt?: string | null;
 };
 
 type NotificationItem = {
@@ -188,6 +190,28 @@ const isAdminCallText = (value?: string | null) => {
   if (!value) return false;
   const trimmed = String(value).trim().toLowerCase();
   return /^!(admin|админ)\b/.test(trimmed);
+};
+
+const playAdminCallSound = () => {
+  try {
+    const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.2);
+    oscillator.onended = () => {
+      context.close().catch(() => null);
+    };
+  } catch {
+    // ignore audio errors
+  }
 };
 
 const avatarStyle = (name?: string | null) => {
@@ -571,6 +595,8 @@ const App: React.FC = () => {
     (key: string) => `${key}:u:${sessionKey || "anon"}`,
     [sessionKey]
   );
+  const adminCallCountsRef = useRef<Record<string, number>>({});
+  const adminCallToastRef = useRef<number>(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1014,6 +1040,8 @@ const App: React.FC = () => {
               presence,
               presenceLabel: r.presence_label ?? null,
               presenceObservedAt: presenceFetchedAt,
+              adminCalls: Number(r.admin_calls ?? r.adminCalls ?? 0) || 0,
+              adminLastCalledAt: r.admin_last_called_at ?? r.adminLastCalledAt ?? null,
             };
           })
         );
@@ -1212,7 +1240,7 @@ const App: React.FC = () => {
   }, [token, sessionKey, activeNav, selectedChat, loadChatHistory]);
 
   useEffect(() => {
-    if (!token || activeNav !== "chats") {
+    if (!token) {
       if (chatListStreamRef.current) {
         chatListStreamRef.current.close();
         chatListStreamRef.current = null;
@@ -1246,6 +1274,25 @@ const App: React.FC = () => {
         if (items.length) {
           setSelectedChat((prev) => (prev === null || prev === undefined ? items[0].id : prev));
         }
+
+        const nowTs = Date.now();
+        const prevCounts = adminCallCountsRef.current;
+        const nextCounts: Record<string, number> = {};
+        items.forEach((chat) => {
+          const key = String(chat.id ?? "");
+          const count = Number(chat.adminCalls || 0);
+          nextCounts[key] = count;
+          const prev = prevCounts[key] || 0;
+          if (count > prev && activeNav !== "chats") {
+            const lastToastAt = adminCallToastRef.current || 0;
+            if (nowTs - lastToastAt > 1500) {
+              adminCallToastRef.current = nowTs;
+              showToast(`Admin call: ${chat.name || "Buyer"}`, "error");
+              playAdminCallSound();
+            }
+          }
+        });
+        adminCallCountsRef.current = nextCounts;
         setChatStreamActive(true);
       } catch {
         // ignore stream parse errors
@@ -1270,7 +1317,7 @@ const App: React.FC = () => {
       }
       setChatStreamActive(false);
     };
-  }, [token, sessionKey, activeNav, mapChatItems]);
+  }, [token, sessionKey, activeNav, mapChatItems, scopedKey, showToast]);
 
   useEffect(() => {
     if (!token || activeNav !== "chats" || !selectedChat) {
@@ -1322,6 +1369,28 @@ const App: React.FC = () => {
       }
     };
   }, [token, sessionKey, activeNav, selectedChat, mapChatMessages]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "chats" || !selectedChat) return;
+    const chatIdValue = selectedChat;
+    const chatKey = String(chatIdValue);
+    const existing = adminCallCountsRef.current[chatKey] || 0;
+    if (!existing) return;
+    const clearCall = async () => {
+      try {
+        await apiFetch(`/api/admin-calls/${encodeURIComponent(String(chatIdValue))}/clear`, { method: "POST" });
+        adminCallCountsRef.current[chatKey] = 0;
+        setChats((prev) =>
+          prev.map((chat) =>
+            String(chat.id) === chatKey ? { ...chat, adminCalls: 0, adminLastCalledAt: null } : chat
+          )
+        );
+      } catch {
+        // ignore clear errors
+      }
+    };
+    clearCall();
+  }, [token, activeNav, selectedChat, apiFetch]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -2963,6 +3032,8 @@ const App: React.FC = () => {
                                 ? "In game"
                                 : "Offline";
                             const pill = statusPill(presenceLabel);
+                            const adminCalls = Number(r.adminCalls || 0);
+                            const hasAdminCall = adminCalls > 0;
                             const timeLeft =
                               r.durationSec != null && r.startedAt != null
                                 ? formatDuration(r.durationSec, r.startedAt, now)
@@ -3003,7 +3074,9 @@ const App: React.FC = () => {
                                 className={`grid items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
                                   isSelected
                                     ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
-                                    : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                    : `border-neutral-100 bg-neutral-50 hover:border-neutral-200 ${
+                                        hasAdminCall ? "ring-1 ring-rose-200 bg-rose-50/60" : ""
+                                      }`
                                 } cursor-pointer`}
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
@@ -3030,21 +3103,28 @@ const App: React.FC = () => {
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                {r.steamId ? (
-                                  <a
-                                    href={`${PRESENCE_BASE}/${r.steamId}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
-                                    onClick={(event) => event.stopPropagation()}
-                                  >
-                                    {presenceLabel}
-                                  </a>
-                                ) : (
-                                  <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
-                                    {presenceLabel}
-                                  </span>
-                                )}
+                                <div className="flex items-center gap-2">
+                                  {hasAdminCall && (
+                                    <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-semibold text-rose-600">
+                                      Admin call {adminCalls}
+                                    </span>
+                                  )}
+                                  {r.steamId ? (
+                                    <a
+                                      href={`${PRESENCE_BASE}/${r.steamId}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      {presenceLabel}
+                                    </a>
+                                  ) : (
+                                    <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                      {presenceLabel}
+                                    </span>
+                                  )}
+                                </div>
                               </motion.div>
                             );
                           })}
@@ -3686,6 +3766,8 @@ const App: React.FC = () => {
                                 ? "In game"
                                 : "Offline";
                             const pill = statusPill(presenceLabel);
+                            const adminCalls = Number(r.adminCalls || 0);
+                            const hasAdminCall = adminCalls > 0;
                             const timeLeft =
                               r.durationSec != null && r.startedAt != null
                                 ? formatDuration(r.durationSec, r.startedAt, now)
@@ -3726,7 +3808,9 @@ const App: React.FC = () => {
                                 className={`grid items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
                                   isSelected
                                     ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
-                                    : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                    : `border-neutral-100 bg-neutral-50 hover:border-neutral-200 ${
+                                        hasAdminCall ? "ring-1 ring-rose-200 bg-rose-50/60" : ""
+                                      }`
                                 } cursor-pointer`}
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
@@ -3753,21 +3837,28 @@ const App: React.FC = () => {
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                {r.steamId ? (
-                                  <a
-                                    href={`${PRESENCE_BASE}/${r.steamId}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
-                                    onClick={(event) => event.stopPropagation()}
-                                  >
-                                    {presenceLabel}
-                                  </a>
-                                ) : (
-                                  <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
-                                    {presenceLabel}
-                                  </span>
-                                )}
+                                <div className="flex items-center gap-2">
+                                  {hasAdminCall && (
+                                    <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-semibold text-rose-600">
+                                      Admin call {adminCalls}
+                                    </span>
+                                  )}
+                                  {r.steamId ? (
+                                    <a
+                                      href={`${PRESENCE_BASE}/${r.steamId}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      {presenceLabel}
+                                    </a>
+                                  ) : (
+                                    <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                      {presenceLabel}
+                                    </span>
+                                  )}
+                                </div>
                               </motion.div>
                             );
                           })}
