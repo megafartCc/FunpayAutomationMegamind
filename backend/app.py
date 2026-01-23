@@ -754,10 +754,16 @@ class GoldenKeyUpdate(BaseModel):
 class BlacklistCreate(BaseModel):
     owner: str
     reason: Optional[str] = None
+    order_id: Optional[str] = None
 
 
 class BlacklistRemove(BaseModel):
     owners: list[str]
+
+
+class BlacklistUpdate(BaseModel):
+    owner: str
+    reason: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -922,6 +928,32 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
         "generated_at": now,
     }
     return _etag_response(request, payload)
+
+
+@app.get("/api/orders/resolve", dependencies=[Depends(require_admin)])
+def resolve_order_owner(request: Request, order_id: str) -> dict:
+    uid = current_user_id(request)
+    order_key = (order_id or "").strip()
+    if not order_key:
+        raise HTTPException(status_code=400, detail="order_id is required")
+    items = db.search_order_history(query=order_key, limit=5, user_id=uid)
+    if not items:
+        raise HTTPException(status_code=404, detail="Order not found")
+    order_key_lower = order_key.lower()
+    match = next(
+        (item for item in items if str(item.get("order_id") or "").lower() == order_key_lower),
+        None,
+    )
+    item = match or items[0]
+    owner = str(item.get("owner") or "").strip()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Order buyer not found")
+    return {
+        "order_id": item.get("order_id") or order_key,
+        "owner": owner,
+        "action": item.get("action"),
+        "created_at": item.get("created_at"),
+    }
 
 
 @app.get("/api/orders/history", dependencies=[Depends(require_admin)])
@@ -1106,11 +1138,35 @@ def blacklist_list(request: Request, query: str = "") -> dict:
 def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
     uid = current_user_id(request)
     owner = (payload.owner or "").strip()
+    order_id = (payload.order_id or "").strip()
+    if not owner and order_id:
+        items = db.search_order_history(query=order_id, limit=5, user_id=uid)
+        if not items:
+            raise HTTPException(status_code=404, detail="Order not found")
+        order_key = order_id.lower()
+        match = next(
+            (item for item in items if str(item.get("order_id") or "").lower() == order_key),
+            None,
+        )
+        item = match or items[0]
+        owner = str(item.get("owner") or "").strip()
     if not owner:
         raise HTTPException(status_code=400, detail="Owner is required")
     success = db.add_blacklist_entry(owner, payload.reason, uid)
     if not success:
         raise HTTPException(status_code=400, detail="User already blacklisted")
+    return {"success": True}
+
+
+@app.patch("/api/blacklist/{entry_id}", dependencies=[Depends(require_admin)])
+def blacklist_update(entry_id: int, payload: BlacklistUpdate, request: Request) -> dict:
+    uid = current_user_id(request)
+    owner = (payload.owner or "").strip()
+    if not owner:
+        raise HTTPException(status_code=400, detail="Owner is required")
+    updated = db.update_blacklist_entry(entry_id, owner, payload.reason, uid)
+    if not updated:
+        raise HTTPException(status_code=400, detail="Failed to update blacklist entry")
     return {"success": True}
 
 

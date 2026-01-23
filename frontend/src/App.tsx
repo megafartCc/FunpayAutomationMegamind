@@ -426,7 +426,7 @@ const RENTALS_GRID =
 const ORDERS_GRID =
   "minmax(120px,0.9fr) minmax(160px,1fr) minmax(180px,1.2fr) minmax(180px,1.2fr) minmax(120px,0.8fr) minmax(110px,0.7fr) minmax(110px,0.7fr) minmax(160px,1fr) minmax(110px,0.7fr)";
 const BLACKLIST_GRID =
-  "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
+  "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(240px,1.6fr) minmax(160px,0.9fr) minmax(120px,0.6fr)";
 const CACHE_PREFIX = "fpa_cache:";
 const createEmptyOverview = (): OverviewData => ({
   totalAccounts: null,
@@ -559,8 +559,13 @@ const App: React.FC = () => {
   const [blacklistQuery, setBlacklistQuery] = useState("");
   const [blacklistLoading, setBlacklistLoading] = useState(false);
   const [blacklistOwner, setBlacklistOwner] = useState("");
+  const [blacklistOrderId, setBlacklistOrderId] = useState("");
   const [blacklistReason, setBlacklistReason] = useState("");
   const [blacklistSelected, setBlacklistSelected] = useState<string[]>([]);
+  const [blacklistEditingId, setBlacklistEditingId] = useState<string | number | null>(null);
+  const [blacklistEditOwner, setBlacklistEditOwner] = useState("");
+  const [blacklistEditReason, setBlacklistEditReason] = useState("");
+  const [blacklistResolving, setBlacklistResolving] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
@@ -2116,22 +2121,96 @@ const App: React.FC = () => {
   };
 
   const handleAddBlacklist = async () => {
-    const owner = blacklistOwner.trim();
-    if (!owner) {
-      showToast("Enter a buyer username.", "error");
-      return;
-    }
+    let owner = blacklistOwner.trim();
+    const orderId = blacklistOrderId.trim();
     try {
+      if (!owner && orderId) {
+        setBlacklistResolving(true);
+        const resolved = await apiFetch<{ owner?: string }>(
+          `/api/orders/resolve?order_id=${encodeURIComponent(orderId)}`
+        );
+        owner = (resolved?.owner || "").trim();
+        if (!owner) {
+          showToast("Order found but buyer is missing.", "error");
+          setBlacklistResolving(false);
+          return;
+        }
+        setBlacklistOwner(owner);
+      }
+      if (!owner) {
+        showToast("Enter a buyer username or order ID.", "error");
+        return;
+      }
       await apiFetch("/api/blacklist", {
         method: "POST",
-        body: JSON.stringify({ owner, reason: blacklistReason.trim() || null }),
+        body: JSON.stringify({ owner, reason: blacklistReason.trim() || null, order_id: orderId || null }),
       });
       showToast("User added to blacklist.");
       setBlacklistOwner("");
+      setBlacklistOrderId("");
       setBlacklistReason("");
       loadBlacklist(blacklistQuery);
     } catch (error) {
       showToast((error as Error).message || "Failed to add user", "error");
+    } finally {
+      setBlacklistResolving(false);
+    }
+  };
+
+  const handleResolveBlacklistOrder = async () => {
+    const orderId = blacklistOrderId.trim();
+    if (!orderId) {
+      showToast("Enter an order ID.", "error");
+      return;
+    }
+    try {
+      setBlacklistResolving(true);
+      const resolved = await apiFetch<{ owner?: string }>(
+        `/api/orders/resolve?order_id=${encodeURIComponent(orderId)}`
+      );
+      const owner = (resolved?.owner || "").trim();
+      if (!owner) {
+        showToast("Order found but buyer is missing.", "error");
+        return;
+      }
+      setBlacklistOwner(owner);
+      showToast(`Buyer найден: ${owner}`);
+    } catch (error) {
+      showToast((error as Error).message || "Order not found.", "error");
+    } finally {
+      setBlacklistResolving(false);
+    }
+  };
+
+  const startEditBlacklist = (entry: BlacklistEntry) => {
+    setBlacklistEditingId(entry.id ?? null);
+    setBlacklistEditOwner(entry.owner || "");
+    setBlacklistEditReason(entry.reason || "");
+  };
+
+  const cancelEditBlacklist = () => {
+    setBlacklistEditingId(null);
+    setBlacklistEditOwner("");
+    setBlacklistEditReason("");
+  };
+
+  const handleSaveBlacklistEdit = async () => {
+    if (blacklistEditingId === null || blacklistEditingId === undefined) return;
+    const owner = blacklistEditOwner.trim();
+    if (!owner) {
+      showToast("Owner is required.", "error");
+      return;
+    }
+    try {
+      await apiFetch(`/api/blacklist/${encodeURIComponent(String(blacklistEditingId))}`, {
+        method: "PATCH",
+        body: JSON.stringify({ owner, reason: blacklistEditReason.trim() || null }),
+      });
+      showToast("Blacklist entry updated.");
+      cancelEditBlacklist();
+      loadBlacklist(blacklistQuery);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update entry", "error");
     }
   };
 
@@ -2953,6 +3032,21 @@ const App: React.FC = () => {
                           <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                             <div className="mb-2 text-sm font-semibold text-neutral-800">Add to blacklist</div>
                             <div className="space-y-3">
+                              <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                                <input
+                                  value={blacklistOrderId}
+                                  onChange={(e) => setBlacklistOrderId(e.target.value)}
+                                  placeholder="Order ID (optional)"
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                />
+                                <button
+                                  onClick={handleResolveBlacklistOrder}
+                                  disabled={blacklistResolving}
+                                  className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                                >
+                                  Find buyer
+                                </button>
+                              </div>
                               <input
                                 value={blacklistOwner}
                                 onChange={(e) => setBlacklistOwner(e.target.value)}
@@ -2967,10 +3061,10 @@ const App: React.FC = () => {
                               />
                               <button
                                 onClick={handleAddBlacklist}
-                                disabled={!blacklistOwner.trim()}
+                                disabled={blacklistResolving || (!blacklistOwner.trim() && !blacklistOrderId.trim())}
                                 className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                               >
-                                Add user
+                                {blacklistResolving ? "Resolving..." : "Add user"}
                               </button>
                             </div>
                           </div>
@@ -3019,6 +3113,7 @@ const App: React.FC = () => {
                                 <span>Buyer</span>
                                 <span>Reason</span>
                                 <span>Added</span>
+                                <span>Actions</span>
                               </div>
                               <div className="divide-y divide-neutral-100 overflow-x-hidden">
                                 {blacklistLoading ? (
@@ -3028,6 +3123,10 @@ const App: React.FC = () => {
                                 ) : blacklistEntries.length ? (
                                   blacklistEntries.map((entry, idx) => {
                                     const isSelected = blacklistSelected.includes(entry.owner);
+                                    const isEditing =
+                                      blacklistEditingId !== null &&
+                                      entry.id !== undefined &&
+                                      String(blacklistEditingId) === String(entry.id);
                                     return (
                                       <div
                                         key={entry.id ?? entry.owner ?? idx}
@@ -3044,11 +3143,53 @@ const App: React.FC = () => {
                                             className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
                                           />
                                         </label>
-                                        <span className="min-w-0 truncate font-semibold text-neutral-900">{entry.owner}</span>
-                                        <span className="min-w-0 truncate text-neutral-600">{entry.reason || "-"}</span>
+                                        {isEditing ? (
+                                          <input
+                                            value={blacklistEditOwner}
+                                            onChange={(e) => setBlacklistEditOwner(e.target.value)}
+                                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                          />
+                                        ) : (
+                                          <span className="min-w-0 truncate font-semibold text-neutral-900">{entry.owner}</span>
+                                        )}
+                                        {isEditing ? (
+                                          <input
+                                            value={blacklistEditReason}
+                                            onChange={(e) => setBlacklistEditReason(e.target.value)}
+                                            placeholder="Reason (optional)"
+                                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                          />
+                                        ) : (
+                                          <span className="min-w-0 truncate text-neutral-600">{entry.reason || "-"}</span>
+                                        )}
                                         <span className="text-xs text-neutral-500">
                                           {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "-"}
                                         </span>
+                                        <div className="flex items-center gap-2">
+                                          {isEditing ? (
+                                            <>
+                                              <button
+                                                onClick={handleSaveBlacklistEdit}
+                                                className="rounded-lg bg-neutral-900 px-3 py-1 text-xs font-semibold text-white"
+                                              >
+                                                Save
+                                              </button>
+                                              <button
+                                                onClick={cancelEditBlacklist}
+                                                className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <button
+                                              onClick={() => startEditBlacklist(entry)}
+                                              className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                            >
+                                              Edit
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
                                     );
                                   })

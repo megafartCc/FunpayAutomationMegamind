@@ -2447,6 +2447,45 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def update_blacklist_entry(
+        self,
+        entry_id: int,
+        owner: str,
+        reason: str | None = None,
+        user_id: int | None = None,
+    ) -> bool:
+        if not entry_id or not owner:
+            return False
+        owner_key = str(owner).strip().lower()
+        reason_value = reason.strip() if isinstance(reason, str) and reason.strip() else None
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT id FROM blacklist
+                WHERE owner = ? AND user_id = ? AND id != ?
+                LIMIT 1
+                """,
+                (owner_key, int(user_id or 0), int(entry_id)),
+            )
+            if cursor.fetchone():
+                return False
+            cursor.execute(
+                """
+                UPDATE blacklist
+                SET owner = ?, reason = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (owner_key, reason_value, int(entry_id), int(user_id or 0)),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            logger.error(f"Error updating blacklist entry {entry_id}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
     def remove_blacklist_entries(self, owners: list[str], user_id: int | None = None) -> int:
         if not owners:
             return 0
