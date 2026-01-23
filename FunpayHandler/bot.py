@@ -630,14 +630,19 @@ class FunpayBot:
                 + (f"Истекает: {expiry_str} МСК | " if expiry_str else "")
                 + f"Осталось: {remaining_str}{note}",
             )
+            rental_minutes = unit_minutes * amount
+            steam_id = self._resolve_account_steamid(account)
             self._db.log_order_event(
                 order_id=str(event.order.id),
                 owner_id=buyer,
                 action="extended",
                 account_name=account.get("account_name"),
+                account_id=account.get("id"),
                 lot_number=lot_number,
                 amount=amount,
                 price=getattr(event.order, "price", None),
+                rental_minutes=rental_minutes,
+                steam_id=steam_id,
                 user_id=self._user_id,
             )
             acc.confirm(event.order.id)
@@ -772,14 +777,19 @@ class FunpayBot:
             "Note: user already had an active rental",
         )
 
+        rental_minutes = unit_minutes * units
+        steam_id = self._resolve_account_steamid(rental)
         self._db.log_order_event(
             order_id=str(event.order.id),
             owner_id=event.order.buyer_username,
             action="extended",
             account_name=order_name,
+            account_id=rental.get("id"),
             lot_number=None,
             amount=units,
             price=getattr(event.order, "price", None),
+            rental_minutes=rental_minutes,
+            steam_id=steam_id,
             user_id=self._user_id,
         )
         acc.confirm(event.order.id)
@@ -829,14 +839,19 @@ class FunpayBot:
             message = f"{note}\n\n{message}"
         acc.send_message(chat_id, message)
 
+        rental_minutes = unit_minutes * units
+        steam_id = self._resolve_account_steamid(account)
         self._db.log_order_event(
             order_id=str(event.order.id),
             owner_id=event.order.buyer_username,
             action="issued",
             account_name=account.get("account_name"),
+            account_id=account.get("id"),
             lot_number=lot_number,
             amount=units,
             price=getattr(event.order, "price", None),
+            rental_minutes=rental_minutes,
+            steam_id=steam_id,
             user_id=self._user_id,
         )
         acc.confirm(event.order.id)
@@ -1674,6 +1689,25 @@ class FunpayBot:
             return steamid64
         except Exception:
             return None
+
+    def _resolve_account_steamid(self, account: Optional[dict]) -> Optional[str]:
+        if not account:
+            return None
+        mafile_json = account.get("mafile_json")
+        if not mafile_json:
+            account_id = account.get("id")
+            if account_id is not None:
+                try:
+                    account_id = int(account_id)
+                except (TypeError, ValueError):
+                    account_id = None
+                full = self._db.get_account_by_id(account_id) if account_id is not None else None
+                if full:
+                    mafile_json = full.get("mafile_json")
+        steamid64 = self._steamid64_from_mafile(mafile_json)
+        if steamid64 is None:
+            return None
+        return str(steamid64)
 
     def _should_delay_expire_due_to_dota_match(
         self,

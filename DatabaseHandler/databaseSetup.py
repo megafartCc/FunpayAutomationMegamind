@@ -272,6 +272,9 @@ class MySQLDB:
                     order_id VARCHAR(32) NOT NULL,
                     owner VARCHAR(255) NOT NULL,
                     account_name VARCHAR(255) NULL,
+                    account_id INT NULL,
+                    steam_id VARCHAR(32) NULL,
+                    rental_minutes INT NULL,
                     lot_number INT NULL,
                     amount INT DEFAULT 1,
                     price DECIMAL(10,2) NULL,
@@ -279,7 +282,9 @@ class MySQLDB:
                     user_id INT NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_order_owner_created (owner, created_at),
-                    INDEX idx_order_user_owner (user_id, owner)
+                    INDEX idx_order_user_owner (user_id, owner),
+                    INDEX idx_order_account (account_id),
+                    INDEX idx_order_steam (steam_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -398,6 +403,9 @@ class MySQLDB:
                     order_id TEXT NOT NULL,
                     owner TEXT NOT NULL,
                     account_name TEXT,
+                    account_id INTEGER,
+                    steam_id TEXT,
+                    rental_minutes INTEGER,
                     lot_number INTEGER,
                     amount INTEGER DEFAULT 1,
                     price REAL,
@@ -430,6 +438,7 @@ class MySQLDB:
         self._ensure_feedback_rewards_table()
         self._ensure_blacklist_table()
         self._ensure_feedback_rewards_revoked_column()
+        self._ensure_order_history_columns()
         self._migrate_lots_schema()
 
     def _ensure_mafile_column(self):
@@ -1831,9 +1840,13 @@ class MySQLDB:
         amount: int | None = None,
         price: float | None = None,
         user_id: int | None = None,
+        account_id: int | None = None,
+        rental_minutes: int | None = None,
+        steam_id: str | None = None,
     ) -> bool:
         if not order_id or not owner_id or not action:
             return False
+        cursor = None
         try:
             amount_value = None
             if amount is not None:
@@ -1847,31 +1860,75 @@ class MySQLDB:
                     price_value = float(price)
                 except (TypeError, ValueError):
                     price_value = None
+            account_id_value = None
+            if account_id is not None:
+                try:
+                    account_id_value = int(account_id)
+                except (TypeError, ValueError):
+                    account_id_value = None
+            rental_minutes_value = None
+            if rental_minutes is not None:
+                try:
+                    rental_minutes_value = int(rental_minutes)
+                except (TypeError, ValueError):
+                    rental_minutes_value = None
+            steam_id_value = str(steam_id).strip() if steam_id else None
+
             cursor = self._cursor()
-            cursor.execute(
-                """
-                INSERT INTO order_history (
-                    order_id, owner, account_name, lot_number, amount, price, action, user_id
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO order_history (
+                        order_id, owner, account_name, account_id, steam_id, rental_minutes,
+                        lot_number, amount, price, action, user_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(order_id),
+                        str(owner_id),
+                        account_name,
+                        account_id_value,
+                        steam_id_value,
+                        rental_minutes_value,
+                        int(lot_number) if lot_number is not None else None,
+                        amount_value,
+                        price_value,
+                        str(action),
+                        int(user_id or 0),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(order_id),
-                    str(owner_id),
-                    account_name,
-                    int(lot_number) if lot_number is not None else None,
-                    amount_value,
-                    price_value,
-                    str(action),
-                    int(user_id or 0),
-                ),
-            )
-            return True
+                return True
+            except Exception as exc:
+                logger.warning(f"Order history insert fallback (new columns): {exc}")
+                cursor.execute(
+                    """
+                    INSERT INTO order_history (
+                        order_id, owner, account_name, lot_number, amount, price, action, user_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(order_id),
+                        str(owner_id),
+                        account_name,
+                        int(lot_number) if lot_number is not None else None,
+                        amount_value,
+                        price_value,
+                        str(action),
+                        int(user_id or 0),
+                    ),
+                )
+                return True
         except Exception as exc:
             logger.error(f"Error logging order event: {exc}")
             return False
         finally:
-            cursor.close()
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception:
+                pass
 
     def get_order_history(
         self, owner_id: str, limit: int = 5, user_id: int | None = None
@@ -1906,6 +1963,130 @@ class MySQLDB:
         except Exception as exc:
             logger.error(f"Error getting order history: {exc}")
             return []
+        finally:
+            cursor.close()
+
+    def search_order_history(
+        self,
+        query: str | None = None,
+        limit: int = 100,
+        user_id: int | None = None,
+        account_ids: list[int] | None = None,
+        account_names: list[str] | None = None,
+    ) -> list:
+        cursor = None
+        try:
+            cursor = self._cursor()
+            limit_value = max(1, min(int(limit or 100), 500))
+            where = ["user_id = ?"]
+            params: list = [int(user_id or 0)]
+
+            if account_ids or account_names:
+                clauses = []
+                if account_ids:
+                    cleaned_ids = []
+                    for value in account_ids:
+                        try:
+                            cleaned_ids.append(int(value))
+                        except (TypeError, ValueError):
+                            continue
+                    if cleaned_ids:
+                        placeholders = ", ".join(["?"] * len(cleaned_ids))
+                        clauses.append(f"account_id IN ({placeholders})")
+                        params.extend(cleaned_ids)
+                if account_names:
+                    cleaned_names = [str(value) for value in account_names if value]
+                    if cleaned_names:
+                        placeholders = ", ".join(["?"] * len(cleaned_names))
+                        clauses.append(f"account_name IN ({placeholders})")
+                        params.extend(cleaned_names)
+                if clauses:
+                    where.append("(" + " OR ".join(clauses) + ")")
+
+            if query:
+                like = f"%{query}%"
+                lot_cast = "CAST(lot_number AS CHAR)" if self.db_type == "mysql" else "CAST(lot_number AS TEXT)"
+                acc_cast = "CAST(account_id AS CHAR)" if self.db_type == "mysql" else "CAST(account_id AS TEXT)"
+                where.append(
+                    "("
+                    "order_id LIKE ? OR owner LIKE ? OR account_name LIKE ? OR action LIKE ? "
+                    f"OR {lot_cast} LIKE ? OR {acc_cast} LIKE ? OR steam_id LIKE ?"
+                    ")"
+                )
+                params.extend([like, like, like, like, like, like, like])
+
+            cursor.execute(
+                f"""
+                SELECT id, order_id, owner, account_id, account_name, lot_number, amount, price, action,
+                       user_id, created_at, rental_minutes, steam_id
+                FROM order_history
+                WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (*params, limit_value),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "order_id": row[1],
+                    "owner": row[2],
+                    "account_id": row[3],
+                    "account_name": row[4],
+                    "lot_number": row[5],
+                    "amount": row[6],
+                    "price": row[7],
+                    "action": row[8],
+                    "user_id": row[9],
+                    "created_at": row[10],
+                    "rental_minutes": row[11],
+                    "steam_id": row[12],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error searching order history: {exc}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+
+    def _ensure_order_history_columns(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'order_history'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                cols = {row[0] for row in cursor.fetchall()}
+                alter = {
+                    "account_id": "ALTER TABLE order_history ADD COLUMN account_id INT NULL",
+                    "steam_id": "ALTER TABLE order_history ADD COLUMN steam_id VARCHAR(32) NULL",
+                    "rental_minutes": "ALTER TABLE order_history ADD COLUMN rental_minutes INT NULL",
+                }
+                for col, stmt in alter.items():
+                    if col not in cols:
+                        cursor.execute(stmt)
+                self.conn.commit()
+            else:
+                cursor.execute("PRAGMA table_info(order_history)")
+                cols = {row[1] for row in cursor.fetchall()}
+                alter = {
+                    "account_id": "ALTER TABLE order_history ADD COLUMN account_id INTEGER",
+                    "steam_id": "ALTER TABLE order_history ADD COLUMN steam_id TEXT",
+                    "rental_minutes": "ALTER TABLE order_history ADD COLUMN rental_minutes INTEGER",
+                }
+                for col, stmt in alter.items():
+                    if col not in cols:
+                        cursor.execute(stmt)
+                self.conn.commit()
+        except Exception:
+            pass
         finally:
             cursor.close()
 

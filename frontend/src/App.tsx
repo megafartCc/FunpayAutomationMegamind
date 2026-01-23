@@ -59,6 +59,23 @@ type NotificationItem = {
   accountId?: string | number;
 };
 
+type OrderHistoryItem = {
+  id?: string | number;
+  orderId?: string;
+  buyer?: string;
+  accountName?: string;
+  accountId?: number | null;
+  login?: string | null;
+  steamId?: string | null;
+  rentalMinutes?: number | null;
+  amount?: number | null;
+  price?: number | null;
+  action?: string | null;
+  createdAt?: string | null;
+  chatUrl?: string | null;
+  lotNumber?: number | null;
+};
+
 type BlacklistEntry = {
   id?: string | number;
   owner: string;
@@ -213,6 +230,18 @@ const NotificationsIcon = () => (
   </svg>
 );
 
+const OrdersHistoryIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M4 8H20M4 8V16.8002C4 17.9203 4 18.4801 4.21799 18.9079C4.40973 19.2842 4.71547 19.5905 5.0918 19.7822C5.5192 20 6.07899 20 7.19691 20H16.8031C17.921 20 18.48 20 18.9074 19.7822C19.2837 19.5905 19.5905 19.2842 19.7822 18.9079C20 18.4805 20 17.9215 20 16.8036V8M4 8V7.2002C4 6.08009 4 5.51962 4.21799 5.0918C4.40973 4.71547 4.71547 4.40973 5.0918 4.21799C5.51962 4 6.08009 4 7.2002 4H8M20 8V7.19691C20 6.07899 20 5.5192 19.7822 5.0918C19.5905 4.71547 19.2837 4.40973 18.9074 4.21799C18.4796 4 17.9203 4 16.8002 4H16M16 2V4M16 4H8M8 2V4"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const SettingsIcon = () => (
   <svg width="22" height="21" viewBox="0 0 22 21" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -236,6 +265,7 @@ const NAV_ITEMS = [
   { id: "funpay-stats", label: "Funpay Statistics", Icon: FunpayStatisticsIcon },
   { id: "overview", label: "Dashboard", Icon: DashboardIcon },
   { id: "rentals", label: "Active Rentals", Icon: RentalsIcon },
+  { id: "orders", label: "Orders History", Icon: OrdersHistoryIcon },
   { id: "blacklist", label: "Blacklist", Icon: BlacklistIcon },
   { id: "inventory", label: "Inventory", Icon: InventoryIcon },
   { id: "lots", label: "Lots", Icon: LotsIcon },
@@ -298,6 +328,7 @@ const navIdToPath: Record<string, string> = {
   "funpay-stats": "/funpay-stats",
   overview: "/dashboard",
   rentals: "/rentals",
+  orders: "/orders",
   blacklist: "/blacklist",
   profile: "/profile",
   inventory: "/inventory",
@@ -325,6 +356,8 @@ const INVENTORY_GRID =
   "minmax(72px,0.6fr) minmax(180px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) minmax(190px,1.1fr) minmax(80px,0.6fr) minmax(110px,0.6fr)";
 const RENTALS_GRID =
   "minmax(64px,0.6fr) minmax(180px,1.4fr) minmax(160px,1.1fr) minmax(140px,1fr) minmax(120px,0.8fr) minmax(110px,0.8fr) minmax(140px,1fr) minmax(110px,0.7fr)";
+const ORDERS_GRID =
+  "minmax(120px,0.9fr) minmax(160px,1fr) minmax(180px,1.2fr) minmax(180px,1.2fr) minmax(120px,0.8fr) minmax(110px,0.7fr) minmax(110px,0.7fr) minmax(160px,1fr) minmax(110px,0.7fr)";
 const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
 
@@ -360,6 +393,9 @@ const App: React.FC = () => {
   const [chatListLoading, setChatListLoading] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [ordersHistory, setOrdersHistory] = useState<OrderHistoryItem[]>([]);
+  const [ordersQuery, setOrdersQuery] = useState("");
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [autoRaise, setAutoRaise] = useState<boolean>(() => localStorage.getItem("autoRaise") === "1");
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -706,6 +742,43 @@ const App: React.FC = () => {
     }
   }, [apiFetch]);
 
+  const loadOrdersHistory = useCallback(
+    async (queryText: string) => {
+      setOrdersLoading(true);
+      try {
+        const qs = new URLSearchParams();
+        if (queryText) qs.set("query", queryText);
+        qs.set("limit", "200");
+        qs.set("fast", "1");
+        const data = await apiFetch<{ items: any[] }>(`/api/orders/history?${qs.toString()}`).catch(() => ({
+          items: [],
+        }));
+        const mapped: OrderHistoryItem[] = (data.items || []).map((item, idx) => ({
+          id: item.id ?? idx,
+          orderId: item.order_id ?? item.orderId ?? "",
+          buyer: item.buyer ?? item.owner ?? "",
+          accountName: item.account_name ?? item.accountName ?? "",
+          accountId: item.account_id ?? item.accountId ?? null,
+          login: item.login ?? null,
+          steamId: item.steam_id ?? item.steamid ?? item.steamId ?? null,
+          rentalMinutes: item.rental_minutes ?? item.rentalMinutes ?? null,
+          amount: item.amount ?? null,
+          price: item.price ?? null,
+          action: item.action ?? "",
+          createdAt: item.created_at ?? item.createdAt ?? null,
+          chatUrl: item.chat_url ?? item.chatUrl ?? null,
+          lotNumber: item.lot_number ?? item.lotNumber ?? null,
+        }));
+        setOrdersHistory(mapped);
+      } catch {
+        setOrdersHistory([]);
+      } finally {
+        setOrdersLoading(false);
+      }
+    },
+    [apiFetch]
+  );
+
   useEffect(() => {
     if (token) {
       loadOverview();
@@ -732,6 +805,14 @@ const App: React.FC = () => {
     }, 250);
     return () => clearTimeout(handle);
   }, [token, activeNav, blacklistQuery]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "orders") return;
+    const handle = setTimeout(() => {
+      loadOrdersHistory(ordersQuery.trim());
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [token, activeNav, ordersQuery, loadOrdersHistory]);
 
   useEffect(() => {
     localStorage.setItem("autoRaise", autoRaise ? "1" : "0");
@@ -854,6 +935,28 @@ const App: React.FC = () => {
     if (lower.includes("idle") || lower.includes("away")) return { className: "bg-amber-50 text-amber-600", label: "Idle" };
     if (lower.includes("off") || lower === "" || lower === "0") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
     return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
+  };
+
+  const formatMinutesLabel = (minutes?: number | null) => {
+    const numeric = typeof minutes === "number" ? minutes : Number(minutes);
+    if (!Number.isFinite(numeric)) return "-";
+    const total = Math.max(0, Math.round(numeric));
+    const hours = Math.floor(total / 60);
+    const mins = total % 60;
+    if (hours && mins) return `${hours}h ${mins}m`;
+    if (hours) return `${hours}h`;
+    return `${mins}m`;
+  };
+
+  const orderActionPill = (action?: string | null) => {
+    const lower = (action || "").toLowerCase();
+    if (lower.includes("issued")) return { className: "bg-emerald-50 text-emerald-600", label: "Issued" };
+    if (lower.includes("extend")) return { className: "bg-sky-50 text-sky-600", label: "Extended" };
+    if (lower.includes("paid")) return { className: "bg-amber-50 text-amber-600", label: "Paid" };
+    if (lower.includes("refund")) return { className: "bg-rose-50 text-rose-600", label: "Refunded" };
+    if (lower.includes("blacklist")) return { className: "bg-neutral-200 text-neutral-700", label: "Blacklisted" };
+    if (!lower) return { className: "bg-neutral-100 text-neutral-600", label: "-" };
+    return { className: "bg-neutral-100 text-neutral-700", label: action || "-" };
   };
 
   const rangeOptions: Array<{ id: "daily" | "weekly" | "monthly"; label: string }> = [
@@ -2396,6 +2499,159 @@ const App: React.FC = () => {
                                   </div>
                                 )}
                               </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "orders" ? (
+                    <motion.div
+                      key="orders"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 space-y-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <h3 className="text-lg font-semibold text-neutral-900">Orders History</h3>
+                          <p className="text-sm text-neutral-500">
+                            Search by buyer, order ID, account, or SteamID64.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                            {ordersHistory.length} records
+                          </span>
+                          <button
+                            onClick={() => loadOrdersHistory(ordersQuery.trim())}
+                            className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                          <label className="relative flex h-11 w-full max-w-xl items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path
+                                d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z"
+                                stroke="#9CA3AF"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                              <path d="M21 21L16.65 16.65" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            <input
+                              type="search"
+                              placeholder="Search by buyer, order ID, account, Steam ID"
+                              value={ordersQuery}
+                              onChange={(event) => setOrdersQuery(event.target.value)}
+                              className="w-full bg-transparent text-neutral-700 placeholder:text-neutral-400 outline-none"
+                            />
+                          </label>
+                          <div className="text-xs text-neutral-500">Tip: paste SteamID64 to find who rented it.</div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[1200px]">
+                            <div
+                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                              style={{ gridTemplateColumns: ORDERS_GRID }}
+                            >
+                              <span>Order</span>
+                              <span>Buyer</span>
+                              <span>Account</span>
+                              <span>Steam ID</span>
+                              <span>Duration</span>
+                              <span>Price</span>
+                              <span>Action</span>
+                              <span>Date</span>
+                              <span>Chat</span>
+                            </div>
+                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
+                              {ordersLoading && (
+                                <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                  Loading orders...
+                                </div>
+                              )}
+                              {!ordersLoading &&
+                                ordersHistory.map((order, idx) => {
+                                  const pill = orderActionPill(order.action);
+                                  const priceLabel =
+                                    order.price !== null && order.price !== undefined && !Number.isNaN(Number(order.price))
+                                      ? `RUB ${Number(order.price).toLocaleString()}`
+                                      : "-";
+                                  const accountLabel = order.accountName || order.login || "-";
+                                  const subLabel = order.lotNumber ? `Lot ${order.lotNumber}` : order.accountId ? `ID ${order.accountId}` : "";
+                                  return (
+                                    <motion.div
+                                      key={order.id ?? idx}
+                                      initial={{ opacity: 0, y: 8 }}
+                                      animate={{ opacity: 1, y: 0, transition: { duration: 0.2, delay: idx * 0.02, ease: EASE } }}
+                                      className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                      style={{ gridTemplateColumns: ORDERS_GRID }}
+                                    >
+                                      <span className="min-w-0 truncate font-mono text-xs text-neutral-700">
+                                        {order.orderId || "-"}
+                                      </span>
+                                      {order.buyer ? (
+                                        order.chatUrl ? (
+                                          <a
+                                            href={order.chatUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="min-w-0 truncate font-semibold text-neutral-800 hover:underline"
+                                          >
+                                            {order.buyer}
+                                          </a>
+                                        ) : (
+                                          <span className="min-w-0 truncate font-semibold text-neutral-800">{order.buyer}</span>
+                                        )
+                                      ) : (
+                                        <span className="min-w-0 truncate text-neutral-400">-</span>
+                                      )}
+                                      <div className="min-w-0">
+                                        <div className="truncate font-semibold text-neutral-900">{accountLabel}</div>
+                                        {subLabel ? (
+                                          <div className="text-xs text-neutral-400">{subLabel}</div>
+                                        ) : (
+                                          <div className="text-xs text-neutral-300">-</div>
+                                        )}
+                                      </div>
+                                      <span className="min-w-0 truncate font-mono text-xs text-neutral-700">
+                                        {order.steamId || "-"}
+                                      </span>
+                                      <span className="min-w-0 truncate font-mono text-neutral-900">
+                                        {formatMinutesLabel(order.rentalMinutes)}
+                                      </span>
+                                      <span className="min-w-0 truncate font-semibold text-neutral-900">{priceLabel}</span>
+                                      <span className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                        {pill.label}
+                                      </span>
+                                      <span className="min-w-0 truncate text-xs text-neutral-500">
+                                        {order.createdAt ? new Date(order.createdAt).toLocaleString() : "-"}
+                                      </span>
+                                      {order.chatUrl ? (
+                                        <a
+                                          href={order.chatUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="inline-flex w-fit items-center justify-center rounded-full bg-neutral-900 px-3 py-1 text-xs font-semibold text-white"
+                                        >
+                                          Open
+                                        </a>
+                                      ) : (
+                                        <span className="text-xs text-neutral-400">-</span>
+                                      )}
+                                    </motion.div>
+                                  );
+                                })}
+                              {!ordersLoading && ordersHistory.length === 0 && (
+                                <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                  No orders found.
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>

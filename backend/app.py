@@ -782,6 +782,128 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
+@app.get("/api/orders/history", dependencies=[Depends(require_admin)])
+def orders_history(
+    request: Request,
+    query: str = "",
+    limit: int = 200,
+    fast: bool = True,
+    include_chat: bool = True,
+) -> dict:
+    uid = current_user_id(request)
+    q = (query or "").strip()
+    limit_value = max(1, min(int(limit or 200), 500))
+    steamid_query = q if re.fullmatch(r"7656119\d{10}", q) else None
+
+    accounts = None
+    account_ids: list[int] | None = None
+    account_names: list[str] | None = None
+
+    if steamid_query:
+        accounts = db.get_all_accounts(uid)
+        account_ids = []
+        account_names = []
+        for acc in accounts:
+            steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+            if steamid64 is not None and str(steamid64) == steamid_query:
+                if acc.get("id") is not None:
+                    try:
+                        account_ids.append(int(acc["id"]))
+                    except (TypeError, ValueError):
+                        pass
+                if acc.get("account_name"):
+                    account_names.append(acc["account_name"])
+        if not account_ids and not account_names:
+            return {"items": []}
+        items = db.search_order_history(
+            query=None,
+            limit=limit_value,
+            user_id=uid,
+            account_ids=account_ids,
+            account_names=account_names,
+        )
+    else:
+        items = db.search_order_history(
+            query=q or None,
+            limit=limit_value,
+            user_id=uid,
+        )
+
+    if accounts is None:
+        accounts = db.get_all_accounts(uid)
+
+    account_by_id = {}
+    account_by_name = {}
+    steam_map = {}
+    for acc in accounts:
+        acc_id = acc.get("id")
+        if acc_id is not None:
+            account_by_id[acc_id] = acc
+        name = acc.get("account_name")
+        if name:
+            account_by_name[name] = acc
+        steamid64 = _steamid64_from_mafile(acc.get("mafile_json"))
+        if steamid64 is not None:
+            steam_value = str(steamid64)
+            if acc_id is not None:
+                steam_map[acc_id] = steam_value
+            if name:
+                steam_map[name] = steam_value
+            login = acc.get("login")
+            if login:
+                steam_map[login] = steam_value
+
+    chat_map = {}
+    token = (getattr(request.state, "user", None) or {}).get("golden_key")
+    if include_chat and token:
+        cached_chats, ts = chat_cache.get_cached_chats(uid)
+        if cached_chats:
+            chat_map = {
+                chat.get("name"): chat.get("id")
+                for chat in cached_chats
+                if chat.get("name")
+            }
+            if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
+                chat_cache.refresh_chats_async(uid, token)
+        else:
+            if fast:
+                chat_cache.refresh_chats_async(uid, token)
+            else:
+                try:
+                    chats = chat_cache.refresh_chats_sync(uid, token)
+                    chat_map = {
+                        chat.get("name"): chat.get("id")
+                        for chat in chats
+                        if chat.get("name")
+                    }
+                except Exception:
+                    chat_map = {}
+
+    for item in items:
+        buyer = item.get("owner")
+        item["buyer"] = buyer
+        if not item.get("steam_id"):
+            acc_id = item.get("account_id")
+            if acc_id in steam_map:
+                item["steam_id"] = steam_map.get(acc_id)
+            else:
+                item["steam_id"] = steam_map.get(item.get("account_name"))
+        acc = None
+        if item.get("account_id") in account_by_id:
+            acc = account_by_id.get(item.get("account_id"))
+        elif item.get("account_name") in account_by_name:
+            acc = account_by_name.get(item.get("account_name"))
+        if acc and not item.get("login"):
+            item["login"] = acc.get("login")
+        if include_chat:
+            chat_id = chat_map.get(buyer) if buyer else None
+            item["chat_url"] = f"https://funpay.com/chat/?node={quote(str(chat_id))}" if chat_id else None
+        else:
+            item["chat_url"] = None
+
+    return {"items": items}
+
+
 @app.get("/api/blacklist", dependencies=[Depends(require_admin)])
 def blacklist_list(request: Request, query: str = "") -> dict:
     uid = current_user_id(request)
