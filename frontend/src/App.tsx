@@ -1318,6 +1318,10 @@ const App: React.FC = () => {
 
   const revalidateActive = useCallback(() => {
     if (!token) return;
+    if (activeNav === "overview" || activeNav === "rentals") {
+      loadOverview();
+      return;
+    }
     if (activeNav === "funpay-stats") {
       loadFunpayStats(false, true);
       return;
@@ -1360,7 +1364,11 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!token) return;
     let intervalId: number | undefined;
-    if (activeNav === "chats" && !chatStreamActive) {
+    if (activeNav === "overview" || activeNav === "rentals") {
+      intervalId = window.setInterval(() => {
+        loadOverview();
+      }, 20000);
+    } else if (activeNav === "chats" && !chatStreamActive) {
       intervalId = window.setInterval(() => {
         loadChats(true);
         loadChatHistory(selectedChat, true);
