@@ -242,7 +242,7 @@ function extractMatchId(rp, rpRaw) {
   return null;
 }
 
-function updateMatchStart(id64, inMatch, matchId) {
+function updateMatchStart(id64, inMatch, matchId, heroKey) {
   const now = Date.now();
   const entry = matchStart.get(id64);
 
@@ -251,19 +251,30 @@ function updateMatchStart(id64, inMatch, matchId) {
       matchStart.set(id64, {
         startedAt: now,
         matchId: matchId || null,
+        heroKey: heroKey || null,
         lastSeenAt: now,
         graceUntil: null,
       });
-      return;
+      return { entry: matchStart.get(id64), reset: true };
     }
-    if (matchId && entry.matchId && matchId !== entry.matchId) {
+    const heroChanged = heroKey && entry.heroKey && heroKey !== entry.heroKey;
+    const matchChanged = matchId && entry.matchId && matchId !== entry.matchId;
+    const reset = heroChanged || matchChanged;
+    if (reset) {
       entry.startedAt = now;
-    } else if (matchId && !entry.matchId) {
-      entry.matchId = matchId;
+      entry.matchId = matchId || null;
+      entry.heroKey = heroKey || null;
+    } else {
+      if (matchId && !entry.matchId) {
+        entry.matchId = matchId;
+      }
+      if (heroKey && !entry.heroKey) {
+        entry.heroKey = heroKey;
+      }
     }
     entry.lastSeenAt = now;
     entry.graceUntil = null;
-    return;
+    return { entry, reset };
   }
 
   if (!entry) return;
@@ -273,6 +284,7 @@ function updateMatchStart(id64, inMatch, matchId) {
   if (entry.graceUntil <= now) {
     matchStart.delete(id64);
   }
+  return { entry, reset: false };
 }
 
 function derivePresence(data) {
@@ -294,20 +306,25 @@ function derivePresence(data) {
   const inMatch = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
   const inGame = !!(data.in_game || data.appid || lobbyRaw || statusHit);
   const matchId = extractMatchId(rp, rpRaw);
-  updateMatchStart(data.steamid64, inMatch, matchId);
-
   const heroToken = extractHeroToken(rp, rpRaw);
+  const heroKey = normalizeKey(heroToken);
+  const update = updateMatchStart(data.steamid64, inMatch, matchId, heroKey || null);
+
   const heroName = toHeroDisplay(heroToken);
   const heroLevel = null;
 
   let matchSeconds = extractMatchSeconds(rp, rpRaw);
-  if (matchSeconds !== null && matchSeconds > 0) {
+  if (update?.reset) {
+    matchSeconds = 0;
+  }
+  if (!update?.reset && matchSeconds !== null && matchSeconds > 0) {
     const expectedStart = Date.now() - matchSeconds * 1000;
     const entry = matchStart.get(data.steamid64);
     if (!entry || Math.abs(entry.startedAt - expectedStart) > 5000) {
       matchStart.set(data.steamid64, {
         startedAt: expectedStart,
         matchId: matchId || entry?.matchId || null,
+        heroKey: heroKey || entry?.heroKey || null,
         lastSeenAt: Date.now(),
         graceUntil: null,
       });

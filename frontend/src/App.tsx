@@ -45,12 +45,6 @@ type RentalRow = {
   chatUrl?: string | null;
 };
 
-type MatchTimerState = {
-  startAtMs: number;
-  lastSeenMs: number;
-  heroKey?: string | null;
-};
-
 type NotificationItem = {
   id?: string | number;
   level?: string;
@@ -365,7 +359,6 @@ const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
-  const matchTimerCache = useMemo(() => new Map<string, MatchTimerState>(), []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -773,65 +766,14 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const MATCH_GRACE_MS = 5 * 60 * 1000;
-
-  const getMatchCacheKey = (rental: RentalRow) => {
-    if (rental.steamId) return `steam-${rental.steamId}`;
-    const loginKey = normalizeKey(rental.login);
-    if (loginKey) return `login-${loginKey}`;
-    const nameKey = normalizeKey(rental.accountName);
-    if (nameKey) return `acc-${nameKey}`;
-    if (rental.id !== null && rental.id !== undefined) return `id-${rental.id}`;
-    return null;
-  };
-
-  const getLocalMatchSeconds = (rental: RentalRow, nowMs: number) => {
-    const key = getMatchCacheKey(rental);
-    if (!key) return null;
-    const presence = rental.presence ?? null;
-    const inMatch = !!presence?.in_match;
-    const heroKey = normalizeKey(presence?.hero_name ?? rental.hero ?? "");
-    const cached = matchTimerCache.get(key);
-
-    if (inMatch) {
-      const rawSeconds = Number(presence?.match_seconds);
-      const hasApiSeconds = Number.isFinite(rawSeconds) && rawSeconds >= 0;
-      const heroChanged = heroKey && cached?.heroKey && heroKey !== cached.heroKey;
-      let startAtMs = cached?.startAtMs;
-
-      if (heroChanged) {
-        startAtMs = nowMs;
-      } else if (hasApiSeconds) {
-        startAtMs = nowMs - Math.floor(rawSeconds) * 1000;
-      }
-
-      if (!Number.isFinite(startAtMs)) {
-        startAtMs = nowMs;
-      }
-
-      matchTimerCache.set(key, {
-        startAtMs,
-        lastSeenMs: nowMs,
-        heroKey: heroKey || cached?.heroKey || null,
-      });
-      return Math.max(0, Math.floor((nowMs - startAtMs) / 1000));
-    }
-
-    if (cached) {
-      if (nowMs - cached.lastSeenMs > MATCH_GRACE_MS) {
-        matchTimerCache.delete(key);
-        return null;
-      }
-      return Math.max(0, Math.floor((nowMs - cached.startAtMs) / 1000));
-    }
-
-    return null;
-  };
-
-  const getMatchTimeDisplay = (rental: RentalRow, nowMs: number) => {
-    const seconds = getLocalMatchSeconds(rental, nowMs);
-    if (seconds == null) return null;
-    return formatMatchTime(seconds);
+  const getMatchTimeDisplay = (presence?: PresenceData | null) => {
+    if (!presence) return null;
+    const rawSeconds = presence.match_seconds;
+    if (Number.isFinite(rawSeconds)) return formatMatchTime(rawSeconds);
+    const raw = presence.match_time;
+    if (raw === null || raw === undefined) return null;
+    const cleaned = String(raw).trim();
+    return cleaned ? cleaned : null;
   };
 
   const formatStartTime = (value?: string | number | null) => {
@@ -1540,7 +1482,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(r, now) ?? "-";
+                            const timer = getMatchTimeDisplay(presence) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1934,7 +1876,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(r, now) ?? "-";
+                            const timer = getMatchTimeDisplay(presence) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
