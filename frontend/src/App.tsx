@@ -615,6 +615,19 @@ const App: React.FC = () => {
     selectedChatRef.current = selectedChat;
   }, [selectedChat]);
 
+  const api = useMemo(
+    () =>
+      createApiClient({
+        onUnauthorized: () => {
+          setToken("");
+          setProfileName("");
+        },
+      }),
+    []
+  );
+
+  const { apiFetch, apiFetchWithMeta } = api;
+
   const clearAdminCall = useCallback(
     async (chatId: string | number | null) => {
       if (!token || chatId === null || chatId === undefined) return;
@@ -636,19 +649,6 @@ const App: React.FC = () => {
     },
     [token, apiFetch]
   );
-
-  const api = useMemo(
-    () =>
-      createApiClient({
-        onUnauthorized: () => {
-          setToken("");
-          setProfileName("");
-        },
-      }),
-    []
-  );
-
-  const { apiFetch, apiFetchWithMeta } = api;
 
   const swrFetch = useCallback(
     async <T,>({
