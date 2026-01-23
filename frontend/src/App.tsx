@@ -428,6 +428,18 @@ const ORDERS_GRID =
 const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
 const CACHE_PREFIX = "fpa_cache:";
+const createEmptyOverview = (): OverviewData => ({
+  totalAccounts: null,
+  activeRentals: null,
+  freeAccounts: null,
+  past24: null,
+  totalHours: null,
+});
+const createEmptyFunpayStats = (): FunpayStatsPayload => ({
+  balance_series: [],
+  orders: { daily: [], weekly: [], monthly: [] },
+  reviews: { daily: [], weekly: [], monthly: [] },
+});
 const STATS_CACHE_KEY = `${CACHE_PREFIX}funpay_stats`;
 const CHAT_LIST_CACHE_KEY = `${CACHE_PREFIX}chat_list`;
 const CHAT_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}chat_history:`;
@@ -487,23 +499,29 @@ const writeCache = <T,>(key: string, data: T, etag?: string) => {
   }
 };
 
+const clearCacheStorage = () => {
+  memoryCache.clear();
+  inflightRequests.clear();
+  revalidateGuards.clear();
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(CACHE_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // ignore storage clear errors
+  }
+};
+
 const App: React.FC = () => {
   const [token, setToken] = useState("");
   const [sessionChecked, setSessionChecked] = useState(false);
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
-  const [overview, setOverview] = useState<OverviewData>({
-    totalAccounts: null,
-    activeRentals: null,
-    freeAccounts: null,
-    past24: null,
-    totalHours: null,
-  });
-  const [funpayStats, setFunpayStats] = useState<FunpayStatsPayload>({
-    balance_series: [],
-    orders: { daily: [], weekly: [], monthly: [] },
-    reviews: { daily: [], weekly: [], monthly: [] },
-  });
+  const [overview, setOverview] = useState<OverviewData>(createEmptyOverview);
+  const [funpayStats, setFunpayStats] = useState<FunpayStatsPayload>(createEmptyFunpayStats);
   const [funpayStatsLoading, setFunpayStatsLoading] = useState(false);
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | number | null>(null);
@@ -547,6 +565,8 @@ const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
+  const sessionKey = useMemo(() => (token ? profileName || "session" : ""), [token, profileName]);
+  const lastSessionRef = useRef<string>("");
 
   useEffect(() => {
     const root = document.documentElement;
@@ -755,6 +775,33 @@ const App: React.FC = () => {
       setPathname(desired);
     }
   }, [token, pathname, sessionChecked]);
+
+  useEffect(() => {
+    if (!sessionChecked) return;
+    if (sessionKey === lastSessionRef.current) return;
+    clearCacheStorage();
+    setOverview(createEmptyOverview());
+    setFunpayStats(createEmptyFunpayStats());
+    setAccountsTable([]);
+    setRentalsTable([]);
+    setNotifications([]);
+    setChats([]);
+    setChatMessages([]);
+    setOrdersHistory([]);
+    setSelectedAccountId(null);
+    setSelectedRentalId(null);
+    setSelectedChat(null);
+    setChatStreamActive(false);
+    if (chatListStreamRef.current) {
+      chatListStreamRef.current.close();
+      chatListStreamRef.current = null;
+    }
+    if (chatHistoryStreamRef.current) {
+      chatHistoryStreamRef.current.close();
+      chatHistoryStreamRef.current = null;
+    }
+    lastSessionRef.current = sessionKey;
+  }, [sessionChecked, sessionKey]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
@@ -1117,19 +1164,19 @@ const App: React.FC = () => {
       loadOverview();
       loadNotifications();
     }
-  }, [token, loadOverview, loadNotifications]);
+  }, [token, sessionKey, loadOverview, loadNotifications]);
 
   // load chat list when on chats tab
   useEffect(() => {
     if (!token || activeNav !== "chats") return;
     loadChats(true);
-  }, [token, activeNav, loadChats]);
+  }, [token, sessionKey, activeNav, loadChats]);
 
   // load chat history when selection changes
   useEffect(() => {
     if (!token || activeNav !== "chats") return;
     loadChatHistory(selectedChat, true);
-  }, [token, activeNav, selectedChat, loadChatHistory]);
+  }, [token, sessionKey, activeNav, selectedChat, loadChatHistory]);
 
   useEffect(() => {
     if (!token || activeNav !== "chats") {
@@ -1190,7 +1237,7 @@ const App: React.FC = () => {
       }
       setChatStreamActive(false);
     };
-  }, [token, activeNav, mapChatItems]);
+  }, [token, sessionKey, activeNav, mapChatItems]);
 
   useEffect(() => {
     if (!token || activeNav !== "chats" || !selectedChat) {
@@ -1241,7 +1288,7 @@ const App: React.FC = () => {
         chatHistoryStreamRef.current = null;
       }
     };
-  }, [token, activeNav, selectedChat, mapChatMessages]);
+  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -1249,12 +1296,12 @@ const App: React.FC = () => {
       loadBlacklist(blacklistQuery);
     }, 250);
     return () => clearTimeout(handle);
-  }, [token, activeNav, blacklistQuery]);
+  }, [token, sessionKey, activeNav, blacklistQuery]);
 
   useEffect(() => {
     if (!token || activeNav !== "funpay-stats") return;
     loadFunpayStats(false, true);
-  }, [token, activeNav, loadFunpayStats]);
+  }, [token, sessionKey, activeNav, loadFunpayStats]);
 
   useEffect(() => {
     if (!token || activeNav !== "orders") return;
@@ -1262,7 +1309,7 @@ const App: React.FC = () => {
       loadOrdersHistory(ordersQuery.trim(), true);
     }, 250);
     return () => clearTimeout(handle);
-  }, [token, activeNav, ordersQuery, loadOrdersHistory]);
+  }, [token, sessionKey, activeNav, ordersQuery, loadOrdersHistory]);
 
   const revalidateActive = useCallback(() => {
     if (!token) return;
@@ -1303,7 +1350,7 @@ const App: React.FC = () => {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("online", handleOnline);
     };
-  }, [token, revalidateActive]);
+  }, [token, sessionKey, revalidateActive]);
 
   useEffect(() => {
     if (!token) return;
@@ -1327,6 +1374,7 @@ const App: React.FC = () => {
     };
   }, [
     token,
+    sessionKey,
     activeNav,
     selectedChat,
     ordersQuery,
@@ -1447,25 +1495,18 @@ const App: React.FC = () => {
     return `${minutes}:${String(secs).padStart(2, "0")}`;
   };
 
-  const getMatchSecondsFromPresence = (presence?: PresenceData | null, nowMs?: number) => {
+  const getMatchSecondsFromPresence = (presence?: PresenceData | null) => {
     if (!presence || !presence.in_match) return null;
     const rawSeconds = Number(presence.match_seconds);
     const baseSeconds = Number.isFinite(rawSeconds)
       ? Math.max(0, Math.floor(rawSeconds))
       : parseMatchTimeSeconds(presence.match_time ?? null);
-    if (baseSeconds === null) return null;
-    const fetchedAt = Number(presence.fetched_at);
-    if (Number.isFinite(fetchedAt) && fetchedAt > 0) {
-      const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
-      const elapsed = Math.max(0, Math.floor((currentMs - fetchedAt) / 1000));
-      return baseSeconds + elapsed;
-    }
-    return baseSeconds;
+    return baseSeconds === null ? null : baseSeconds;
   };
 
-  const getMatchTimeLabel = (presence?: PresenceData | null, nowMs?: number) => {
+  const getMatchTimeLabel = (presence?: PresenceData | null) => {
     if (!presence || !presence.in_match) return "-";
-    const seconds = getMatchSecondsFromPresence(presence, nowMs);
+    const seconds = getMatchSecondsFromPresence(presence);
     if (seconds !== null) {
       const formatted = formatMatchTimeSeconds(seconds);
       if (formatted) return formatted;
@@ -1789,7 +1830,7 @@ const App: React.FC = () => {
               selectedRental.durationSec != null && selectedRental.startedAt != null
                 ? formatDuration(selectedRental.durationSec, selectedRental.startedAt, now)
                 : "-";
-            const matchTime = getMatchTimeLabel(presence, now);
+            const matchTime = getMatchTimeLabel(presence);
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
             return (
               <div className="space-y-4">
@@ -2779,7 +2820,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeLabel(presence, now);
+                            const timer = getMatchTimeLabel(presence);
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -3440,7 +3481,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeLabel(presence, now);
+                            const timer = getMatchTimeLabel(presence);
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
