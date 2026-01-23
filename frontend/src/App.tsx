@@ -641,21 +641,21 @@ const App: React.FC = () => {
             <div className="flex min-h-screen">
               <aside className="relative flex w-[280px] shrink-0 flex-col border-r border-neutral-100 bg-white px-6 pb-10 pt-10 shadow-[12px_0_40px_-32px_rgba(0,0,0,0.15)]">
                 <div className="text-lg font-semibold tracking-tight text-neutral-900">Funpay Automation</div>
-                <nav className="relative mt-8 space-y-2">
+                <nav className="relative mt-8 flex flex-1 flex-col space-y-2">
                   <AnimatePresence>
-                    {NAV_ITEMS.map((item) => {
+                    {NAV_ITEMS.filter((i) => i.id !== "settings").map((item) => {
                       const isActive = activeNav === item.id;
                       return (
                         <motion.button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveNav(item.id);
-                        const nextPath = navIdToPath[item.id] || "/dashboard";
-                        window.history.replaceState(null, "", nextPath);
-                        setPathname(nextPath);
-                      }}
-                      className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveNav(item.id);
+                            const nextPath = navIdToPath[item.id] || "/dashboard";
+                            window.history.replaceState(null, "", nextPath);
+                            setPathname(nextPath);
+                          }}
+                          className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
                           whileHover={{ scale: 1.01 }}
                           transition={{ type: "spring", stiffness: 320, damping: 30 }}
                         >
@@ -676,6 +676,42 @@ const App: React.FC = () => {
                       );
                     })}
                   </AnimatePresence>
+                  {(() => {
+                    const item = NAV_ITEMS.find((i) => i.id === "settings");
+                    if (!item) return null;
+                    const isActive = activeNav === item.id;
+                    return (
+                      <AnimatePresence>
+                        <motion.button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveNav(item.id);
+                            const nextPath = navIdToPath[item.id] || "/dashboard";
+                            window.history.replaceState(null, "", nextPath);
+                            setPathname(nextPath);
+                          }}
+                          className="relative mt-auto flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
+                          whileHover={{ scale: 1.01 }}
+                          transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                        >
+                          {isActive && (
+                            <motion.span
+                              layoutId="navHighlight"
+                              className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
+                              transition={{ type: "spring", stiffness: 280, damping: 26 }}
+                            />
+                          )}
+                          <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
+                            <item.Icon />
+                          </span>
+                          <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
+                            {item.label}
+                          </span>
+                        </motion.button>
+                      </AnimatePresence>
+                    );
+                  })()}
                 </nav>
               </aside>
               <main className="relative flex-1 bg-white">
@@ -685,7 +721,7 @@ const App: React.FC = () => {
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } }}
                   className="pl-10 pr-10 pt-5 pb-12"
                 >
-                  <div className="flex items-center justify-between gap-6">
+                  <div className="flex items-center justify-between gap-6 border-b border-neutral-200 pb-4">
                     <div>
                       <h1 className="text-2xl font-semibold text-neutral-900">
                         {NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard"}
