@@ -834,7 +834,7 @@ const App: React.FC = () => {
                       animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
                       className="mt-8 grid gap-6 lg:grid-cols-5"
                     >
-                      <div className="lg:col-span-2 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
+                      <div className="lg:col-span-2 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70 max-h-[calc(100vh-220px)] flex flex-col">
                         <div className="mb-4 flex items-center justify-between gap-3">
                           <h3 className="text-lg font-semibold text-neutral-900">Chats</h3>
                           <button
@@ -865,7 +865,7 @@ const App: React.FC = () => {
                             }}
                           />
                         </div>
-                        <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "620px" }}>
+                        <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-0">
                           {chatListLoading && (
                             <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-3 py-6 text-center text-sm text-neutral-500">
                               Loading chats...
@@ -905,7 +905,7 @@ const App: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <div className="lg:col-span-3 flex min-h-[520px] max-h-[78vh] flex-col rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                      <div className="lg:col-span-3 flex min-h-[520px] max-h-[calc(100vh-220px)] flex-col rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                         <div className="mb-3 flex items-center justify-between">
                           <div>
                             <h3 className="text-lg font-semibold text-neutral-900">Conversation</h3>
@@ -914,8 +914,8 @@ const App: React.FC = () => {
                             </p>
                           </div>
                         </div>
-                        <div className="flex flex-1 flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
-                          <div className="flex-1 space-y-3 overflow-y-auto pr-2">
+                        <div className="flex flex-1 flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4 min-h-0">
+                          <div className="flex-1 space-y-3 overflow-y-auto pr-2 min-h-0">
                             {chatLoading && (
                               <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
                                 Loading messages...
