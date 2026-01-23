@@ -432,29 +432,40 @@ const App: React.FC = () => {
           past24,
         });
 
+        const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
+        const accountSteamMap = new Map<string, string>();
+
         // inventory table
-        if (Array.isArray(accounts?.items)) {
-          setAccountsTable(
-            (accounts.items as any[]).map((a, idx) => ({
+        if (accountsList.length) {
+          const mappedAccounts = accountsList.map((a, idx) => {
+            const name = (() => {
+              const preferred =
+                a.account_name ??
+                a.account ??
+                a.acc_name ??
+                a.title ??
+                a.name ??
+                a.login ??
+                "";
+              const cleaned = String(preferred).trim();
+              return cleaned || `ID ${a.id ?? idx}`;
+            })();
+            const login = a.login ?? "";
+            const steamId = extractSteamId(a);
+            if (steamId) {
+              if (login) accountSteamMap.set(login, steamId);
+              accountSteamMap.set(name, steamId);
+            }
+            return {
               id: a.id ?? idx,
-              name: (() => {
-                const preferred =
-                  a.account_name ??
-                  a.account ??
-                  a.acc_name ??
-                  a.title ??
-                  a.name ??
-                  a.login ??
-                  "";
-                const cleaned = String(preferred).trim();
-                return cleaned || `ID ${a.id ?? idx}`;
-              })(),
-              login: a.login ?? "",
+              name,
+              login,
               password: a.password ?? a.pass ?? "",
-              steamId: extractSteamId(a),
+              steamId,
               mmr: a.mmr ?? a.mmr_estimate ?? a.rank ?? a.elo ?? null,
-            }))
-          );
+            };
+          });
+          setAccountsTable(mappedAccounts);
         }
 
         // rentals table
@@ -473,7 +484,9 @@ const App: React.FC = () => {
                 r.steam_id ??
                 r.steamId ??
                 extractSteamId(r) ??
-                extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }),
+                extractSteamId({ mafile_json: r.mafile_json, mafile: r.mafile }) ??
+                (r.login ? accountSteamMap.get(r.login) : undefined) ??
+                (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
             }))
           );
         }
@@ -1127,9 +1140,9 @@ const App: React.FC = () => {
                           <span>Account</span>
                           <span>Buyer</span>
                           <span>Started</span>
-                          <span>Remaining</span>
+                          <span>Match Time</span>
                           <span>Hero</span>
-                          <span>Timer</span>
+                          <span>Status</span>
                           <span className="text-right">Presence</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
@@ -1151,10 +1164,12 @@ const App: React.FC = () => {
                                   {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : ""}
                                 </span>
                                 <span className="truncate font-mono text-neutral-900">
-                                  {formatDuration(r.durationSec ?? null, r.startedAt)}
+                                  {timer || "—"}
                                 </span>
                                 <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <span className="truncate font-mono text-neutral-700">{timer}</span>
+                                <span className={`truncate text-neutral-700`}>
+                                  {presence?.in_match ? "In match" : presence?.in_game ? "In game" : pill.label}
+                                </span>
                                 <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
                                   {presence?.in_match
                                     ? "In match"
