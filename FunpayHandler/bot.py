@@ -43,6 +43,7 @@ REFRESH_INTERVAL_SECONDS = 1300  # 30 minutes
 PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
 STOCK_LIST_LIMIT = 8
+LP_EXCHANGE_WINDOW_MINUTES = 10
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
 COMMANDS_HELP = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
@@ -50,11 +51,12 @@ COMMANDS_HELP = (
     "!code / !\u043a\u043e\u0434 \u2014 \u043a\u043e\u0434 Steam Guard\n"
     "!stock / !\u0441\u0442\u043e\u043a \u2014 \u043d\u0430\u043b\u0438\u0447\u0438\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432\n"
     "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <\u043d\u043e\u043c\u0435\u0440_\u043b\u043e\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
+    "!lpexchange / !\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430 <ID> \u2014 \u0437\u0430\u043c\u0435\u043d\u0430 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 (10 \u043c\u0438\u043d\u0443\u0442 \u043f\u043e\u0441\u043b\u0435 !\u043a\u043e\u0434)\n"
     "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443"
 )
 COMMANDS_INLINE = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b: !acc/!\u0430\u043a\u043a, !code/!\u043a\u043e\u0434, !stock/!\u0441\u0442\u043e\u043a, !extend/!\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, "
-    "!cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
+    "!lpexchange/!\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430, !cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
 )
 
 
@@ -911,6 +913,10 @@ class FunpayBot:
             self._handle_extend(acc, chat_id, event.message.author, raw_text)
             return
 
+        if message_text.startswith("!lpexchange") or message_text.startswith("!лпзамена"):
+            self._handle_lp_exchange(acc, chat_id, event.message.author, raw_text)
+            return
+
         if message_text in ("!stock", "!сток"):
             self._handle_stock(acc, chat_id)
             return
@@ -1282,6 +1288,159 @@ class FunpayBot:
             logger.error(f"Failed to load stock: {exc}")
             acc.send_message(chat_id, USER.stock_failed)
 
+    def _handle_lp_exchange(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
+        try:
+            accounts = self._db.get_user_active_accounts(owner, self._user_id)
+            if not accounts:
+                acc.send_message(chat_id, USER.active_rentals_empty)
+                return
+
+            parts = raw_text.split()
+            target_account = None
+            if len(parts) >= 2 and parts[1].isdigit():
+                account_id = int(parts[1])
+                target_account = next((item for item in accounts if item.get("id") == account_id), None)
+                if not target_account:
+                    acc.send_message(chat_id, "Аккаунт с таким ID не найден в ваших активных арендах.")
+                    return
+            elif len(accounts) == 1:
+                target_account = accounts[0]
+            else:
+                current_time = datetime.now(tz=MOSCOW_TZ)
+                lines = [
+                    "Укажите ID аренды для замены.",
+                    "Команда: !лпзамена <ID>",
+                    "",
+                    "Ваши активные аренды:",
+                ]
+                for account in accounts:
+                    expiry_str, remaining_str = self._format_rental_status(account, current_time)
+                    display_name = self._display_account_name(account.get("account_name"))
+                    if expiry_str:
+                        lines.append(f"ID {account['id']}: {display_name} — осталось {remaining_str}")
+                    else:
+                        lines.append(f"ID {account['id']}: {display_name} — не начато (ожидаем !код)")
+                acc.send_message(chat_id, "\n".join(lines))
+                return
+
+            rental_start = target_account.get("rental_start")
+            if not rental_start:
+                acc.send_message(
+                    chat_id,
+                    "Обмен доступен только после получения кода. "
+                    "Сначала используйте !code / !код. "
+                    f"После этого есть {LP_EXCHANGE_WINDOW_MINUTES} минут на замену.",
+                )
+                return
+
+            if isinstance(rental_start, datetime):
+                start_dt = rental_start
+            else:
+                try:
+                    start_dt = datetime.strptime(str(rental_start), "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    acc.send_message(chat_id, "Не удалось определить время начала аренды. Напишите администратору.")
+                    return
+            if start_dt.tzinfo is None:
+                start_dt = MOSCOW_TZ.localize(start_dt)
+
+            now = datetime.now(tz=MOSCOW_TZ)
+            elapsed_seconds = max(0.0, (now - start_dt).total_seconds())
+            if elapsed_seconds > LP_EXCHANGE_WINDOW_MINUTES * 60:
+                elapsed_minutes = int(elapsed_seconds // 60)
+                acc.send_message(
+                    chat_id,
+                    f"Срок замены истёк. Команда доступна только первые {LP_EXCHANGE_WINDOW_MINUTES} минут "
+                    f"после получения кода. Прошло {elapsed_minutes} мин.",
+                )
+                return
+
+            replacement = self._select_replacement_account(target_account)
+            if not replacement:
+                acc.send_message(chat_id, self._build_replacement_message(target_account))
+                return
+
+            if not self._db.set_account_owner(
+                replacement["id"], owner, self._user_id, start_rental=False
+            ):
+                acc.send_message(chat_id, "Свободных замен нет. Попробуйте чуть позже.")
+                return
+
+            duration_units = target_account.get("rental_duration")
+            duration_minutes = target_account.get("rental_duration_minutes")
+            if duration_minutes is None:
+                duration_minutes = get_duration_minutes(target_account)
+            if not duration_minutes:
+                duration_minutes = 60
+            if duration_units is None:
+                duration_units = max(1, int((duration_minutes + 59) // 60))
+
+            conn, cursor = self._db.open_connection()
+            try:
+                if self._user_id in (None, 0):
+                    cursor.execute(
+                        """
+                        UPDATE accounts
+                        SET rental_start = ?, rental_duration = ?, rental_duration_minutes = ?
+                        WHERE ID = ?
+                        """,
+                        (start_dt.strftime("%Y-%m-%d %H:%M:%S"), int(duration_units), int(duration_minutes), replacement["id"]),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE accounts
+                        SET rental_start = ?, rental_duration = ?, rental_duration_minutes = ?
+                        WHERE ID = ? AND user_id = ?
+                        """,
+                        (
+                            start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                            int(duration_units),
+                            int(duration_minutes),
+                            replacement["id"],
+                            int(self._user_id),
+                        ),
+                    )
+                conn.commit()
+            finally:
+                cursor.close()
+                conn.close()
+
+            self._db.release_account(int(target_account["id"]), self._user_id)
+            self._db.update_account(
+                int(target_account["id"]),
+                {"rental_duration": 1, "rental_duration_minutes": 60},
+                self._user_id,
+            )
+
+            refreshed = self._db.get_account_by_id(int(replacement["id"]), self._user_id) or replacement
+            expiry_str, remaining_str = self._format_rental_status(refreshed, now)
+            display_name = self._display_account_name(refreshed.get("account_name"))
+
+            acc.send_message(
+                chat_id,
+                "✅ Замена выполнена. Ваш новый аккаунт:\n"
+                f"ID: {refreshed.get('id')}\n"
+                f"Аккаунт: {display_name}\n"
+                f"Логин: {refreshed.get('login')}\n"
+                f"Пароль: {refreshed.get('password')}\n"
+                + (f"Истекает: {expiry_str} МСК | " if expiry_str else "")
+                + f"Осталось: {remaining_str}\n\n"
+                "⏱ Время аренды сохраняется, оно не продлевается.",
+            )
+
+            send_message_to_admin(
+                "LP EXCHANGE\n\n"
+                f"Owner: {owner}\n"
+                f"Old account ID: {target_account.get('id')}\n"
+                f"New account ID: {replacement.get('id')}\n"
+                f"Window: {LP_EXCHANGE_WINDOW_MINUTES} min\n"
+                f"Elapsed: {int(elapsed_seconds // 60)} min",
+            )
+        except Exception as exc:
+            logger.error(f"Failed to exchange account for {owner}: {exc}")
+            acc.send_message(chat_id, "Не удалось выполнить замену. Попробуйте позже.")
+
     def _build_stock_message(self) -> str:
         all_lots = self._db.get_all_lot_accounts(self._user_id)
         if not all_lots:
@@ -1622,6 +1781,7 @@ class FunpayBot:
                 "!код — код Steam Guard\n"
                 "!сток — наличие\n"
                 "!продлить <часы> <номер_лота> — продлить аренду\n"
+                "!лпзамена <ID> — замена аккаунта (10 минут после !код)\n"
                 "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
             )
