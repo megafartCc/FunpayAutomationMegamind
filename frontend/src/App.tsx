@@ -18,6 +18,7 @@ type OverviewData = {
   activeRentals: number | null;
   freeAccounts: number | null;
   past24: number | null;
+  totalHours: number | null;
 };
 
 type AccountRow = {
@@ -337,6 +338,7 @@ const App: React.FC = () => {
     activeRentals: null,
     freeAccounts: null,
     past24: null,
+    totalHours: null,
   });
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | number | null>(null);
@@ -344,6 +346,12 @@ const App: React.FC = () => {
   const [extendHours, setExtendHours] = useState("");
   const [extendMinutes, setExtendMinutes] = useState("");
   const [accountActionBusy, setAccountActionBusy] = useState(false);
+  const [reviewRange, setReviewRange] = useState<"daily" | "weekly" | "monthly">("weekly");
+  const [orderRange, setOrderRange] = useState<"daily" | "weekly" | "monthly">("weekly");
+  const [selectedRentalId, setSelectedRentalId] = useState<string | number | null>(null);
+  const [rentalExtendHours, setRentalExtendHours] = useState("");
+  const [rentalExtendMinutes, setRentalExtendMinutes] = useState("");
+  const [rentalActionBusy, setRentalActionBusy] = useState(false);
   const [rentalsTable, setRentalsTable] = useState<RentalRow[]>([]);
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -396,6 +404,11 @@ const App: React.FC = () => {
     return accountsTable.find((acc) => String(acc.id) === String(selectedAccountId)) || null;
   }, [accountsTable, selectedAccountId]);
 
+  const selectedRental = useMemo(() => {
+    if (selectedRentalId === null || selectedRentalId === undefined) return null;
+    return rentalsTable.find((r) => String(r.id) === String(selectedRentalId)) || null;
+  }, [rentalsTable, selectedRentalId]);
+
   useEffect(() => {
     if (!selectedAccount) {
       setAssignOwner("");
@@ -407,6 +420,13 @@ const App: React.FC = () => {
         : "";
     setAssignOwner(owner);
   }, [selectedAccount]);
+
+  useEffect(() => {
+    if (!selectedRental) {
+      setRentalExtendHours("");
+      setRentalExtendMinutes("");
+    }
+  }, [selectedRental]);
 
   useEffect(() => {
     let active = true;
@@ -540,7 +560,8 @@ const App: React.FC = () => {
         stats?.active_rentals ??
         (Array.isArray(activeRentals?.items) ? activeRentals.items.length : null);
 
-      const past24 = stats?.rentals_last24 ?? null;
+      const past24 = stats?.rentals_last24 ?? stats?.recent_rentals ?? null;
+      const totalHours = stats?.total_hours ?? null;
 
       const freeAccounts =
         stats?.free_accounts ??
@@ -551,6 +572,7 @@ const App: React.FC = () => {
         activeRentals: active,
         freeAccounts,
         past24,
+        totalHours,
       });
 
       const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
@@ -834,6 +856,379 @@ const App: React.FC = () => {
     return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
   };
 
+  const rangeOptions: Array<{ id: "daily" | "weekly" | "monthly"; label: string }> = [
+    { id: "daily", label: "Daily" },
+    { id: "weekly", label: "Weekly" },
+    { id: "monthly", label: "Monthly" },
+  ];
+
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+  const makeSeries = (seed: number, points: number, min: number, max: number) => {
+    const values: number[] = [];
+    let s = Math.max(1, Math.floor(seed));
+    let current = clamp(min + (s % Math.max(1, max - min)), min, max);
+    for (let i = 0; i < points; i += 1) {
+      s = (s * 9301 + 49297) % 233280;
+      const rand = s / 233280;
+      const delta = Math.round((rand - 0.5) * (max - min) * 0.12);
+      current = clamp(current + delta, min, max);
+      values.push(current);
+    }
+    return values;
+  };
+
+  const toLinePath = (values: number[]) => {
+    if (!values.length) return "";
+    const max = Math.max(...values);
+    const min = Math.min(...values);
+    const range = Math.max(1, max - min);
+    const step = values.length > 1 ? 100 / (values.length - 1) : 100;
+    return values
+      .map((value, idx) => {
+        const x = idx * step;
+        const y = 100 - ((value - min) / range) * 100;
+        return `${idx === 0 ? "M" : "L"} ${x} ${y}`;
+      })
+      .join(" ");
+  };
+
+  const toAreaPath = (values: number[]) => {
+    const line = toLinePath(values);
+    if (!line) return "";
+    return `${line} L 100 100 L 0 100 Z`;
+  };
+
+  const Sparkline: React.FC<{ values: number[]; colorClass: string }> = ({ values, colorClass }) => {
+    const line = toLinePath(values);
+    const area = toAreaPath(values);
+    return (
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={`h-full w-full ${colorClass}`}>
+        <path d={area} fill="currentColor" opacity="0.12" />
+        <path d={line} fill="none" stroke="currentColor" strokeWidth="2" />
+      </svg>
+    );
+  };
+
+  const BarChart: React.FC<{ values: number[]; barClass: string }> = ({ values, barClass }) => {
+    const max = Math.max(1, ...values);
+    return (
+      <div className="flex h-28 items-end gap-1">
+        {values.map((value, idx) => (
+          <div
+            key={`${idx}-${value}`}
+            className={`flex-1 rounded-sm ${barClass}`}
+            style={{ height: `${(value / max) * 100}%` }}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  const statsSeed = useMemo(() => {
+    const seed =
+      (overview.activeRentals ?? 3) * 37 +
+      (overview.totalAccounts ?? 10) * 13 +
+      (overview.past24 ?? 1) * 7 +
+      19;
+    return seed || 17;
+  }, [overview.activeRentals, overview.totalAccounts, overview.past24]);
+
+  const balanceSeries = useMemo(() => makeSeries(statsSeed + 11, 22, 850, 5200), [statsSeed]);
+  const reviewSeriesByRange = useMemo(
+    () => ({
+      daily: makeSeries(statsSeed + 21, 14, 6, 28),
+      weekly: makeSeries(statsSeed + 22, 8, 40, 140),
+      monthly: makeSeries(statsSeed + 23, 12, 180, 520),
+    }),
+    [statsSeed]
+  );
+  const orderSeriesByRange = useMemo(
+    () => ({
+      daily: makeSeries(statsSeed + 31, 14, 4, 30),
+      weekly: makeSeries(statsSeed + 32, 8, 30, 120),
+      monthly: makeSeries(statsSeed + 33, 12, 120, 520),
+    }),
+    [statsSeed]
+  );
+
+  const reviewSeries = reviewSeriesByRange[reviewRange];
+  const orderSeries = orderSeriesByRange[orderRange];
+  const balanceCurrent = balanceSeries[balanceSeries.length - 1] ?? 0;
+  const balanceStart = balanceSeries[0] ?? balanceCurrent;
+  const balanceDelta = balanceCurrent - balanceStart;
+  const balanceDeltaPct = balanceStart ? Math.round((balanceDelta / balanceStart) * 100) : 0;
+  const totalReviews = reviewSeries.reduce((sum, value) => sum + value, 0);
+  const totalOrders = orderSeries.reduce((sum, value) => sum + value, 0);
+
+  const accountUsage = useMemo(() => {
+    if (!accountsTable.length) return [];
+    const rows = accountsTable.map((acc, idx) => {
+      const label = acc.name || acc.login || `ID ${acc.id ?? idx}`;
+      const count = isAccountRented(acc) ? 1 : 0;
+      return { label, count };
+    });
+    return rows.sort((a, b) => b.count - a.count).slice(0, 6);
+  }, [accountsTable, rentalsTable]);
+
+  const averageRentalMinutes = useMemo(() => {
+    if (overview.totalHours && overview.activeRentals) {
+      return Math.round((overview.totalHours / overview.activeRentals) * 60);
+    }
+    const durations = rentalsTable
+      .map((r) => (typeof r.durationSec === "number" ? r.durationSec : null))
+      .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+    if (!durations.length) return null;
+    const avgSeconds = Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length);
+    return Math.round(avgSeconds / 60);
+  }, [overview.totalHours, overview.activeRentals, rentalsTable]);
+
+  const averageRentalLabel =
+    averageRentalMinutes === null
+      ? "-"
+      : `${Math.floor(averageRentalMinutes / 60)}h ${averageRentalMinutes % 60}m`;
+
+  const averageRentalProgress = averageRentalMinutes
+    ? clamp(averageRentalMinutes / (12 * 60), 0, 1)
+    : 0;
+
+  const renderAccountActionsPanel = (title = "Rental controls") => {
+    return (
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
+          <span className="text-xs text-neutral-500">{selectedAccount ? "Ready" : "Select an account"}</span>
+        </div>
+        {selectedAccount ? (
+          (() => {
+            const rented = isAccountRented(selectedAccount);
+            const stateLabel = rented ? "Rented out" : "Available";
+            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+            const ownerRaw = selectedAccount.owner ? String(selectedAccount.owner).trim() : "";
+            const ownerKey = normalizeKey(ownerRaw);
+            const ownerLabel =
+              ownerKey && ownerKey !== "other_account" ? ownerRaw : ownerKey === "other_account" ? "Reserved" : "-";
+            const startMs = parseDateTime(selectedAccount.rentalStart);
+            const startLabel = startMs ? new Date(startMs).toLocaleString() : "-";
+            const totalMinutes =
+              selectedAccount.rentalDurationMinutes ??
+              (selectedAccount.rentalDurationHours ? selectedAccount.rentalDurationHours * 60 : null);
+            const hoursLabel =
+              typeof totalMinutes === "number" && totalMinutes >= 0
+                ? `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`
+                : "-";
+            const canAssign = !ownerKey;
+            const canExtend = ownerKey && ownerKey !== "other_account";
+            const canRelease = !!ownerKey;
+            return (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                        Selected account
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-neutral-900">
+                        {selectedAccount.name || "Account"}
+                      </div>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>{stateLabel}</span>
+                  </div>
+                  <div className="mt-3 grid gap-1 text-xs text-neutral-600">
+                    <span>Login: {selectedAccount.login || "-"}</span>
+                    <span>Steam ID: {selectedAccount.steamId || "-"}</span>
+                    <span>Owner: {ownerLabel}</span>
+                    <span>Rental start: {startLabel}</span>
+                    <span>Duration: {hoursLabel}</span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">Assign rental</div>
+                  <p className="text-xs text-neutral-500">The countdown starts after the buyer requests the code.</p>
+                  <div className="mt-3 space-y-3">
+                    <input
+                      value={assignOwner}
+                      onChange={(e) => setAssignOwner(e.target.value)}
+                      placeholder="Buyer username"
+                      className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                    />
+                    <button
+                      onClick={handleAssignAccount}
+                      disabled={accountActionBusy || !assignOwner.trim() || !canAssign}
+                      className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                    >
+                      Assign rental
+                    </button>
+                    {!canAssign && (
+                      <div className="text-xs text-neutral-500">
+                        Release the account before assigning a new buyer.
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      value={extendHours}
+                      onChange={(e) => setExtendHours(e.target.value)}
+                      placeholder="Hours"
+                      type="number"
+                      min="0"
+                      className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                    />
+                    <input
+                      value={extendMinutes}
+                      onChange={(e) => setExtendMinutes(e.target.value)}
+                      placeholder="Minutes"
+                      type="number"
+                      min="0"
+                      className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                    />
+                  </div>
+                  <button
+                    onClick={handleExtendAccount}
+                    disabled={accountActionBusy || !canExtend}
+                    className="mt-3 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                  >
+                    Extend time
+                  </button>
+                  {!canExtend && (
+                    <div className="mt-2 text-xs text-neutral-500">Extension is available only for active rentals.</div>
+                  )}
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">End rental</div>
+                  <p className="text-xs text-neutral-500">Clears the owner and stops the rental immediately.</p>
+                  <button
+                    onClick={handleReleaseAccount}
+                    disabled={accountActionBusy || !canRelease}
+                    className="mt-3 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                  >
+                    Release rental
+                  </button>
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+            Select an account to unlock rental actions.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderRentalActionsPanel = () => {
+    return (
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-neutral-900">Rental actions</h3>
+          <span className="text-xs text-neutral-500">{selectedRental ? "Ready" : "Select a rental"}</span>
+        </div>
+        {selectedRental ? (
+          (() => {
+            const presence = selectedRental.presence ?? null;
+            const presenceLabel = presence?.in_match
+              ? "In match"
+              : presence?.in_game
+                ? "In game"
+                : "Offline";
+            const pill = statusPill(presenceLabel);
+            const timeLeft =
+              selectedRental.durationSec != null && selectedRental.startedAt != null
+                ? formatDuration(selectedRental.durationSec, selectedRental.startedAt, now)
+                : "-";
+            const matchTime = getMatchTimeDisplay(presence) ?? "-";
+            const heroLabel = presence?.hero_name || selectedRental.hero || "-";
+            return (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                        Selected rental
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-neutral-900">
+                        {selectedRental.accountName || "Rental"}
+                      </div>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                      {presenceLabel}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-1 text-xs text-neutral-600">
+                    <span>Buyer: {selectedRental.buyer || "-"}</span>
+                    <span>Time left: {timeLeft}</span>
+                    <span>Match time: {matchTime}</span>
+                    <span>Hero: {heroLabel}</span>
+                    <span>
+                      Started: {selectedRental.startedAt ? formatStartTime(selectedRental.startedAt) : "-"}
+                    </span>
+                  </div>
+                  {selectedRental.chatUrl && (
+                    <a
+                      href={selectedRental.chatUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex items-center justify-center rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                    >
+                      Open chat
+                    </a>
+                  )}
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      value={rentalExtendHours}
+                      onChange={(e) => setRentalExtendHours(e.target.value)}
+                      placeholder="Hours"
+                      type="number"
+                      min="0"
+                      className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                    />
+                    <input
+                      value={rentalExtendMinutes}
+                      onChange={(e) => setRentalExtendMinutes(e.target.value)}
+                      placeholder="Minutes"
+                      type="number"
+                      min="0"
+                      className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                    />
+                  </div>
+                  <button
+                    onClick={handleExtendRental}
+                    disabled={rentalActionBusy}
+                    className="mt-3 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                  >
+                    Extend rental
+                  </button>
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">End rental</div>
+                  <p className="text-xs text-neutral-500">Stops the rental and releases the account.</p>
+                  <button
+                    onClick={handleReleaseRental}
+                    disabled={rentalActionBusy}
+                    className="mt-3 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                  >
+                    Release rental
+                  </button>
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+            Select an active rental to unlock actions.
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const ToggleRow: React.FC<{
     label: string;
     enabled: boolean;
@@ -978,6 +1373,65 @@ const App: React.FC = () => {
       showToast((error as Error).message || "Failed to release rental.", "error");
     } finally {
       setAccountActionBusy(false);
+    }
+  };
+
+  const handleExtendRental = async () => {
+    if (!selectedRental) {
+      showToast("Select a rental first.", "error");
+      return;
+    }
+    if (rentalActionBusy) return;
+    const accountId = selectedRental.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid rental selected.", "error");
+      return;
+    }
+    const hoursValue = parseInt(rentalExtendHours, 10);
+    const minutesValue = parseInt(rentalExtendMinutes, 10);
+    const hours = Number.isFinite(hoursValue) && hoursValue > 0 ? hoursValue : 0;
+    const minutes = Number.isFinite(minutesValue) && minutesValue > 0 ? minutesValue : 0;
+    if (!hours && !minutes) {
+      showToast("Enter a time extension.", "error");
+      return;
+    }
+    setRentalActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/extend`, {
+        method: "POST",
+        body: JSON.stringify({ hours, minutes }),
+      });
+      showToast("Rental extended.");
+      setRentalExtendHours("");
+      setRentalExtendMinutes("");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to extend rental.", "error");
+    } finally {
+      setRentalActionBusy(false);
+    }
+  };
+
+  const handleReleaseRental = async () => {
+    if (!selectedRental) {
+      showToast("Select a rental first.", "error");
+      return;
+    }
+    if (rentalActionBusy) return;
+    const accountId = selectedRental.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid rental selected.", "error");
+      return;
+    }
+    setRentalActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/release`, { method: "POST" });
+      showToast("Rental released.");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to release rental.", "error");
+    } finally {
+      setRentalActionBusy(false);
     }
   };
 
@@ -1273,11 +1727,9 @@ const App: React.FC = () => {
                       </button>
                     </div>
                   </div>
-                  {(activeNav === "overview" || activeNav === "funpay-stats") && (
+                  {activeNav === "overview" && (
                     <div className="mt-6">
-                      <div className="mb-4 text-lg font-semibold text-neutral-800">
-                        {activeNav === "funpay-stats" ? "Funpay Statistics" : "Overview"}
-                      </div>
+                      <div className="mb-4 text-lg font-semibold text-neutral-800">Overview</div>
                       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                         {overviewCards.map((card) => {
                           const value = (overview as Record<string, number | null>)[card.key] ?? null;
@@ -1306,33 +1758,131 @@ const App: React.FC = () => {
                           );
                         })}
                       </div>
-                      {activeNav === "funpay-stats" && (
-                        <div className="mt-6 grid gap-4 lg:grid-cols-3">
-                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
-                            <div className="text-sm font-semibold text-neutral-700">Active Rental Ratio</div>
-                            <div className="mt-2 text-3xl font-bold text-neutral-900">
-                              {overview.totalAccounts && overview.activeRentals
-                                ? `${Math.round((overview.activeRentals / overview.totalAccounts) * 100)}%`
-                                : "-"}
+                    </div>
+                  )}
+                  {activeNav === "funpay-stats" && (
+                    <div className="mt-6 space-y-6">
+                      <div className="mb-2 text-lg font-semibold text-neutral-800">Funpay Statistics</div>
+                      <div className="grid gap-6 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-sm font-semibold text-neutral-700">Balance</div>
+                              <div className="mt-2 text-3xl font-bold text-neutral-900">RUB {balanceCurrent.toLocaleString()}</div>
+                              <div className="mt-1 text-xs text-neutral-500">Last 30 days</div>
                             </div>
-                            <div className="mt-1 text-xs text-neutral-500">Active / Total accounts</div>
+                            <div
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                                balanceDelta >= 0 ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                              }`}
+                            >
+                              {balanceDelta >= 0 ? "+" : ""}
+                              {balanceDeltaPct}%
+                            </div>
                           </div>
-                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
-                            <div className="text-sm font-semibold text-neutral-700">Free Accounts</div>
-                            <div className="mt-2 text-3xl font-bold text-neutral-900">
-                              {overview.freeAccounts === null ? "-" : overview.freeAccounts}
-                            </div>
-                            <div className="mt-1 text-xs text-neutral-500">Available for issuance</div>
-                          </div>
-                          <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
-                            <div className="text-sm font-semibold text-neutral-700">Rentals Last 24h</div>
-                            <div className="mt-2 text-3xl font-bold text-neutral-900">
-                              {overview.past24 === null ? "0" : overview.past24}
-                            </div>
-                            <div className="mt-1 text-xs text-neutral-500">Completed in past day</div>
+                          <div className="mt-4 h-28">
+                            <Sparkline values={balanceSeries} colorClass="text-emerald-500" />
                           </div>
                         </div>
-                      )}
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-neutral-700">Reviews</div>
+                              <div className="mt-2 text-3xl font-bold text-neutral-900">{totalReviews.toLocaleString()}</div>
+                              <div className="mt-1 text-xs text-neutral-500">Across selected period</div>
+                            </div>
+                            <div className="flex items-center gap-1 rounded-full bg-neutral-100 p-1">
+                              {rangeOptions.map((option) => (
+                                <button
+                                  key={option.id}
+                                  onClick={() => setReviewRange(option.id)}
+                                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                    reviewRange === option.id
+                                      ? "bg-white text-neutral-900 shadow-sm"
+                                      : "text-neutral-500 hover:text-neutral-700"
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mt-4 h-28">
+                            <Sparkline values={reviewSeries} colorClass="text-sky-500" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid gap-6 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-neutral-700">Orders</div>
+                              <div className="mt-2 text-3xl font-bold text-neutral-900">{totalOrders.toLocaleString()}</div>
+                              <div className="mt-1 text-xs text-neutral-500">Across selected period</div>
+                            </div>
+                            <div className="flex items-center gap-1 rounded-full bg-neutral-100 p-1">
+                              {rangeOptions.map((option) => (
+                                <button
+                                  key={option.id}
+                                  onClick={() => setOrderRange(option.id)}
+                                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                    orderRange === option.id
+                                      ? "bg-white text-neutral-900 shadow-sm"
+                                      : "text-neutral-500 hover:text-neutral-700"
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mt-4">
+                            <BarChart values={orderSeries} barClass="bg-amber-500/80" />
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-3 text-sm font-semibold text-neutral-700">Rental performance</div>
+                          <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+                            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                              <div className="text-xs uppercase tracking-wide text-neutral-500">Average rent time</div>
+                              <div className="mt-2 text-2xl font-semibold text-neutral-900">{averageRentalLabel}</div>
+                              <div className="mt-2 h-2 w-full rounded-full bg-neutral-200">
+                                <div
+                                  className="h-2 rounded-full bg-emerald-500"
+                                  style={{ width: `${averageRentalProgress * 100}%` }}
+                                />
+                              </div>
+                              <div className="mt-2 text-xs text-neutral-500">
+                                Total hours active: {overview.totalHours === null ? "-" : overview.totalHours}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                              <div className="text-xs uppercase tracking-wide text-neutral-500">Rentals by account</div>
+                              <div className="mt-3 space-y-3">
+                                {accountUsage.length ? (
+                                  accountUsage.map((item, idx) => {
+                                    const maxCount = Math.max(1, ...accountUsage.map((row) => row.count));
+                                    const width = (item.count / maxCount) * 100;
+                                    return (
+                                      <div key={`${item.label}-${idx}`} className="flex items-center gap-3">
+                                        <span className="w-24 truncate text-xs font-semibold text-neutral-700">
+                                          {item.label}
+                                        </span>
+                                        <div className="flex-1 h-2 rounded-full bg-neutral-200">
+                                          <div className="h-2 rounded-full bg-neutral-900/80" style={{ width: `${width}%` }} />
+                                        </div>
+                                        <span className="text-xs text-neutral-500">{item.count}</span>
+                                      </div>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="text-xs text-neutral-500">No rental data yet.</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                   {activeNav === "funpay-stats" ? null : activeNav === "chats" ? (
@@ -1619,15 +2169,47 @@ const App: React.FC = () => {
                               r.durationSec != null && r.startedAt != null
                                 ? formatDuration(r.durationSec, r.startedAt, now)
                                 : "-";
+                            const rowId = r.id ?? idx;
+                            const isSelected =
+                              selectedRentalId !== null && String(selectedRentalId) === String(rowId);
                             return (
                               <motion.div
-                                key={r.id ?? idx}
+                                key={rowId}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    const nextSelected =
+                                      selectedRentalId !== null && String(selectedRentalId) === String(rowId)
+                                        ? null
+                                        : rowId;
+                                    setSelectedRentalId(nextSelected);
+                                    if (nextSelected !== null) {
+                                      setSelectedAccountId(rowId);
+                                    }
+                                  }
+                                }}
+                                onClick={() => {
+                                  const nextSelected =
+                                    selectedRentalId !== null && String(selectedRentalId) === String(rowId)
+                                      ? null
+                                      : rowId;
+                                  setSelectedRentalId(nextSelected);
+                                  if (nextSelected !== null) {
+                                    setSelectedAccountId(rowId);
+                                  }
+                                }}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className={`grid items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
+                                  isSelected
+                                    ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
+                                    : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                } cursor-pointer`}
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
-                                <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="min-w-0 truncate font-semibold text-neutral-900">{rowId}</span>
                                 <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
                                 {r.buyer ? (
                                   r.chatUrl ? (
@@ -1636,6 +2218,7 @@ const App: React.FC = () => {
                                       target="_blank"
                                       rel="noreferrer"
                                       className="min-w-0 truncate font-semibold text-neutral-800 hover:underline"
+                                      onClick={(event) => event.stopPropagation()}
                                     >
                                       {r.buyer}
                                     </a>
@@ -1655,6 +2238,7 @@ const App: React.FC = () => {
                                     target="_blank"
                                     rel="noreferrer"
                                     className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                    onClick={(event) => event.stopPropagation()}
                                   >
                                     {presenceLabel}
                                   </a>
@@ -1975,150 +2559,13 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                          <div className="mb-4 flex items-center justify-between">
-                            <h3 className="text-lg font-semibold text-neutral-900">Rental controls</h3>
-                            <span className="text-xs text-neutral-500">
-                              {selectedAccount ? "Ready" : "Select an account"}
-                            </span>
-                          </div>
-                          {selectedAccount ? (
-                            (() => {
-                              const rented = isAccountRented(selectedAccount);
-                              const stateLabel = rented ? "Rented out" : "Available";
-                              const stateClass = rented
-                                ? "bg-amber-50 text-amber-700"
-                                : "bg-emerald-50 text-emerald-600";
-                              const ownerRaw = selectedAccount.owner ? String(selectedAccount.owner).trim() : "";
-                              const ownerKey = normalizeKey(ownerRaw);
-                              const ownerLabel =
-                                ownerKey && ownerKey !== "other_account"
-                                  ? ownerRaw
-                                  : ownerKey === "other_account"
-                                    ? "Reserved"
-                                    : "-";
-                              const startMs = parseDateTime(selectedAccount.rentalStart);
-                              const startLabel = startMs ? new Date(startMs).toLocaleString() : "-";
-                              const totalMinutes =
-                                selectedAccount.rentalDurationMinutes ??
-                                (selectedAccount.rentalDurationHours ? selectedAccount.rentalDurationHours * 60 : null);
-                              const hoursLabel =
-                                typeof totalMinutes === "number" && totalMinutes >= 0
-                                  ? `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`
-                                  : "-";
-                              const canAssign = !ownerKey;
-                              const canExtend = ownerKey && ownerKey !== "other_account";
-                              const canRelease = !!ownerKey;
-                              return (
-                                <div className="space-y-4">
-                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div>
-                                        <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                                          Selected account
-                                        </div>
-                                        <div className="mt-1 text-sm font-semibold text-neutral-900">
-                                          {selectedAccount.name || "Account"}
-                                        </div>
-                                      </div>
-                                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${stateClass}`}>
-                                        {stateLabel}
-                                      </span>
-                                    </div>
-                                    <div className="mt-3 grid gap-1 text-xs text-neutral-600">
-                                      <span>Login: {selectedAccount.login || "-"}</span>
-                                      <span>Steam ID: {selectedAccount.steamId || "-"}</span>
-                                      <span>Owner: {ownerLabel}</span>
-                                      <span>Rental start: {startLabel}</span>
-                                      <span>Duration: {hoursLabel}</span>
-                                    </div>
-                                  </div>
-                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                                    <div className="mb-2 text-sm font-semibold text-neutral-800">Assign rental</div>
-                                    <p className="text-xs text-neutral-500">
-                                      The countdown starts after the buyer requests the code.
-                                    </p>
-                                    <div className="mt-3 space-y-3">
-                                      <input
-                                        value={assignOwner}
-                                        onChange={(e) => setAssignOwner(e.target.value)}
-                                        placeholder="Buyer username"
-                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
-                                      />
-                                      <button
-                                        onClick={handleAssignAccount}
-                                        disabled={accountActionBusy || !assignOwner.trim() || !canAssign}
-                                        className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
-                                      >
-                                        Assign rental
-                                      </button>
-                                      {!canAssign && (
-                                        <div className="text-xs text-neutral-500">
-                                          Release the account before assigning a new buyer.
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                                    <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                      <input
-                                        value={extendHours}
-                                        onChange={(e) => setExtendHours(e.target.value)}
-                                        placeholder="Hours"
-                                        type="number"
-                                        min="0"
-                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
-                                      />
-                                      <input
-                                        value={extendMinutes}
-                                        onChange={(e) => setExtendMinutes(e.target.value)}
-                                        placeholder="Minutes"
-                                        type="number"
-                                        min="0"
-                                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
-                                      />
-                                    </div>
-                                    <button
-                                      onClick={handleExtendAccount}
-                                      disabled={accountActionBusy || !canExtend}
-                                      className="mt-3 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
-                                    >
-                                      Extend time
-                                    </button>
-                                    {!canExtend && (
-                                      <div className="mt-2 text-xs text-neutral-500">
-                                        Extension is available only for active rentals.
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                                    <div className="mb-2 text-sm font-semibold text-neutral-800">End rental</div>
-                                    <p className="text-xs text-neutral-500">
-                                      Clears the owner and stops the rental immediately.
-                                    </p>
-                                    <button
-                                      onClick={handleReleaseAccount}
-                                      disabled={accountActionBusy || !canRelease}
-                                      className="mt-3 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
-                                    >
-                                      Release rental
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              Select an account to unlock rental actions.
-                            </div>
-                          )}
-                        </div>
+                        {renderAccountActionsPanel("Rental controls")}
                       </div>
                     </motion.div>
                   ) : (
-                    <div className="mt-8 grid gap-6 lg:grid-cols-2">
-                      <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                    <div className="mt-8 space-y-6">
+                      <div className="grid gap-6 lg:grid-cols-2">
+                        <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                         <div className="mb-4 flex items-center justify-between">
                           <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         </div>
@@ -2230,15 +2677,47 @@ const App: React.FC = () => {
                               r.durationSec != null && r.startedAt != null
                                 ? formatDuration(r.durationSec, r.startedAt, now)
                                 : "-";
+                            const rowId = r.id ?? idx;
+                            const isSelected =
+                              selectedRentalId !== null && String(selectedRentalId) === String(rowId);
                             return (
                               <motion.div
-                                key={r.id ?? idx}
+                                key={rowId}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    const nextSelected =
+                                      selectedRentalId !== null && String(selectedRentalId) === String(rowId)
+                                        ? null
+                                        : rowId;
+                                    setSelectedRentalId(nextSelected);
+                                    if (nextSelected !== null) {
+                                      setSelectedAccountId(rowId);
+                                    }
+                                  }
+                                }}
+                                onClick={() => {
+                                  const nextSelected =
+                                    selectedRentalId !== null && String(selectedRentalId) === String(rowId)
+                                      ? null
+                                      : rowId;
+                                  setSelectedRentalId(nextSelected);
+                                  if (nextSelected !== null) {
+                                    setSelectedAccountId(rowId);
+                                  }
+                                }}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className={`grid items-center gap-3 rounded-xl border px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)] transition ${
+                                  isSelected
+                                    ? "border-neutral-900/20 bg-white ring-2 ring-neutral-900/10"
+                                    : "border-neutral-100 bg-neutral-50 hover:border-neutral-200"
+                                } cursor-pointer`}
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
-                                <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="min-w-0 truncate font-semibold text-neutral-900">{rowId}</span>
                                 <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
                                 {r.buyer ? (
                                   r.chatUrl ? (
@@ -2247,6 +2726,7 @@ const App: React.FC = () => {
                                       target="_blank"
                                       rel="noreferrer"
                                       className="min-w-0 truncate font-semibold text-neutral-800 hover:underline"
+                                      onClick={(event) => event.stopPropagation()}
                                     >
                                       {r.buyer}
                                     </a>
@@ -2266,6 +2746,7 @@ const App: React.FC = () => {
                                     target="_blank"
                                     rel="noreferrer"
                                     className={`inline-flex w-fit justify-self-start rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                    onClick={(event) => event.stopPropagation()}
                                   >
                                     {presenceLabel}
                                   </a>
@@ -2287,6 +2768,11 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </div>
+                    <div className="grid gap-6 lg:grid-cols-2">
+                      {renderAccountActionsPanel("Account actions")}
+                      {renderRentalActionsPanel()}
+                    </div>
+                  </div>
                   )}
                 </motion.div>
               </main>
