@@ -12,7 +12,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 import secrets
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -77,6 +77,11 @@ _MONTHS = {
     "nov": 11,
     "dec": 12,
 }
+
+SESSION_COOKIE_NAME = "sessionId"
+SESSION_TTL_DAYS = 7
+SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+SESSION_REFRESH_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def _normalize_time_label(time_text: str) -> str:
@@ -529,7 +534,67 @@ def _fetch_bridge_presence(steamid64: int) -> dict | None:
     return data
 
 
-def require_admin(request: Request) -> None:
+def _is_secure_request(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto")
+    if forwarded:
+        return forwarded.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
+def _set_session_cookie(response: Response, request: Request, session_id: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=_is_secure_request(request),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+
+
+def _to_datetime(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def require_admin(request: Request, response: Response) -> None:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_id:
+        session = db.get_session_user(session_id)
+        if session:
+            expires_at = _to_datetime(session.get("expires_at"))
+            last_seen_at = _to_datetime(session.get("last_seen_at"))
+            now = datetime.utcnow()
+            if not expires_at or expires_at <= now:
+                db.delete_session(session_id)
+                _clear_session_cookie(response)
+            else:
+                should_refresh = (
+                    last_seen_at is None
+                    or (now - last_seen_at).total_seconds() >= SESSION_REFRESH_WINDOW_SECONDS
+                )
+                if should_refresh:
+                    new_expires = now + timedelta(days=SESSION_TTL_DAYS)
+                    db.refresh_session(session_id, new_expires, now)
+                    _set_session_cookie(response, request, session_id)
+                request.state.user = {
+                    "id": session.get("user_id"),
+                    "username": session.get("username"),
+                    "golden_key": session.get("golden_key"),
+                }
+                return
+
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(None, 1)[1].strip()
@@ -648,29 +713,39 @@ def health() -> dict:
 
 
 @app.post("/api/auth/register")
-def auth_register(payload: AuthRegister) -> dict:
+def auth_register(payload: AuthRegister, request: Request, response: Response) -> dict:
     token = db.create_user(payload.username, payload.password, payload.golden_key)
     if not token:
         raise HTTPException(status_code=400, detail="User already exists or invalid data")
     user = db.get_user_by_username(payload.username)
     if user:
         bot_manager.start_for_user(user["id"], user["golden_key"])
-    return {"token": token, "username": payload.username}
+        now = datetime.utcnow()
+        expires_at = now + timedelta(days=SESSION_TTL_DAYS)
+        session_id = db.create_session(user["id"], expires_at, now)
+        _set_session_cookie(response, request, session_id)
+    return {"username": payload.username}
 
 
 @app.post("/api/auth/login")
-def auth_login(payload: AuthLogin) -> dict:
+def auth_login(payload: AuthLogin, request: Request, response: Response) -> dict:
     user = db.verify_user_credentials(payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = secrets.token_urlsafe(32)
-    db.update_session_token(user["id"], token)
+    now = datetime.utcnow()
+    expires_at = now + timedelta(days=SESSION_TTL_DAYS)
+    session_id = db.create_session(user["id"], expires_at, now)
+    _set_session_cookie(response, request, session_id)
     bot_manager.start_for_user(user["id"], user["golden_key"])
-    return {"token": token, "username": user["username"]}
+    return {"username": user["username"]}
 
 
 @app.post("/api/auth/logout")
-def auth_logout(request: Request) -> dict:
+def auth_logout(request: Request, response: Response) -> dict:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_id:
+        db.delete_session(session_id)
+        _clear_session_cookie(response)
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(None, 1)[1].strip()

@@ -788,7 +788,7 @@ class FunpayBot:
         note: str | None = None,
     ) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
-        self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id)
+        self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id, start_rental=False)
         unit_minutes = self._get_unit_minutes(account)
         duration_label = format_duration_minutes(unit_minutes * units)
         self._set_rental_duration_for_order(account["id"], units, unit_minutes)
@@ -814,6 +814,7 @@ class FunpayBot:
             f"\u041b\u043e\u0433\u0438\u043d: {account['login']}\n"
             f"\u041f\u0430\u0440\u043e\u043b\u044c: {account['password']}\n"
             f"\u0410\u0440\u0435\u043d\u0434\u0430: {duration_label}\n\n"
+            "\u23f1\ufe0f \u041e\u0442\u0441\u0447\u0435\u0442 \u0430\u0440\u0435\u043d\u0434\u044b \u043d\u0430\u0447\u043d\u0435\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u043f\u0435\u0440\u0432\u043e\u0433\u043e \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f \u043a\u043e\u0434\u0430 (!code / !\u043a\u043e\u0434).\n\n"
             f"{COMMANDS_HELP}\n\n"
             "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c \u2014 \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442."
         )
@@ -1117,6 +1118,7 @@ class FunpayBot:
 
     def _handle_code(self, acc: Account, chat_id: int, owner: str) -> None:
         try:
+            started = self._db.start_rental_for_owner(owner, self._user_id)
             owner_data = self._db.get_owner_mafile(owner)
             if owner_data:
                 lines = ["Коды Steam Guard:"]
@@ -1135,6 +1137,9 @@ class FunpayBot:
                         mafile_json=mafile_json,
                     )
                     lines.append(f"{display_name} ({login}): {guard_code}")
+                if started:
+                    lines.append("")
+                    lines.append("⏱️ Аренда началась сейчас (с момента получения кода).")
                 acc.send_message(chat_id, "\n".join(lines))
             else:
                 acc.send_message(chat_id, USER.active_rentals_empty)

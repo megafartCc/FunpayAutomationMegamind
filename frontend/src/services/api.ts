@@ -1,19 +1,14 @@
 export type ApiClientOptions = {
-  getToken: () => string | null;
   onUnauthorized: () => void;
 };
 
-export const createApiClient = ({ getToken, onUnauthorized }: ApiClientOptions) => {
+export const createApiClient = ({ onUnauthorized }: ApiClientOptions) => {
   const apiFetch = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(options.headers as Record<string, string> | undefined),
     };
-    const token = getToken();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const response = await fetch(path, { ...options, headers });
+    const response = await fetch(path, { ...options, headers, credentials: "include" });
     if (!response.ok) {
       if (response.status === 401) {
         onUnauthorized();

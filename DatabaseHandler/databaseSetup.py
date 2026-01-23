@@ -215,6 +215,20 @@ class MySQLDB:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id VARCHAR(128) PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    expires_at DATETIME NOT NULL,
+                    last_seen_at DATETIME NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_sessions_user (user_id),
+                    INDEX idx_sessions_expires (expires_at),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     owner VARCHAR(255) NOT NULL,
@@ -327,6 +341,17 @@ class MySQLDB:
                     password_hash TEXT NOT NULL,
                     golden_key TEXT NOT NULL,
                     session_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    expires_at TIMESTAMP NOT NULL,
+                    last_seen_at TIMESTAMP NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -754,35 +779,63 @@ class MySQLDB:
         ]
         return accounts
 
-    def set_account_owner(self, account_id: int, owner_id: str, user_id: int | None = None) -> bool:
+    def set_account_owner(
+        self,
+        account_id: int,
+        owner_id: str,
+        user_id: int | None = None,
+        start_rental: bool = True,
+    ) -> bool:
         """
-        Set the owner of an account and record the rental start time with a +3 hours offset.
+        Set the owner of an account and optionally record the rental start time with a +3 hours offset.
         Also marks all accounts with the same login as 'OTHER_ACCOUNT'.
         """
         try:
             cursor = self._cursor()
-            rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            rental_start = None
+            if start_rental:
+                rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
             # Update owner and set rental start time
             if user_id in (None, 0):
-                cursor.execute(
-                    """
-                    UPDATE accounts 
-                    SET owner = ?, rental_start = ?
-                    WHERE ID = ? AND owner IS NULL
-                    """,
-                    (owner_id, rental_start, account_id),
-                )
+                if start_rental:
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = ?, rental_start = ?
+                        WHERE ID = ? AND owner IS NULL
+                        """,
+                        (owner_id, rental_start, account_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = ?
+                        WHERE ID = ? AND owner IS NULL
+                        """,
+                        (owner_id, account_id),
+                    )
             else:
-                cursor.execute(
-                    """
-                    UPDATE accounts 
-                    SET owner = ?, rental_start = ?
-                    WHERE ID = ? AND owner IS NULL AND user_id = ?
-                    """,
-                    (owner_id, rental_start, account_id, user_id),
-                )
+                if start_rental:
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = ?, rental_start = ?
+                        WHERE ID = ? AND owner IS NULL AND user_id = ?
+                        """,
+                        (owner_id, rental_start, account_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE accounts 
+                        SET owner = ?
+                        WHERE ID = ? AND owner IS NULL AND user_id = ?
+                        """,
+                        (owner_id, account_id, user_id),
+                    )
             if cursor.rowcount == 0:
                 return False
             # Get the login of the updated account
@@ -1856,6 +1909,43 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def start_rental_for_owner(self, owner_id: str, user_id: int | None = None) -> int:
+        """
+        Set rental_start for all accounts owned by the user that haven't started yet.
+        Returns the number of updated rows.
+        """
+        try:
+            cursor = self._cursor()
+            rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                    SET rental_start = ?
+                    WHERE owner = ? AND rental_start IS NULL
+                    """,
+                    (rental_start, owner_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                    SET rental_start = ?
+                    WHERE owner = ? AND rental_start IS NULL AND user_id = ?
+                    """,
+                    (rental_start, owner_id, user_id),
+                )
+            updated = cursor.rowcount
+            self.conn.commit()
+            return updated or 0
+        except Exception as e:
+            logger.error(f"Error starting rental for owner {owner_id}: {str(e)}")
+            return 0
+        finally:
+            cursor.close()
+
     def list_blacklist(self, user_id: int | None = None, query: str | None = None) -> list:
         try:
             cursor = self._cursor()
@@ -2083,7 +2173,6 @@ class MySQLDB:
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
-                    AND rental_start IS NOT NULL
                     ORDER BY rental_start DESC
                     """
                 )
@@ -2103,7 +2192,6 @@ class MySQLDB:
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
-                    AND rental_start IS NOT NULL
                     AND user_id = ?
                     ORDER BY rental_start DESC
                     """,
@@ -2614,6 +2702,99 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute("UPDATE users SET session_token = NULL WHERE session_token = ?", (token,))
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def create_session(self, user_id: int, expires_at: datetime, last_seen_at: datetime | None = None) -> str:
+        session_id = secrets.token_urlsafe(32)
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO sessions (session_id, user_id, expires_at, last_seen_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (session_id, user_id, expires_at.strftime("%Y-%m-%d %H:%M:%S"),
+                 last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if last_seen_at else None),
+            )
+            self.conn.commit()
+            return session_id
+        finally:
+            cursor.close()
+
+    def get_session(self, session_id: str):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT session_id, user_id, expires_at, last_seen_at
+                FROM sessions
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "session_id": row[0],
+                "user_id": row[1],
+                "expires_at": row[2],
+                "last_seen_at": row[3],
+            }
+        finally:
+            cursor.close()
+
+    def get_session_user(self, session_id: str):
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT s.session_id, s.user_id, s.expires_at, s.last_seen_at, u.username, u.golden_key
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.session_id = ?
+                """,
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "session_id": row[0],
+                "user_id": row[1],
+                "expires_at": row[2],
+                "last_seen_at": row[3],
+                "username": row[4],
+                "golden_key": row[5],
+            }
+        finally:
+            cursor.close()
+
+    def refresh_session(self, session_id: str, expires_at: datetime, last_seen_at: datetime) -> None:
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE sessions
+                SET expires_at = ?, last_seen_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    expires_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    last_seen_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    session_id,
+                ),
+            )
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def delete_session(self, session_id: str) -> None:
+        cursor = self._cursor()
+        try:
+            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             self.conn.commit()
         finally:
             cursor.close()

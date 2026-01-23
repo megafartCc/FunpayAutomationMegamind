@@ -330,9 +330,8 @@ const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
 
 const App: React.FC = () => {
-  const [token, setToken] = useState(
-    () => localStorage.getItem("adminToken") || sessionStorage.getItem("adminToken") || ""
-  );
+  const [token, setToken] = useState("");
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
   const [overview, setOverview] = useState<OverviewData>({
@@ -362,9 +361,7 @@ const App: React.FC = () => {
   const [blacklistOwner, setBlacklistOwner] = useState("");
   const [blacklistReason, setBlacklistReason] = useState("");
   const [blacklistSelected, setBlacklistSelected] = useState<string[]>([]);
-  const [profileName, setProfileName] = useState(
-    () => localStorage.getItem("adminUser") || sessionStorage.getItem("adminUser") || ""
-  );
+  const [profileName, setProfileName] = useState("");
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
@@ -382,20 +379,42 @@ const App: React.FC = () => {
   const api = useMemo(
     () =>
       createApiClient({
-        getToken: () => token,
         onUnauthorized: () => {
-          sessionStorage.removeItem("adminToken");
-          sessionStorage.removeItem("adminUser");
-          localStorage.removeItem("adminToken");
-          localStorage.removeItem("adminUser");
           setToken("");
           setProfileName("");
         },
       }),
-    [token]
+    []
   );
 
   const apiFetch = api.apiFetch;
+
+  useEffect(() => {
+    let active = true;
+    const checkSession = async () => {
+      try {
+        const data = await apiFetch<{ username?: string }>("/api/auth/me");
+        if (!active) return;
+        if (data?.username) {
+          setToken("session");
+          setProfileName(data.username);
+        } else {
+          setToken("");
+          setProfileName("");
+        }
+      } catch {
+        if (!active) return;
+        setToken("");
+        setProfileName("");
+      } finally {
+        if (active) setSessionChecked(true);
+      }
+    };
+    checkSession();
+    return () => {
+      active = false;
+    };
+  }, [apiFetch]);
 
   const rentedAccountLookup = useMemo(() => {
     const ids = new Set<string>();
@@ -428,6 +447,7 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!sessionChecked) return;
     const targetNav = pathToNavId(pathname);
     setActiveNav(targetNav);
     const desired = token
@@ -439,19 +459,17 @@ const App: React.FC = () => {
       window.history.replaceState(null, "", desired);
       setPathname(desired);
     }
-  }, [token, pathname]);
+  }, [token, pathname, sessionChecked]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
-      const data = await apiFetch<{ token: string; username: string }>("/api/auth/register", {
+      const data = await apiFetch<{ username: string }>("/api/auth/register", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      sessionStorage.setItem("adminToken", data.token);
-      sessionStorage.setItem("adminUser", data.username);
-      localStorage.setItem("adminToken", data.token);
-      localStorage.setItem("adminUser", data.username);
-      setToken(data.token);
+      setToken("session");
+      setProfileName(data.username || payload.username);
+      setSessionChecked(true);
       showToast("Registration complete. You're logged in.");
     } catch (error) {
       showToast((error as Error).message || "Registration failed.", "error");
@@ -460,15 +478,13 @@ const App: React.FC = () => {
 
   const handleLogin = async (payload: { username: string; password: string }) => {
     try {
-      const data = await apiFetch<{ token: string; username: string }>("/api/auth/login", {
+      const data = await apiFetch<{ username: string }>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      sessionStorage.setItem("adminToken", data.token);
-      sessionStorage.setItem("adminUser", data.username);
-      localStorage.setItem("adminToken", data.token);
-      localStorage.setItem("adminUser", data.username);
-      setToken(data.token);
+      setToken("session");
+      setProfileName(data.username || payload.username);
+      setSessionChecked(true);
       showToast("Login successful.");
     } catch (error) {
       showToast((error as Error).message || "Login failed.", "error");
@@ -481,10 +497,6 @@ const App: React.FC = () => {
     } catch {
       // ignore logout errors
     }
-    sessionStorage.removeItem("adminToken");
-    sessionStorage.removeItem("adminUser");
-    localStorage.removeItem("adminToken");
-    localStorage.removeItem("adminUser");
     setToken("");
     setProfileName("");
   };
@@ -661,10 +673,6 @@ const App: React.FC = () => {
     if (!token || activeNav !== "chats") return;
     loadChatHistory(selectedChat);
   }, [token, activeNav, selectedChat]);
-
-  useEffect(() => {
-    setProfileName(localStorage.getItem("adminUser") || sessionStorage.getItem("adminUser") || "");
-  }, [token]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -1045,6 +1053,10 @@ const App: React.FC = () => {
   const activeLabel =
     activeNav === "profile" ? "Profile" : NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard";
   const profileInitial = (profileName || "U").trim().charAt(0).toUpperCase();
+
+  if (!sessionChecked) {
+    return null;
+  }
 
   return (
     <>
