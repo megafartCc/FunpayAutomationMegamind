@@ -2980,22 +2980,34 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def get_user_active_lot_accounts(self, owner_id: str) -> list:
+    def get_user_active_lot_accounts(self, owner_id: str, user_id: int | None = None) -> list:
         """
         Get all active accounts of a specific user with lot mapping info (if configured).
         """
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
-                FROM accounts a
-                LEFT JOIN lots l ON l.account_id = a.ID
-                WHERE a.owner = ?
-                ORDER BY a.rental_start DESC
-                """,
-                (owner_id,),
-            )
+            if user_id in (None, 0):
+                cursor.execute(
+                    """
+                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
+                    FROM accounts a
+                    LEFT JOIN lots l ON l.account_id = a.ID
+                    WHERE a.owner = ?
+                    ORDER BY a.rental_start DESC
+                    """,
+                    (owner_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
+                    FROM accounts a
+                    LEFT JOIN lots l ON l.account_id = a.ID AND l.user_id = ?
+                    WHERE a.owner = ? AND a.user_id = ?
+                    ORDER BY a.rental_start DESC
+                    """,
+                    (user_id, owner_id, user_id),
+                )
             rows = cursor.fetchall()
             return [
                 {

@@ -50,7 +50,7 @@ COMMANDS_HELP = (
     "!acc / !\u0430\u043a\u043a \u2014 \u0434\u0430\u043d\u043d\u044b\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430\n"
     "!code / !\u043a\u043e\u0434 \u2014 \u043a\u043e\u0434 Steam Guard\n"
     "!stock / !\u0441\u0442\u043e\u043a \u2014 \u043d\u0430\u043b\u0438\u0447\u0438\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432\n"
-    "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <\u043d\u043e\u043c\u0435\u0440_\u043b\u043e\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
+    "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <ID_\u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
     "!lpexchange / !\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430 <ID> \u2014 \u0437\u0430\u043c\u0435\u043d\u0430 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 (10 \u043c\u0438\u043d\u0443\u0442 \u043f\u043e\u0441\u043b\u0435 !\u043a\u043e\u0434)\n"
     "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443"
 )
@@ -1191,63 +1191,86 @@ class FunpayBot:
     def _handle_extend(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
             parts = raw_text.split()
-            if len(parts) == 1:
-                accounts = self._db.get_user_active_lot_accounts(owner)
-                if not accounts:
-                    acc.send_message(chat_id, USER.active_rentals_empty)
-                    return
-
-                current_time = datetime.now(tz=MOSCOW_TZ)
-                lines = [
-                    "Чтобы продлить аренду, оплатите нужный лот и укажите количество часов.",
-                    "Команда: !продлить <часы> <номер_лота>",
-                    "",
-                    "Ваши активные аренды:",
-                ]
-                for account in accounts:
-                    _, expiry_str, remaining_str = get_remaining_time(account, current_time)
-                    lot_number = account.get("lot_number")
-                    lot_url = account.get("lot_url")
-                    display_name = self._display_account_name(account.get("account_name"))
-                    if lot_number:
-                        line = f"Лот №{lot_number}: {display_name} — истекает {expiry_str} МСК (осталось {remaining_str})"
-                        if lot_url:
-                            line += f" — {lot_url}"
-                        lines.append(line)
-                    else:
-                        lines.append(
-                            f"ID {account['id']}: {display_name} — лот не настроен (напишите администратору)."
-                        )
-                acc.send_message(chat_id, "\n".join(lines))
+            accounts = self._db.get_user_active_lot_accounts(owner, self._user_id)
+            if not accounts:
+                acc.send_message(chat_id, USER.active_rentals_empty)
                 return
 
-            if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
-                acc.send_message(chat_id, "Использование: !продлить <часы> <номер_лота>")
+            def build_extend_help(prefix: str | None = None) -> str:
+                current_time = datetime.now(tz=MOSCOW_TZ)
+                lines: list[str] = []
+                if prefix:
+                    lines.append(prefix)
+                lines.extend(
+                    [
+                        "Чтобы продлить аренду, напишите:",
+                        "!продлить <часы> <ID аккаунта>",
+                        "",
+                        "Ваши активные аренды:",
+                    ]
+                )
+                for account in accounts:
+                    expiry_str, remaining_str = self._format_rental_status(account, current_time)
+                    login = account.get("login") or self._display_account_name(account.get("account_name"))
+                    account_id = account.get("id")
+                    if expiry_str:
+                        lines.append(f"{login} (ID {account_id}) — закончится через {remaining_str}")
+                    else:
+                        lines.append(f"{login} (ID {account_id}) — не начато (ожидаем !код)")
+                return "\n".join(lines)
+
+            if len(parts) == 1:
+                acc.send_message(chat_id, build_extend_help())
+                return
+
+            if len(parts) < 2 or not parts[1].isdigit():
+                acc.send_message(chat_id, build_extend_help("Использование: !продлить <часы> <ID аккаунта>"))
                 return
 
             hours = int(parts[1])
-            lot_number = int(parts[2])
             if hours <= 0:
                 acc.send_message(chat_id, USER.extend_hours_positive)
                 return
-            if lot_number <= 0:
-                acc.send_message(chat_id, "Номер лота должен быть больше 0.")
+
+            target_account = None
+            if len(parts) >= 3 and parts[2].isdigit():
+                account_id = int(parts[2])
+                target_account = next(
+                    (item for item in accounts if str(item.get("id")) == str(account_id)),
+                    None,
+                )
+                if target_account is None:
+                    acc.send_message(
+                        chat_id,
+                        build_extend_help("Аккаунт с таким ID не найден в ваших активных арендах."),
+                    )
+                    return
+            elif len(accounts) == 1:
+                target_account = accounts[0]
+            else:
+                acc.send_message(chat_id, build_extend_help("Укажите ID аккаунта для продления."))
                 return
 
-            mapping = self._db.get_lot_mapping(lot_number, self._user_id)
-            if not mapping:
-                acc.send_message(chat_id, f"Лот №{lot_number} не привязан к аккаунту. Напишите администратору.")
+            account_id = target_account.get("id")
+            login = target_account.get("login") or self._display_account_name(target_account.get("account_name"))
+            lot_number = target_account.get("lot_number")
+            if not lot_number:
+                acc.send_message(
+                    chat_id,
+                    f"Аккаунт {login} (ID {account_id}) не привязан к лоту. Напишите администратору.",
+                )
                 return
 
-            lot_url = mapping.get("lot_url")
+            lot_url = target_account.get("lot_url")
             link_line = f"\nСсылка: {lot_url}" if lot_url else ""
             acc.send_message(
                 chat_id,
-                f"Оплатите лот №{lot_number} в количестве {hours} шт, чтобы продлить аренду на {hours} ч."
+                f"Чтобы продлить аренду аккаунта {login} (ID {account_id}) на {hours} ч, "
+                f"оплатите лот №{lot_number} в количестве {hours} шт."
                 f"{link_line}\n\nПосле оплаты бот автоматически продлит аренду.",
             )
             self._pending_lot_extend[owner] = PendingLotExtend(
-                hours=hours, lot_number=lot_number, created_ts=time.time()
+                hours=hours, lot_number=int(lot_number), created_ts=time.time()
             )
         except Exception as exc:
             logger.error(f"Failed to extend rental for {owner}: {exc}")
@@ -1790,12 +1813,12 @@ class FunpayBot:
                 f"ID аккаунта: {account_id}\n"
                 f"Осталось: ~{remaining_minutes} мин\n"
                 "Если нужно продление — используйте команду:\n"
-                "!продлить <часы> <номер_лота>\n\n"
+                "!продлить <часы> <ID аккаунта>\n\n"
                 "Команды:\n"
                 "!акк — данные аккаунта\n"
                 "!код — код Steam Guard\n"
                 "!сток — наличие\n"
-                "!продлить <часы> <номер_лота> — продлить аренду\n"
+                "!продлить <часы> <ID аккаунта> — продлить аренду\n"
                 "!лпзамена <ID> — замена аккаунта (10 минут после !код)\n"
                 "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
