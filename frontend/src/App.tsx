@@ -563,8 +563,8 @@ const App: React.FC = () => {
                         <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                       </div>
                       <div
-                        className="grid gap-3 text-xs font-semibold text-neutral-500 px-1"
-                        style={{ gridTemplateColumns: "70px 280px 200px 160px 120px 90px 110px" }}
+                        className="grid gap-3 px-1 text-xs font-semibold text-neutral-500"
+                        style={{ gridTemplateColumns: "70px 280px 200px 160px 170px 90px 110px" }}
                       >
                         <span>ID</span>
                         <span>Name</span>
@@ -580,7 +580,7 @@ const App: React.FC = () => {
                             <div
                               key={acc.id}
                               className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                              style={{ gridTemplateColumns: "70px 280px 200px 160px 120px 90px 110px" }}
+                              style={{ gridTemplateColumns: "70px 280px 200px 160px 170px 90px 110px" }}
                             >
                               <span className="truncate font-semibold text-neutral-900" title={String(acc.id ?? "—")}>
                                 {acc.id ?? "—"}
@@ -594,7 +594,7 @@ const App: React.FC = () => {
                               <span className="truncate text-neutral-700" title={acc.password || "—"}>
                                 {acc.password || "—"}
                               </span>
-                              <span className="truncate text-neutral-700" title={acc.steamId || "—"}>
+                              <span className="font-mono text-neutral-800" title={acc.steamId || "—"}>
                                 {acc.steamId || "—"}
                               </span>
                               <span className="truncate text-neutral-700" title={acc.mmr ?? "—"}>
