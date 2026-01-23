@@ -509,22 +509,6 @@ const writeCache = <T,>(key: string, data: T, etag?: string) => {
   }
 };
 
-const clearCacheStorage = () => {
-  memoryCache.clear();
-  inflightRequests.clear();
-  revalidateGuards.clear();
-  try {
-    const keys: string[] = [];
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(CACHE_PREFIX)) keys.push(key);
-    }
-    keys.forEach((key) => localStorage.removeItem(key));
-  } catch {
-    // ignore storage clear errors
-  }
-};
-
 const App: React.FC = () => {
   const [token, setToken] = useState("");
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -583,6 +567,10 @@ const App: React.FC = () => {
   const sessionKey = useMemo(() => (token ? profileName || "session" : ""), [token, profileName]);
   const lastSessionRef = useRef<string>("");
   const presenceWarmupRef = useRef<number>(0);
+  const scopedKey = useCallback(
+    (key: string) => `${key}:u:${sessionKey || "anon"}`,
+    [sessionKey]
+  );
 
   useEffect(() => {
     const root = document.documentElement;
@@ -795,7 +783,6 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!sessionChecked) return;
     if (sessionKey === lastSessionRef.current) return;
-    clearCacheStorage();
     setOverview(createEmptyOverview());
     setFunpayStats(createEmptyFunpayStats());
     setAccountsTable([]);
@@ -1060,7 +1047,7 @@ const App: React.FC = () => {
       const query = qs.toString();
       const url = query ? `/api/funpay/stats?${query}` : "/api/funpay/stats";
       await swrFetch<FunpayStatsPayload>({
-        key: STATS_CACHE_KEY,
+        key: scopedKey(STATS_CACHE_KEY),
         url,
         ttl: CACHE_TTLS.stats,
         revalidate,
@@ -1075,13 +1062,15 @@ const App: React.FC = () => {
         }),
       });
     },
-    [swrFetch]
+    [swrFetch, scopedKey]
   );
 
   const loadOrdersHistory = useCallback(
     async (queryText: string, revalidate = false) => {
       const trimmedQuery = queryText.trim();
-      const cacheKey = `${ORDERS_HISTORY_CACHE_PREFIX}${encodeURIComponent(trimmedQuery || "all")}`;
+      const cacheKey = scopedKey(
+        `${ORDERS_HISTORY_CACHE_PREFIX}${encodeURIComponent(trimmedQuery || "all")}`
+      );
       const qs = new URLSearchParams();
       if (trimmedQuery) qs.set("query", trimmedQuery);
       qs.set("limit", "200");
@@ -1112,14 +1101,14 @@ const App: React.FC = () => {
           })),
       });
     },
-    [swrFetch]
+    [swrFetch, scopedKey]
   );
 
   const loadChats = useCallback(
     async (revalidate = false) => {
       if (!token) return;
       await swrFetch<ChatItem[]>({
-        key: CHAT_LIST_CACHE_KEY,
+        key: scopedKey(CHAT_LIST_CACHE_KEY),
         url: "/api/chats?fast=1",
         ttl: CACHE_TTLS.chatList,
         revalidate,
@@ -1133,13 +1122,13 @@ const App: React.FC = () => {
         map: mapChatItems,
       });
     },
-    [token, selectedChat, swrFetch, mapChatItems]
+    [token, selectedChat, swrFetch, mapChatItems, scopedKey]
   );
 
   const loadChatHistory = useCallback(
     async (chatId: string | number | null, revalidate = false) => {
       if (!token || !chatId) return;
-      const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
+      const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatId}`);
       await swrFetch<ChatMessage[]>({
         key: cacheKey,
         url: `/api/chats/${chatId}/history?limit=80`,
@@ -1150,14 +1139,14 @@ const App: React.FC = () => {
         map: mapChatMessages,
       });
     },
-    [token, swrFetch, mapChatMessages]
+    [token, swrFetch, mapChatMessages, scopedKey]
   );
 
   const loadBlacklist = useCallback(
     async (query?: string, revalidate = false) => {
       if (!token) return;
       const trimmed = (query ?? "").trim();
-      const cacheKey = `${CACHE_PREFIX}blacklist:${encodeURIComponent(trimmed || "all")}`;
+      const cacheKey = scopedKey(`${CACHE_PREFIX}blacklist:${encodeURIComponent(trimmed || "all")}`);
       const url = trimmed ? `/api/blacklist?query=${encodeURIComponent(trimmed)}` : "/api/blacklist";
       await swrFetch<BlacklistEntry[]>({
         key: cacheKey,
@@ -1180,7 +1169,7 @@ const App: React.FC = () => {
             .filter((item: BlacklistEntry) => item.owner),
       });
     },
-    [token, swrFetch]
+    [token, swrFetch, scopedKey]
   );
 
   useEffect(() => {
@@ -1253,7 +1242,7 @@ const App: React.FC = () => {
         const payload = JSON.parse(event.data || "{}");
         const items = mapChatItems(payload);
         setChats(items);
-        writeCache(CHAT_LIST_CACHE_KEY, items);
+        writeCache(scopedKey(CHAT_LIST_CACHE_KEY), items);
         if (items.length) {
           setSelectedChat((prev) => (prev === null || prev === undefined ? items[0].id : prev));
         }
@@ -1311,7 +1300,7 @@ const App: React.FC = () => {
         const payload = JSON.parse(event.data || "{}");
         const items = mapChatMessages(payload);
         setChatMessages(items);
-        writeCache(`${CHAT_HISTORY_CACHE_PREFIX}${selectedChat}`, items);
+        writeCache(scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${selectedChat}`), items);
       } catch {
         // ignore stream parse errors
       }
@@ -2289,7 +2278,7 @@ const App: React.FC = () => {
       await apiFetch("/api/blacklist/clear", { method: "POST" });
       showToast("Blacklist cleared.");
       setBlacklistSelected([]);
-      loadBlacklist(blacklistQuery);
+      loadBlacklist(blacklistQuery, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to clear blacklist", "error");
     }
