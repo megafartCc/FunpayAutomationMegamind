@@ -579,7 +579,6 @@ def chat_history(chat_id: int, limit: int = 50, account=Depends(require_funpay_a
                     "chat_name": message.chat_name,
                     "image_link": message.image_link,
                     "by_bot": message.by_bot,
-                    "by_vertex": message.by_vertex,
                     "type": message.type.name if message.type else None,
                 }
             )

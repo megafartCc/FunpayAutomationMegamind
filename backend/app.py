@@ -434,7 +434,6 @@ class ChatCache:
                         "chat_name": message.chat_name,
                         "image_link": message.image_link,
                         "by_bot": message.by_bot,
-                        "by_vertex": message.by_vertex,
                         "type": message.type.name if message.type else None,
                         "sent_time": _extract_message_time(message.html),
                     }
@@ -2198,7 +2197,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "chat_name": message.chat_name,
                         "image_link": message.image_link,
                         "by_bot": message.by_bot,
-                        "by_vertex": message.by_vertex,
                         "type": message.type.name if message.type else None,
                         "sent_time": sent_time,
                     }
@@ -2235,7 +2233,6 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
             "chat_name": message.chat_name,
             "image_link": message.image_link,
             "by_bot": message.by_bot,
-            "by_vertex": message.by_vertex,
             "type": message.type.name if message.type else None,
             "sent_time": sent_time,
         }

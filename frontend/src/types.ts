@@ -76,7 +76,6 @@ export type ChatMessage = {
   chat_name?: string | null;
   image_link?: string | null;
   by_bot?: boolean;
-  by_vertex?: boolean;
   type?: string | null;
   sent_time?: string | null;
 };

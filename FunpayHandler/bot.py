@@ -892,7 +892,6 @@ class FunpayBot:
                 "chat_name": event.message.chat_name,
                 "image_link": event.message.image_link,
                 "by_bot": event.message.by_bot,
-                "by_vertex": event.message.by_vertex,
                 "type": event.message.type.name if event.message.type else None,
                 "sent_time": sent_time,
             }
