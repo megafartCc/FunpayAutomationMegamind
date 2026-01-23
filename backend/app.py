@@ -38,7 +38,7 @@ from FunPayAPI.common import enums as fp_enums
 from backend.logger import logger
 from backend.notifications import list_notifications
 from backend.realtime import manager as realtime_manager
-from backend.realtime import publish_chat_message, set_chat_cache
+from backend.realtime import publish_chat_message, set_chat_cache, set_event_loop
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
@@ -561,6 +561,10 @@ def _maybe_build_frontend() -> None:
 
 @app.on_event("startup")
 def start_background_services() -> None:
+    try:
+        set_event_loop(asyncio.get_event_loop())
+    except Exception:
+        pass
     _maybe_build_frontend()
     if FRONTEND_ASSETS_DIR.exists() and not _frontend_assets_mounted():
         app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
@@ -2082,6 +2086,8 @@ async def stream_chat_history(
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
+    # Capture the main event loop for cross-thread websocket broadcasts
+    set_event_loop(asyncio.get_running_loop())
     session = _get_session_from_websocket(websocket)
     if not session:
         await websocket.close(code=4401)

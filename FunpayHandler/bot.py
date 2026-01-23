@@ -382,8 +382,10 @@ class FunpayBot:
                 if event.type is events.EventTypes.NEW_MESSAGE:
                     self._handle_new_message(event)
 
-            except Exception as exc:
-                logger.error(f"An error occurred while processing event: {exc}")
+            except Exception:
+                logger.exception(
+                    f"An error occurred while processing event: {getattr(event, 'type', None)}"
+                )
 
     def send_message_by_owner(self, owner: str, message: str) -> None:
         if self._acc is None:

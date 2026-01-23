@@ -91,6 +91,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+_event_loop: asyncio.AbstractEventLoop | None = None
 _chat_cache: Any | None = None
 
 
@@ -99,22 +100,38 @@ def set_chat_cache(cache: Any) -> None:
     _chat_cache = cache
 
 
+def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """
+    Remember the main FastAPI event loop so background threads
+    (Funpay bot) can schedule websocket broadcasts safely.
+    """
+    global _event_loop
+    _event_loop = loop
+
+
 def _run_async(coro: Any) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    loop = _event_loop
     if loop and loop.is_running():
-        loop.create_task(coro)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+
+        def _log_future_error(fut: asyncio.Future) -> None:
+            exc = fut.exception()
+            if exc:
+                logger.warning(f"Async broadcast failed: {exc}")
+
+        future.add_done_callback(_log_future_error)
         return
+
+    # Fallback for tests or scripts where no loop has been set yet.
     try:
-        asyncio.run(coro)
+        current = asyncio.get_running_loop()
+        if current.is_running():
+            current.create_task(coro)
+            return
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(coro)
-        finally:
-            loop.close()
+        pass
+
+    asyncio.run(coro)
 
 
 def broadcast_to_user(user_id: int, event_dict: Dict[str, Any]) -> None:
