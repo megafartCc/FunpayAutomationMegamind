@@ -3416,6 +3416,14 @@ const App: React.FC = () => {
                             <textarea
                               value={chatInput}
                               onChange={(e) => setChatInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  if (selectedChat !== null && selectedChat !== undefined && chatInput.trim()) {
+                                    sendChatMessage();
+                                  }
+                                }
+                              }}
                               placeholder={selectedChat !== null && selectedChat !== undefined ? "Type a message..." : "Select a chat to start typing"}
                               disabled={selectedChat === null || selectedChat === undefined}
                               rows={2}
