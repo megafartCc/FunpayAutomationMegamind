@@ -7,6 +7,11 @@ import { useToast } from "./hooks/useToast";
 import AddAccountForm from "./components/account/AddAccountForm";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+const PRESENCE_BASE =
+  (process.env.REACT_APP_PRESENCE_URL && process.env.REACT_APP_PRESENCE_URL.replace(/\/$/, "")) ||
+  // fallback to window-injected value if present
+  (typeof window !== "undefined" && (window as any).__PRESENCE_URL__?.replace?.(/\/$/, "")) ||
+  "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
 type OverviewData = {
   totalAccounts: number | null;
@@ -349,7 +354,7 @@ const App: React.FC = () => {
       .filter((id): id is string => !!id && !(presenceCache as any)[id]);
     if (!ids.length) return;
     const controller = new AbortController();
-    const base = (process.env.REACT_APP_PRESENCE_URL || "/presence").replace(/\/$/, "");
+    const base = PRESENCE_BASE;
     Promise.all(
       ids.map(async (id) => {
         try {
@@ -400,7 +405,7 @@ const App: React.FC = () => {
       try {
         const [stats, activeRentals, accounts] = await Promise.all([
           apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1").catch(() => ({ items: [] })),
+          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&include_steamid=1&include_mafile=1").catch(() => ({ items: [] })),
           apiFetch<{ items: unknown[] }>(
             "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
           ).catch(() => ({ items: [] })),
