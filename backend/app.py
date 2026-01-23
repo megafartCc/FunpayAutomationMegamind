@@ -7,12 +7,13 @@ import random
 import re
 import subprocess
 import time
+from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from threading import Lock
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -31,6 +32,7 @@ from backend.config import (
     STEAM_PRESENCE_PASSWORD,
     STEAM_PRESENCE_REFRESH_TOKEN,
     STEAM_PRESENCE_SHARED_SECRET,
+    ALLOWED_WS_ORIGINS,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
@@ -95,6 +97,14 @@ SESSION_COOKIE_NAME = "sessionId"
 SESSION_TTL_DAYS = 7
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_REFRESH_WINDOW_SECONDS = 24 * 60 * 60
+
+# Simple in-memory rate limits (per-IP) for auth endpoints
+RATE_LIMIT_RULES = {
+    "login": {"limit": 10, "window": 60},       # 10 attempts per minute
+    "register": {"limit": 5, "window": 300},    # 5 attempts per 5 minutes
+}
+_rate_buckets: dict[tuple[str, str], deque] = defaultdict(deque)
+_rate_lock = Lock()
 
 
 def _normalize_time_label(time_text: str) -> str:
@@ -652,6 +662,29 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
 
 
+def _client_ip(request: Request | WebSocket) -> str:
+    client = getattr(request, "client", None)
+    return getattr(client, "host", None) or "unknown"
+
+
+def _check_rate_limit(request: Request, bucket: str) -> None:
+    rule = RATE_LIMIT_RULES.get(bucket)
+    if not rule:
+        return
+    limit = rule["limit"]
+    window = rule["window"]
+    now = time.time()
+    key = (bucket, _client_ip(request))
+    with _rate_lock:
+        dq = _rate_buckets[key]
+        while dq and now - dq[0] > window:
+            dq.popleft()
+        if len(dq) >= limit:
+            logger.warning(f"Rate limit exceeded for {bucket} from {key[1]}")
+            raise HTTPException(status_code=429, detail="Too many attempts, slow down.")
+        dq.append(now)
+
+
 def _to_datetime(value: datetime | str | None) -> datetime | None:
     if value is None:
         return None
@@ -699,6 +732,22 @@ def require_admin(request: Request, response: Response) -> None:
                 request.state.user = user
                 return
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _origin_allowed(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin", "")
+    origin_host = urlparse(origin).hostname.lower() if origin else None
+    allowed_hosts = set(ALLOWED_WS_ORIGINS or [])
+    url_host = websocket.url.hostname if websocket.url else None
+    if url_host:
+        allowed_hosts.add(str(url_host).lower())
+    allowed_hosts.update({"localhost", "127.0.0.1"})
+    if not allowed_hosts:
+        return True
+    if origin_host:
+        return origin_host in allowed_hosts
+    # If no Origin header, be conservative: only allow same host
+    return False
 
 
 def _get_session_from_websocket(websocket: WebSocket) -> dict | None:
@@ -849,6 +898,7 @@ def health() -> dict:
 
 @app.post("/api/auth/register")
 def auth_register(payload: AuthRegister, request: Request, response: Response) -> dict:
+    _check_rate_limit(request, "register")
     token = db.create_user(payload.username, payload.password, payload.golden_key)
     if not token:
         raise HTTPException(status_code=400, detail="User already exists or invalid data")
@@ -864,6 +914,7 @@ def auth_register(payload: AuthRegister, request: Request, response: Response) -
 
 @app.post("/api/auth/login")
 def auth_login(payload: AuthLogin, request: Request, response: Response) -> dict:
+    _check_rate_limit(request, "login")
     user = db.verify_user_credentials(payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -2103,6 +2154,9 @@ async def stream_chat_history(
 async def websocket_endpoint(websocket: WebSocket) -> None:
     # Capture the main event loop for cross-thread websocket broadcasts
     set_event_loop(asyncio.get_running_loop())
+    if not _origin_allowed(websocket):
+        await websocket.close(code=4403)
+        return
     session = _get_session_from_websocket(websocket)
     if not session:
         await websocket.close(code=4401)
