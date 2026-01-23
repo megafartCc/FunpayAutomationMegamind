@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import time
+import requests
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from backend.config import (
     DOTA_MATCH_GRACE_MINUTES,
     HOURS_FOR_REVIEW,
     RENTAL_CHECK_INTERVAL,
+    STEAM_BRIDGE_URL,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
 from backend.logger import logger
@@ -90,6 +92,7 @@ class FunpayBot:
         self._token_lock = threading.Lock()
         self._refresh_requested = threading.Event()
         self._expire_delay_since: Dict[int, datetime] = {}
+        self._expire_delay_next_check: Dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: Dict[int, set[int]] = {}
         self._expire_warning_start: Dict[int, str] = {}
@@ -1737,6 +1740,20 @@ class FunpayBot:
             return None
         return str(steamid64)
 
+    def _fetch_bridge_presence(self, steamid64: int) -> Optional[dict]:
+        if not STEAM_BRIDGE_URL:
+            return None
+        url = f"{STEAM_BRIDGE_URL.rstrip('/')}/presence/{steamid64}"
+        try:
+            resp = requests.get(url, timeout=4)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            return None
+        return None
+
     def _should_delay_expire_due_to_dota_match(
         self,
         *,
@@ -1747,23 +1764,36 @@ class FunpayBot:
     ) -> bool:
         if not DOTA_MATCH_DELAY_EXPIRE:
             return False
-        bot = get_presence_bot()
-        if bot is None:
-            return False
 
         steamid64 = self._steamid64_from_mafile(mafile_json)
         if steamid64 is None:
             return False
 
-        snapshot = bot.get_cached(steamid64)
-        if snapshot is None:
-            try:
-                snapshot = asyncio.run(bot.fetch_presence(steamid64))
-            except Exception:
-                snapshot = None
+        next_check = self._expire_delay_next_check.get(account_id)
+        if next_check and current_time < next_check:
+            return True
 
-        if not snapshot or not snapshot.in_match:
+        bridge_presence = self._fetch_bridge_presence(steamid64)
+        in_match = bool(bridge_presence.get("in_match")) if bridge_presence else False
+        steam_display = None
+        if bridge_presence:
+            steam_display = bridge_presence.get("match_time") or bridge_presence.get("hero_name")
+        else:
+            bot = get_presence_bot()
+            if bot is not None:
+                snapshot = bot.get_cached(steamid64)
+                if snapshot is None:
+                    try:
+                        snapshot = asyncio.run(bot.fetch_presence(steamid64))
+                    except Exception:
+                        snapshot = None
+                if snapshot and snapshot.in_match:
+                    in_match = True
+                    steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
+
+        if not in_match:
             self._expire_delay_since.pop(account_id, None)
+            self._expire_delay_next_check.pop(account_id, None)
             self._expire_delay_notified.discard(account_id)
             return False
 
@@ -1774,27 +1804,33 @@ class FunpayBot:
 
         if current_time - since >= timedelta(minutes=DOTA_MATCH_GRACE_MINUTES):
             self._expire_delay_since.pop(account_id, None)
+            self._expire_delay_next_check.pop(account_id, None)
             self._expire_delay_notified.discard(account_id)
             return False
 
+        self._expire_delay_next_check[account_id] = current_time + timedelta(minutes=1)
+
         if account_id not in self._expire_delay_notified:
-            steam_display = snapshot.rich_presence.get("steam_display") if snapshot.rich_presence else None
             extra = f"\nСтатус: {steam_display}\n" if steam_display else ""
             try:
                 self.send_message_by_owner(
                     owner,
-                    "Ваша аренда уже закончилась, но вы сейчас в матче Dota 2.\n"
-                    f"Я подожду до {DOTA_MATCH_GRACE_MINUTES} минут и затем автоматически закрою доступ.\n"
+                    "Ваша аренда закончилась, но мы видим, что вы в игре.\n"
+                    "У вас есть время, чтобы закончить игру. Через 1 минуту я проверю снова.\n"
+                    "Доступ будет закрыт автоматически, если матч ещё идёт.\n"
+                    "Если хотите продлить — используйте команду:\n"
+                    f"!продлить <часы> <ID аккаунта>\n"
                     f"{extra}",
                 )
             except Exception:
                 pass
             try:
                 send_message_to_admin(
-                    "EXPIRE DELAYED (DOTA MATCH)\n\n"
+                    "EXPIRE DELAYED (IN MATCH)\n\n"
                     f"Account ID: {account_id}\n"
                     f"Owner: {owner}\n"
-                    f"steam_display: {steam_display}\n"
+                    f"Status: {steam_display}\n"
+                    "Recheck: 1 minute\n"
                     f"Grace: {DOTA_MATCH_GRACE_MINUTES} minutes\n",
                 )
             except Exception:
