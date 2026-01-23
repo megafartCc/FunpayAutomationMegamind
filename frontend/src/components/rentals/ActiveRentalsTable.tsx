@@ -10,7 +10,10 @@ import {
   presenceLabel,
 } from "../../utils/format";
 
-const PRESENCE_BASE_URL = "https://laudable-flow-production-9c8a.up.railway.app/presence";
+const PRESENCE_BASE_URL =
+  (import.meta.env.VITE_PRESENCE_URL && import.meta.env.VITE_PRESENCE_URL.replace(/\/$/, "")) ||
+  (typeof window !== "undefined" && (window as any).__PRESENCE_URL__?.replace?.(/\/$/, "")) ||
+  "https://laudable-flow-production-9c8a.up.railway.app/presence";
 
 type ActiveRentalsTableProps = {
   rentals: Rental[];

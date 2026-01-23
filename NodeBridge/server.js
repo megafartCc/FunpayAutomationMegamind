@@ -11,6 +11,17 @@ const {
 
 const app = express();
 app.use(express.json());
+const corsOrigin = process.env.PRESENCE_CORS_ORIGIN || "*";
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 const client = new SteamUser();
 const presence = new Map();

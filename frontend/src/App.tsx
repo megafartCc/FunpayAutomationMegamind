@@ -8,7 +8,7 @@ import AddAccountForm from "./components/account/AddAccountForm";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const PRESENCE_BASE =
-  (process.env.REACT_APP_PRESENCE_URL && process.env.REACT_APP_PRESENCE_URL.replace(/\/$/, "")) ||
+  (import.meta.env.VITE_PRESENCE_URL && import.meta.env.VITE_PRESENCE_URL.replace(/\/$/, "")) ||
   // fallback to window-injected value if present
   (typeof window !== "undefined" && (window as any).__PRESENCE_URL__?.replace?.(/\/$/, "")) ||
   "https://laudable-flow-production-9c8a.up.railway.app/presence";
