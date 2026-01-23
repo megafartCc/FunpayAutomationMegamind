@@ -103,24 +103,14 @@ const FunpayStatisticsIcon = () => (
 );
 
 const RentalsIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 472 280" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <g clipPath="url(#clip0_1_355)">
-      <path d="M12 2.4C13.1705 2.38788 14.3332 2.59127 15.43 3" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M21 8.57001C21.4087 9.66685 21.6121 10.8295 21.6 12" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M21.6 12C21.6 13.8987 21.037 15.7548 19.9821 17.3335C18.9273 18.9122 17.428 20.1426 15.6738 20.8692C13.9196 21.5958 11.9894 21.786 10.1272 21.4155C8.26494 21.0451 6.55439 20.1308 5.2118 18.7882C3.86922 17.4456 2.95491 15.7351 2.58449 13.8729C2.21407 12.0106 2.40418 10.0804 3.13079 8.32623C3.85739 6.57206 5.08784 5.07275 6.66655 4.01789C8.24527 2.96302 10.1013 2.39999 12 2.39999" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 1.5V3.3" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 20.7V22.5" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M22.5 12H20.7" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3.3 12H1.5" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M15.43 10.92V14.1" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M15.97 12.58H12.91V9.89999" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8.15997 10.47C8.15997 10.47 9.15997 9.46999 10.09 10.11C11.79 11.33 8.25997 14.11 8.25997 14.11H10.76" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-    </g>
-    <defs>
-      <clipPath id="clip0_1_355">
-        <rect width="24" height="24" fill="white" />
-      </clipPath>
-    </defs>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M12 13V9M21 6L19 4M10 2H14M12 21C7.58172 21 4 17.4183 4 13C4 8.58172 7.58172 5 12 5C16.4183 5 20 8.58172 20 13C20 17.4183 16.4183 21 12 21Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
   </svg>
 );
 
@@ -311,6 +301,9 @@ const App: React.FC = () => {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [autoRaise, setAutoRaise] = useState<boolean>(() => localStorage.getItem("autoRaise") === "1");
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
+  const [uiMode, setUiMode] = useState<"light" | "dark">(
+    () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
+  );
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -491,6 +484,10 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("autoOnline", autoOnline ? "1" : "0");
   }, [autoOnline]);
+
+  useEffect(() => {
+    localStorage.setItem("uiMode", uiMode);
+  }, [uiMode]);
 
   // tick for live timers
   useEffect(() => {
@@ -860,7 +857,7 @@ const App: React.FC = () => {
                             </p>
                           </div>
                         </div>
-                        <div className="flex h-[520px] flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
+                        <div className="flex min-h-[620px] flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
                           <div className="flex-1 space-y-3 overflow-y-auto pr-2">
                             {chatLoading && (
                               <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
@@ -932,34 +929,64 @@ const App: React.FC = () => {
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
                       </div>
-                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="mb-4 flex items-center justify-between">
-                          <div>
-                            <h3 className="text-lg font-semibold text-neutral-900">System notifications</h3>
-                            <p className="text-sm text-neutral-500">Latest events from the bot.</p>
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-3">
+                            <h3 className="text-lg font-semibold text-neutral-900">UI Settings</h3>
+                          </div>
+                          <div className="flex h-16 w-full items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 shadow-sm">
+                            <div className="text-sm font-semibold text-neutral-900">Mode</div>
+                            <div className="flex rounded-full border border-neutral-200 bg-neutral-50 p-1 text-sm font-semibold text-neutral-600">
+                              <button
+                                type="button"
+                                onClick={() => setUiMode("light")}
+                                className={`rounded-full px-3 py-1 transition ${
+                                  uiMode === "light" ? "bg-neutral-900 text-white shadow" : "hover:bg-white"
+                                }`}
+                              >
+                                Light
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setUiMode("dark")}
+                                className={`rounded-full px-3 py-1 transition ${
+                                  uiMode === "dark" ? "bg-neutral-900 text-white shadow" : "hover:bg-white"
+                                }`}
+                              >
+                                Dark
+                              </button>
+                            </div>
                           </div>
                         </div>
-                        <div className="space-y-3">
-                          {notifications.slice(0, 6).map((n) => (
-                            <div
-                              key={n.id}
-                              className="rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3 text-sm text-neutral-800"
-                            >
-                              <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500">
-                                <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
-                                <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
-                              </div>
-                              <div className="text-neutral-900">{n.message || "—"}</div>
-                              <div className="text-xs text-neutral-500">
-                                Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
-                              </div>
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-4 flex items-center justify-between">
+                            <div>
+                              <h3 className="text-lg font-semibold text-neutral-900">System notifications</h3>
+                              <p className="text-sm text-neutral-500">Latest events from the bot.</p>
                             </div>
-                          ))}
-                          {notifications.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              No notifications yet.
-                            </div>
-                          )}
+                          </div>
+                          <div className="space-y-3">
+                            {notifications.slice(0, 6).map((n) => (
+                              <div
+                                key={n.id}
+                                className="rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3 text-sm text-neutral-800"
+                              >
+                                <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500">
+                                  <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
+                                  <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
+                                </div>
+                                <div className="text-neutral-900">{n.message || "—"}</div>
+                                <div className="text-xs text-neutral-500">
+                                  Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
+                                </div>
+                              </div>
+                            ))}
+                            {notifications.length === 0 && (
+                              <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                No notifications yet.
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </motion.div>
