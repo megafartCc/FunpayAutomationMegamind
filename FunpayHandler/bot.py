@@ -878,7 +878,7 @@ class FunpayBot:
             return
 
         owner = event.message.author
-        if event.message.type == types.MessageTypes.NEW_MESSAGE and self._user_id is not None:
+        if self._user_id is not None:
             sent_time = _extract_message_time_from_text(getattr(event.message, "html", None))
             if not sent_time:
                 sent_time = _extract_message_time_from_text(event.message.text or "")
