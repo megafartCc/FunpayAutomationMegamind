@@ -1049,6 +1049,69 @@ const App: React.FC = () => {
     [swrFetch]
   );
 
+  const loadChats = useCallback(
+    async (revalidate = false) => {
+      if (!token) return;
+      await swrFetch<ChatItem[]>({
+        key: CHAT_LIST_CACHE_KEY,
+        url: "/api/chats?fast=1",
+        ttl: CACHE_TTLS.chatList,
+        revalidate,
+        onLoading: setChatListLoading,
+        onData: (items) => {
+          setChats(items);
+          if ((selectedChat === null || selectedChat === undefined) && items.length) {
+            setSelectedChat(items[0].id);
+          }
+        },
+        map: mapChatItems,
+      });
+    },
+    [token, selectedChat, swrFetch, mapChatItems]
+  );
+
+  const loadChatHistory = useCallback(
+    async (chatId: string | number | null, revalidate = false) => {
+      if (!token || !chatId) return;
+      const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
+      await swrFetch<ChatMessage[]>({
+        key: cacheKey,
+        url: `/api/chats/${chatId}/history?limit=80`,
+        ttl: CACHE_TTLS.chatHistory,
+        revalidate,
+        onLoading: setChatLoading,
+        onData: setChatMessages,
+        map: mapChatMessages,
+      });
+    },
+    [token, swrFetch, mapChatMessages]
+  );
+
+  const loadBlacklist = async (query?: string) => {
+    if (!token) return;
+    setBlacklistLoading(true);
+    try {
+      const trimmed = (query ?? "").trim();
+      const url = trimmed ? `/api/blacklist?query=${encodeURIComponent(trimmed)}` : "/api/blacklist";
+      const data = await apiFetch<{ items: any[] }>(url).catch(() => ({ items: [] }));
+      const mapped: BlacklistEntry[] = (data.items || [])
+        .map((item, idx) => ({
+          id: item.id ?? idx,
+          owner: String(item.owner ?? "").trim(),
+          reason: item.reason ?? null,
+          createdAt: item.created_at ?? item.createdAt ?? null,
+        }))
+        .filter((item) => item.owner);
+      setBlacklistEntries(mapped);
+      setBlacklistSelected((prev) => prev.filter((owner) => mapped.some((entry) => entry.owner === owner)));
+    } catch (error) {
+      showToast((error as Error).message || "Failed to load blacklist", "error");
+      setBlacklistEntries([]);
+    } finally {
+      setBlacklistLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (token) {
       loadOverview();
@@ -1840,27 +1903,6 @@ const App: React.FC = () => {
     </button>
   );
 
-  const loadChats = useCallback(
-    async (revalidate = false) => {
-      if (!token) return;
-      await swrFetch<ChatItem[]>({
-        key: CHAT_LIST_CACHE_KEY,
-        url: "/api/chats?fast=1",
-        ttl: CACHE_TTLS.chatList,
-        revalidate,
-        onLoading: setChatListLoading,
-        onData: (items) => {
-          setChats(items);
-          if ((selectedChat === null || selectedChat === undefined) && items.length) {
-            setSelectedChat(items[0].id);
-          }
-        },
-        map: mapChatItems,
-      });
-    },
-    [token, selectedChat, swrFetch, mapChatItems]
-  );
-
   const handleCreateAccount = async (payload: Record<string, unknown>) => {
     if (!token) throw new Error("Not authorized");
     setSubmittingAccount(true);
@@ -2018,48 +2060,6 @@ const App: React.FC = () => {
       showToast((error as Error).message || "Failed to release rental.", "error");
     } finally {
       setRentalActionBusy(false);
-    }
-  };
-
-  const loadChatHistory = useCallback(
-    async (chatId: string | number | null, revalidate = false) => {
-      if (!token || !chatId) return;
-      const cacheKey = `${CHAT_HISTORY_CACHE_PREFIX}${chatId}`;
-      await swrFetch<ChatMessage[]>({
-        key: cacheKey,
-        url: `/api/chats/${chatId}/history?limit=80`,
-        ttl: CACHE_TTLS.chatHistory,
-        revalidate,
-        onLoading: setChatLoading,
-        onData: setChatMessages,
-        map: mapChatMessages,
-      });
-    },
-    [token, swrFetch, mapChatMessages]
-  );
-
-  const loadBlacklist = async (query?: string) => {
-    if (!token) return;
-    setBlacklistLoading(true);
-    try {
-      const trimmed = (query ?? "").trim();
-      const url = trimmed ? `/api/blacklist?query=${encodeURIComponent(trimmed)}` : "/api/blacklist";
-      const data = await apiFetch<{ items: any[] }>(url).catch(() => ({ items: [] }));
-      const mapped: BlacklistEntry[] = (data.items || [])
-        .map((item, idx) => ({
-          id: item.id ?? idx,
-          owner: String(item.owner ?? "").trim(),
-          reason: item.reason ?? null,
-          createdAt: item.created_at ?? item.createdAt ?? null,
-        }))
-        .filter((item) => item.owner);
-      setBlacklistEntries(mapped);
-      setBlacklistSelected((prev) => prev.filter((owner) => mapped.some((entry) => entry.owner === owner)));
-    } catch (error) {
-      showToast((error as Error).message || "Failed to load blacklist", "error");
-      setBlacklistEntries([]);
-    } finally {
-      setBlacklistLoading(false);
     }
   };
 
