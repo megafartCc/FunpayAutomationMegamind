@@ -29,21 +29,22 @@ type AccountRow = {
   mmr?: number | string | null;
 };
 
-  type RentalRow = {
-    id?: string | number;
-    accountName?: string;
-    buyer?: string;
-    durationSec?: number | null;
-    startedAt?: string;
-    status?: string;
-    hero?: string;
-    steamId?: string;
-    presence?: PresenceData | null;
-    presenceLabel?: string | null;
-    presenceObservedAt?: number | null;
-  };
+type RentalRow = {
+  id?: string | number;
+  accountName?: string;
+  buyer?: string;
+  durationSec?: number | null;
+  startedAt?: string;
+  status?: string;
+  hero?: string;
+  steamId?: string;
+  presence?: PresenceData | null;
+  presenceLabel?: string | null;
+  presenceObservedAt?: number | null;
+  chatUrl?: string | null;
+};
 
-  type NotificationItem = {
+type NotificationItem = {
   id?: string | number;
   level?: string;
   message?: string;
@@ -288,6 +289,7 @@ const navIdToPath: Record<string, string> = {
   overview: "/dashboard",
   rentals: "/rentals",
   blacklist: "/blacklist",
+  profile: "/profile",
   inventory: "/inventory",
   lots: "/lots",
   chats: "/chats",
@@ -317,7 +319,9 @@ const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
 
 const App: React.FC = () => {
-  const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
+  const [token, setToken] = useState(
+    () => localStorage.getItem("adminToken") || sessionStorage.getItem("adminToken") || ""
+  );
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
   const [overview, setOverview] = useState<OverviewData>({
@@ -341,13 +345,15 @@ const App: React.FC = () => {
     () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
   );
   const [submittingAccount, setSubmittingAccount] = useState(false);
-  const [presenceCache, setPresenceCache] = useState<Record<string, PresenceData>>({});
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
   const [blacklistLoading, setBlacklistLoading] = useState(false);
   const [blacklistOwner, setBlacklistOwner] = useState("");
   const [blacklistReason, setBlacklistReason] = useState("");
   const [blacklistSelected, setBlacklistSelected] = useState<string[]>([]);
+  const [profileName, setProfileName] = useState(
+    () => localStorage.getItem("adminUser") || sessionStorage.getItem("adminUser") || ""
+  );
   const [tick, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -358,7 +364,10 @@ const App: React.FC = () => {
         onUnauthorized: () => {
           sessionStorage.removeItem("adminToken");
           sessionStorage.removeItem("adminUser");
+          localStorage.removeItem("adminToken");
+          localStorage.removeItem("adminUser");
           setToken("");
+          setProfileName("");
         },
       }),
     [token]
@@ -380,36 +389,6 @@ const App: React.FC = () => {
     }
   }, [token, pathname]);
 
-  // fetch presence for rentals
-  useEffect(() => {
-    const ids = rentalsTable
-      .filter((r) => !r.presence)
-      .map((r) => r.steamId)
-      .filter((id): id is string => !!id && !(presenceCache as any)[id]);
-    if (!ids.length) return;
-    const controller = new AbortController();
-    const base = PRESENCE_BASE;
-    Promise.all(
-      ids.map(async (id) => {
-        try {
-          const res = await fetch(`${base}/${id}`, { signal: controller.signal });
-          if (!res.ok) throw new Error("bad status");
-          const raw = (await res.json()) as PresenceData;
-          const matchSecondsValue = Number((raw as any)?.match_seconds);
-          const data: PresenceData = {
-            ...raw,
-            match_seconds: Number.isFinite(matchSecondsValue) ? matchSecondsValue : null,
-            fetched_at: Date.now(),
-          };
-          setPresenceCache((prev) => ({ ...prev, [id]: data }));
-        } catch {
-          // ignore per-id errors
-        }
-      })
-    );
-    return () => controller.abort();
-  }, [rentalsTable]);
-
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
       const data = await apiFetch<{ token: string; username: string }>("/api/auth/register", {
@@ -418,10 +397,12 @@ const App: React.FC = () => {
       });
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
+      localStorage.setItem("adminToken", data.token);
+      localStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      showToast("??????????? ?????????, ?? ?????.");
+      showToast("Registration complete. You're logged in.");
     } catch (error) {
-      showToast((error as Error).message || "?? ??????? ??????????????????", "error");
+      showToast((error as Error).message || "Registration failed.", "error");
     }
   };
 
@@ -433,11 +414,27 @@ const App: React.FC = () => {
       });
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
+      localStorage.setItem("adminToken", data.token);
+      localStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      showToast("???? ????????.");
+      showToast("Login successful.");
     } catch (error) {
-      showToast((error as Error).message || "?? ??????? ?????", "error");
+      showToast((error as Error).message || "Login failed.", "error");
     }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore logout errors
+    }
+    sessionStorage.removeItem("adminToken");
+    sessionStorage.removeItem("adminUser");
+    localStorage.removeItem("adminToken");
+    localStorage.removeItem("adminUser");
+    setToken("");
+    setProfileName("");
   };
 
   useEffect(() => {
@@ -445,7 +442,7 @@ const App: React.FC = () => {
       try {
         const [stats, activeRentals, accounts] = await Promise.all([
           apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence").catch(() => ({ items: [] })),
+          apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence,chat").catch(() => ({ items: [] })),
           apiFetch<{ items: unknown[] }>(
             "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
           ).catch(() => ({ items: [] })),
@@ -538,7 +535,7 @@ const App: React.FC = () => {
                   : presence.in_game
                     ? "In game"
                     : "Offline"
-                : r.status ?? r.presence ?? "";
+                : "";
               const durationSec = (() => {
                 const explicit = Number(r.duration_sec ?? r.duration_seconds ?? r.seconds);
                 if (Number.isFinite(explicit) && explicit >= 0) return explicit;
@@ -551,11 +548,12 @@ const App: React.FC = () => {
               return {
                 id: r.id ?? idx,
                 accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
-                buyer: r.buyer ?? r.rented_by ?? "",
+                buyer: r.owner ?? r.buyer ?? r.rented_by ?? "",
                 durationSec,
                 startedAt: r.started_at ?? r.start_time ?? r.created_at ?? r.rental_start ?? r.rental_start_time,
                 status: derivedStatus,
                 hero: r.hero ?? r.character ?? "",
+                chatUrl: r.chat_url ?? r.chatUrl ?? r.chat ?? r.chat_link ?? null,
                 steamId:
                   r.steamid ??
                   r.steam_id ??
@@ -578,7 +576,7 @@ const App: React.FC = () => {
 
     const loadNotifications = async () => {
       try {
-        const data = await apiFetch<{ items: any[] }>("/api/notifications?limit=50").catch(() => ({ items: [] }));
+      const data = await apiFetch<{ items: any[] }>("/api/notifications?limit=50").catch(() => ({ items: [] }));
         const mapped: NotificationItem[] = (data.items || []).map((n, idx) => ({
           id: n.id ?? idx,
           level: n.level ?? n.type ?? "info",
@@ -610,6 +608,10 @@ const App: React.FC = () => {
     if (!token || activeNav !== "chats") return;
     loadChatHistory(selectedChat);
   }, [token, activeNav, selectedChat]);
+
+  useEffect(() => {
+    setProfileName(localStorage.getItem("adminUser") || sessionStorage.getItem("adminUser") || "");
+  }, [token]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -666,9 +668,9 @@ const App: React.FC = () => {
     return `${h}:${m}:${s}`;
   };
 
-  const formatMatchTime = (matchTime?: string | null, matchSeconds?: number | null) => {
+  const formatMatchTime = (matchSeconds?: number | null) => {
     const numeric = typeof matchSeconds === "number" ? matchSeconds : Number(matchSeconds);
-    if (!Number.isFinite(numeric)) return matchTime || "";
+    if (!Number.isFinite(numeric)) return "";
     const total = Math.max(0, Math.floor(numeric || 0));
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
@@ -863,7 +865,7 @@ const App: React.FC = () => {
       showToast("Blacklist is already empty.", "error");
       return;
     }
-    if (!window.confirm("Remove everyone from the blacklist?")) return;
+    if (!window.confirm("Remove everyone from the blacklist...")) return;
     try {
       await apiFetch("/api/blacklist/clear", { method: "POST" });
       showToast("Blacklist cleared.");
@@ -903,6 +905,9 @@ const App: React.FC = () => {
 
   const allBlacklistSelected =
     blacklistEntries.length > 0 && blacklistSelected.length === blacklistEntries.length;
+  const activeLabel =
+    activeNav === "profile" ? "Profile" : NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard";
+  const profileInitial = (profileName || "U").trim().charAt(0).toUpperCase();
 
   return (
     <>
@@ -1015,27 +1020,41 @@ const App: React.FC = () => {
                 >
                   <div className="flex items-center justify-between gap-6 border-b border-neutral-200 pb-4">
                     <div>
-                      <h1 className="text-2xl font-semibold text-neutral-900">
-                        {NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard"}
-                      </h1>
+                      <h1 className="text-2xl font-semibold text-neutral-900">{activeLabel}</h1>
                     </div>
-                    <label className="relative flex h-11 w-80 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path
-                          d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z"
-                          stroke="#9CA3AF"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                    <div className="flex items-center gap-4">
+                      <label className="relative flex h-11 w-72 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path
+                            d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z"
+                            stroke="#9CA3AF"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path d="M21 21L16.65 16.65" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <input
+                          type="search"
+                          placeholder="Search..."
+                          className="w-full bg-transparent text-neutral-700 placeholder:text-neutral-400 outline-none"
                         />
-                        <path d="M21 21L16.65 16.65" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      <input
-                        type="search"
-                        placeholder="Search..."
-                        className="w-full bg-transparent text-neutral-700 placeholder:text-neutral-400 outline-none"
-                      />
-                    </label>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveNav("profile");
+                          const nextPath = navIdToPath.profile || "/profile";
+                          window.history.replaceState(null, "", nextPath);
+                          setPathname(nextPath);
+                        }}
+                        className="flex h-10 w-10 items-center justify-center rounded-full bg-neutral-900 text-sm font-semibold text-white shadow-sm"
+                        aria-label="Profile"
+                        title="Profile"
+                      >
+                        {profileInitial}
+                      </button>
+                    </div>
                   </div>
                   {(activeNav === "overview" || activeNav === "funpay-stats") && (
                     <div className="mt-6">
@@ -1077,14 +1096,14 @@ const App: React.FC = () => {
                             <div className="mt-2 text-3xl font-bold text-neutral-900">
                               {overview.totalAccounts && overview.activeRentals
                                 ? `${Math.round((overview.activeRentals / overview.totalAccounts) * 100)}%`
-                                : "–"}
+                                : "-"}
                             </div>
                             <div className="mt-1 text-xs text-neutral-500">Active / Total accounts</div>
                           </div>
                           <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
                             <div className="text-sm font-semibold text-neutral-700">Free Accounts</div>
                             <div className="mt-2 text-3xl font-bold text-neutral-900">
-                              {overview.freeAccounts === null ? "–" : overview.freeAccounts}
+                              {overview.freeAccounts === null ? "-" : overview.freeAccounts}
                             </div>
                             <div className="mt-1 text-xs text-neutral-500">Available for issuance</div>
                           </div>
@@ -1240,6 +1259,33 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </motion.div>
+                  ) : activeNav === "profile" ? (
+                    <motion.div
+                      key="profile"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="flex flex-wrap items-center gap-4">
+                          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-900 text-xl font-semibold text-white">
+                            {profileInitial}
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">Profile</h3>
+                            <p className="text-sm text-neutral-500">{profileName || "User"}</p>
+                          </div>
+                        </div>
+                        <div className="mt-6 flex flex-wrap gap-3">
+                          <button
+                            onClick={handleLogout}
+                            className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800"
+                          >
+                            Log out
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
                   ) : activeNav === "settings" ? (
                     <motion.div
                       key="settings"
@@ -1287,10 +1333,7 @@ const App: React.FC = () => {
                         </div>
                         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                           <div className="mb-4 flex items-center justify-between">
-                            <div>
-                              <h3 className="text-lg font-semibold text-neutral-900">System notifications</h3>
-                              <p className="text-sm text-neutral-500">Latest events from the bot.</p>
-                            </div>
+                            
                           </div>
                           <div className="space-y-3">
                             {notifications.slice(0, 6).map((n) => (
@@ -1302,9 +1345,9 @@ const App: React.FC = () => {
                                   <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
                                   <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
                                 </div>
-                                <div className="text-neutral-900">{n.message || "—"}</div>
+                                <div className="text-neutral-900">{n.message || "-"}</div>
                                 <div className="text-xs text-neutral-500">
-                                  Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
+                                  Owner: {n.owner || "-"} - Account: {n.accountId || "-"}
                                 </div>
                               </div>
                             ))}
@@ -1339,7 +1382,7 @@ const App: React.FC = () => {
                           onSubmit={handleCreateAccount}
                         />
                         {submittingAccount && (
-                          <div className="mt-3 text-sm text-neutral-500">Creating account…</div>
+                          <div className="mt-3 text-sm text-neutral-500">Creating account...</div>
                         )}
                       </div>
                     </motion.div>
@@ -1357,31 +1400,34 @@ const App: React.FC = () => {
                         <div className="text-sm text-neutral-500">Updated live every second</div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div
-                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: RENTALS_GRID }}
-                        >
-                          <span>ID</span>
-                          <span>Account</span>
-                          <span>Buyer</span>
-                          <span>Started</span>
-                          <span>Time Left</span>
-                          <span>Match Time</span>
-                          <span>Hero</span>
-                          <span>Status</span>
-                        </div>
-                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[1100px]">
+                            <div
+                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                              style={{ gridTemplateColumns: RENTALS_GRID }}
+                            >
+                              <span>ID</span>
+                              <span>Account</span>
+                              <span>Buyer</span>
+                              <span>Started</span>
+                              <span>Time Left</span>
+                              <span>Match Time</span>
+                              <span>Hero</span>
+                              <span>Status</span>
+                            </div>
+                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
-                            const pill = statusPill(r.status);
-                            const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
+                            const presence = r.presence ?? null;
+                            const isLive = !!presence && (presence.in_match || presence.in_game);
                             const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const liveSeconds = getLiveMatchSeconds(presence, observedAt);
-                            const timer = formatMatchTime(presence?.match_time, liveSeconds) || "-";
+                            const liveSeconds = isLive ? getLiveMatchSeconds(presence, observedAt) : null;
+                            const timer = liveSeconds != null ? formatMatchTime(liveSeconds) : "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
-                                : r.presenceLabel || pill.label;
+                                : "Offline";
+                            const pill = statusPill(presenceLabel);
                             const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
                             return (
                               <motion.div
@@ -1393,12 +1439,40 @@ const App: React.FC = () => {
                               >
                                 <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
-                                <span className="min-w-0 truncate text-neutral-700">{r.buyer || ""}</span>
+                                {r.buyer ? (
+                                  r.chatUrl ? (
+                                    <a
+                                      href={r.chatUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="min-w-0 truncate font-semibold text-neutral-800 hover:underline"
+                                    >
+                                      {r.buyer}
+                                    </a>
+                                  ) : (
+                                    <span className="min-w-0 truncate text-neutral-700">{r.buyer}</span>
+                                  )
+                                ) : (
+                                  <span className="min-w-0 truncate text-neutral-400">-</span>
+                                )}
                                 <span className="min-w-0 truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
+                                {r.steamId ? (
+                                  <a
+                                    href={`${PRESENCE_BASE}/${r.steamId}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                  >
+                                    {presenceLabel}
+                                  </a>
+                                ) : (
+                                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                    {presenceLabel}
+                                  </span>
+                                )}
                               </motion.div>
                             );
                           })}
@@ -1407,6 +1481,8 @@ const App: React.FC = () => {
                               No active rentals yet.
                             </div>
                           )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </motion.div>
@@ -1490,59 +1566,63 @@ const App: React.FC = () => {
                           </div>
                         </div>
                         <div className="mt-5 rounded-2xl border border-neutral-200 bg-white">
-                          <div
-                            className="grid gap-3 px-6 py-3 text-xs font-semibold text-neutral-500"
-                            style={{ gridTemplateColumns: BLACKLIST_GRID }}
-                          >
-                            <label className="flex items-center justify-center">
-                              <input
-                                type="checkbox"
-                                checked={allBlacklistSelected}
-                                onChange={toggleBlacklistSelectAll}
-                                className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
-                              />
-                            </label>
-                            <span>Buyer</span>
-                            <span>Reason</span>
-                            <span>Added</span>
-                          </div>
-                          <div className="divide-y divide-neutral-100">
-                            {blacklistLoading ? (
-                              <div className="px-6 py-6 text-center text-sm text-neutral-500">
-                                Loading blacklist...
+                          <div className="overflow-x-auto">
+                            <div className="min-w-[680px]">
+                              <div
+                                className="grid gap-3 px-6 py-3 text-xs font-semibold text-neutral-500"
+                                style={{ gridTemplateColumns: BLACKLIST_GRID }}
+                              >
+                                <label className="flex items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={allBlacklistSelected}
+                                    onChange={toggleBlacklistSelectAll}
+                                    className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
+                                  />
+                                </label>
+                                <span>Buyer</span>
+                                <span>Reason</span>
+                                <span>Added</span>
                               </div>
-                            ) : blacklistEntries.length ? (
-                              blacklistEntries.map((entry, idx) => {
-                                const isSelected = blacklistSelected.includes(entry.owner);
-                                return (
-                                  <div
-                                    key={entry.id ?? entry.owner ?? idx}
-                                    className={`grid items-center gap-3 px-6 py-3 text-sm ${
-                                      isSelected ? "bg-neutral-50" : "bg-white"
-                                    }`}
-                                    style={{ gridTemplateColumns: BLACKLIST_GRID }}
-                                  >
-                                    <label className="flex items-center justify-center">
-                                      <input
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={() => toggleBlacklistSelected(entry.owner)}
-                                        className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
-                                      />
-                                    </label>
-                                    <span className="min-w-0 truncate font-semibold text-neutral-900">{entry.owner}</span>
-                                    <span className="min-w-0 truncate text-neutral-600">{entry.reason || "—"}</span>
-                                    <span className="text-xs text-neutral-500">
-                                      {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
-                                    </span>
+                              <div className="divide-y divide-neutral-100 overflow-x-hidden">
+                                {blacklistLoading ? (
+                                  <div className="px-6 py-6 text-center text-sm text-neutral-500">
+                                    Loading blacklist...
                                   </div>
-                                );
-                              })
-                            ) : (
-                              <div className="px-6 py-6 text-center text-sm text-neutral-500">
-                                Blacklist is empty.
+                                ) : blacklistEntries.length ? (
+                                  blacklistEntries.map((entry, idx) => {
+                                    const isSelected = blacklistSelected.includes(entry.owner);
+                                    return (
+                                      <div
+                                        key={entry.id ?? entry.owner ?? idx}
+                                        className={`grid items-center gap-3 px-6 py-3 text-sm ${
+                                          isSelected ? "bg-neutral-50" : "bg-white"
+                                        }`}
+                                        style={{ gridTemplateColumns: BLACKLIST_GRID }}
+                                      >
+                                        <label className="flex items-center justify-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() => toggleBlacklistSelected(entry.owner)}
+                                            className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
+                                          />
+                                        </label>
+                                        <span className="min-w-0 truncate font-semibold text-neutral-900">{entry.owner}</span>
+                                        <span className="min-w-0 truncate text-neutral-600">{entry.reason || "-"}</span>
+                                        <span className="text-xs text-neutral-500">
+                                          {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "-"}
+                                        </span>
+                                      </div>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="px-6 py-6 text-center text-sm text-neutral-500">
+                                    Blacklist is empty.
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1573,9 +1653,9 @@ const App: React.FC = () => {
                                 <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
                                 <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
                               </div>
-                              <div className="text-neutral-900">{n.message || "—"}</div>
+                              <div className="text-neutral-900">{n.message || "-"}</div>
                               <div className="text-xs text-neutral-500">
-                                Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
+                                Owner: {n.owner || "-"} - Account: {n.accountId || "-"}
                               </div>
                             </motion.div>
                           ))}
@@ -1598,19 +1678,21 @@ const App: React.FC = () => {
                         <div className="mb-4 flex items-center justify-between">
                           <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         </div>
-                        <div
-                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: INVENTORY_GRID }}
-                        >
-                          <span>ID</span>
-                          <span>Name</span>
-                          <span>Login</span>
-                          <span>Password</span>
-                          <span>Steam ID</span>
-                          <span>MMR</span>
-                          <span className="text-right">State</span>
-                        </div>
-                        <div className="mt-3 space-y-3 overflow-x-auto pr-1" style={{ maxHeight: "640px" }}>
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[1000px]">
+                            <div
+                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                              style={{ gridTemplateColumns: INVENTORY_GRID }}
+                            >
+                              <span>ID</span>
+                              <span>Name</span>
+                              <span>Login</span>
+                              <span>Password</span>
+                              <span>Steam ID</span>
+                              <span>MMR</span>
+                              <span className="text-right">State</span>
+                            </div>
+                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {accountsTable.map((acc, idx) => {
                             return (
                               <motion.div
@@ -1641,6 +1723,8 @@ const App: React.FC = () => {
                               No accounts loaded yet.
                             </div>
                           )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </motion.div>
@@ -1650,19 +1734,21 @@ const App: React.FC = () => {
                         <div className="mb-4 flex items-center justify-between">
                           <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                         </div>
-                        <div
-                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: INVENTORY_GRID }}
-                        >
-                          <span>ID</span>
-                          <span>Name</span>
-                          <span>Login</span>
-                          <span>Password</span>
-                          <span>Steam ID</span>
-                          <span>MMR</span>
-                          <span className="text-right">State</span>
-                        </div>
-                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[1000px]">
+                            <div
+                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                              style={{ gridTemplateColumns: INVENTORY_GRID }}
+                            >
+                              <span>ID</span>
+                              <span>Name</span>
+                              <span>Login</span>
+                              <span>Password</span>
+                              <span>Steam ID</span>
+                              <span>MMR</span>
+                              <span className="text-right">State</span>
+                            </div>
+                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {accountsTable.map((acc, idx) => {
                             return (
                               <motion.div
@@ -1693,6 +1779,8 @@ const App: React.FC = () => {
                               No accounts loaded yet.
                             </div>
                           )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                       <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
@@ -1700,31 +1788,34 @@ const App: React.FC = () => {
                           <h3 className="text-lg font-semibold text-neutral-900">Active rentals</h3>
                           <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
                         </div>
-                        <div
-                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
-                          style={{ gridTemplateColumns: RENTALS_GRID }}
-                        >
-                          <span>ID</span>
-                          <span>Account</span>
-                          <span>Buyer</span>
-                          <span>Started</span>
-                          <span>Time Left</span>
-                          <span>Match Time</span>
-                          <span>Hero</span>
-                          <span>Status</span>
-                        </div>
-                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[1100px]">
+                            <div
+                              className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                              style={{ gridTemplateColumns: RENTALS_GRID }}
+                            >
+                              <span>ID</span>
+                              <span>Account</span>
+                              <span>Buyer</span>
+                              <span>Started</span>
+                              <span>Time Left</span>
+                              <span>Match Time</span>
+                              <span>Hero</span>
+                              <span>Status</span>
+                            </div>
+                            <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
-                            const pill = statusPill(r.status);
-                            const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
+                            const presence = r.presence ?? null;
+                            const isLive = !!presence && (presence.in_match || presence.in_game);
                             const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
-                            const liveSeconds = getLiveMatchSeconds(presence, observedAt);
-                            const timer = formatMatchTime(presence?.match_time, liveSeconds) || "-";
+                            const liveSeconds = isLive ? getLiveMatchSeconds(presence, observedAt) : null;
+                            const timer = liveSeconds != null ? formatMatchTime(liveSeconds) : "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
-                                : r.presenceLabel || pill.label;
+                                : "Offline";
+                            const pill = statusPill(presenceLabel);
                             const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
                             return (
                               <motion.div
@@ -1736,12 +1827,40 @@ const App: React.FC = () => {
                               >
                                 <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
-                                <span className="min-w-0 truncate text-neutral-700">{r.buyer || ""}</span>
+                                {r.buyer ? (
+                                  r.chatUrl ? (
+                                    <a
+                                      href={r.chatUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="min-w-0 truncate font-semibold text-neutral-800 hover:underline"
+                                    >
+                                      {r.buyer}
+                                    </a>
+                                  ) : (
+                                    <span className="min-w-0 truncate text-neutral-700">{r.buyer}</span>
+                                  )
+                                ) : (
+                                  <span className="min-w-0 truncate text-neutral-400">-</span>
+                                )}
                                 <span className="min-w-0 truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
                                 <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
+                                {r.steamId ? (
+                                  <a
+                                    href={`${PRESENCE_BASE}/${r.steamId}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}
+                                  >
+                                    {presenceLabel}
+                                  </a>
+                                ) : (
+                                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
+                                    {presenceLabel}
+                                  </span>
+                                )}
                               </motion.div>
                             );
                           })}
@@ -1750,6 +1869,8 @@ const App: React.FC = () => {
                               No active rentals yet.
                             </div>
                           )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
