@@ -178,7 +178,10 @@ class MySQLDB:
                     rental_duration_minutes INT NULL,
                     mmr INT NULL,
                     owner VARCHAR(255) DEFAULT NULL,
-                    rental_start DATETIME DEFAULT NULL
+                    rental_start DATETIME DEFAULT NULL,
+                    account_frozen TINYINT(1) NOT NULL DEFAULT 0,
+                    rental_frozen TINYINT(1) NOT NULL DEFAULT 0,
+                    rental_frozen_at DATETIME NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -459,6 +462,7 @@ class MySQLDB:
         self._ensure_mafile_column()
         self._ensure_rental_duration_minutes_column()
         self._ensure_mmr_column()
+        self._ensure_account_freeze_columns()
         self._ensure_lot_url_column()
         self._ensure_users_table()
         self._ensure_user_owner_columns()
@@ -655,6 +659,49 @@ class MySQLDB:
                 """
             )
             self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_account_freeze_columns(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'accounts'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                cols = {row[0] for row in cursor.fetchall()}
+                if "account_frozen" not in cols:
+                    cursor.execute(
+                        "ALTER TABLE accounts ADD COLUMN account_frozen TINYINT(1) NOT NULL DEFAULT 0"
+                    )
+                if "rental_frozen" not in cols:
+                    cursor.execute(
+                        "ALTER TABLE accounts ADD COLUMN rental_frozen TINYINT(1) NOT NULL DEFAULT 0"
+                    )
+                if "rental_frozen_at" not in cols:
+                    cursor.execute("ALTER TABLE accounts ADD COLUMN rental_frozen_at DATETIME NULL")
+                self.conn.commit()
+            else:
+                cursor.execute("PRAGMA table_info(accounts)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if "account_frozen" not in cols:
+                    cursor.execute(
+                        "ALTER TABLE accounts ADD COLUMN account_frozen INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "rental_frozen" not in cols:
+                    cursor.execute(
+                        "ALTER TABLE accounts ADD COLUMN rental_frozen INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "rental_frozen_at" not in cols:
+                    cursor.execute("ALTER TABLE accounts ADD COLUMN rental_frozen_at TIMESTAMP NULL")
+                self.conn.commit()
         except Exception:
             pass
         finally:
@@ -902,7 +949,7 @@ class MySQLDB:
             """
             SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr
             FROM accounts 
-            WHERE owner IS NULL
+            WHERE owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL)
             """
         )
         rows = cursor.fetchall()
@@ -947,7 +994,7 @@ class MySQLDB:
                         """
                         UPDATE accounts 
                         SET owner = ?, rental_start = ?
-                        WHERE ID = ? AND owner IS NULL
+                        WHERE ID = ? AND owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL)
                         """,
                         (owner_id, rental_start, account_id),
                     )
@@ -956,7 +1003,7 @@ class MySQLDB:
                         """
                         UPDATE accounts 
                         SET owner = ?
-                        WHERE ID = ? AND owner IS NULL
+                        WHERE ID = ? AND owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL)
                         """,
                         (owner_id, account_id),
                     )
@@ -967,6 +1014,7 @@ class MySQLDB:
                         UPDATE accounts 
                         SET owner = ?, rental_start = ?
                         WHERE ID = ? AND owner IS NULL AND user_id = ?
+                          AND (account_frozen = 0 OR account_frozen IS NULL)
                         """,
                         (owner_id, rental_start, account_id, user_id),
                     )
@@ -976,6 +1024,7 @@ class MySQLDB:
                         UPDATE accounts 
                         SET owner = ?
                         WHERE ID = ? AND owner IS NULL AND user_id = ?
+                          AND (account_frozen = 0 OR account_frozen IS NULL)
                         """,
                         (owner_id, account_id, user_id),
                     )
@@ -1054,7 +1103,8 @@ class MySQLDB:
             """
             SELECT ID, account_name, path_to_maFile, mafile_json, login, rental_duration
             FROM accounts 
-            WHERE owner = ?
+            WHERE owner = ? AND (account_frozen = 0 OR account_frozen IS NULL)
+              AND (rental_frozen = 0 OR rental_frozen IS NULL)
             ORDER BY rental_start DESC
             """,
             (owner_id,),
@@ -1065,6 +1115,31 @@ class MySQLDB:
             (row[0], row[1], row[2], self._decrypt_value(row[3]), row[4], row[5])
             for row in rows
         ]
+
+    def owner_has_frozen_rental(self, owner_id: str, user_id: int | None = None) -> bool:
+        try:
+            cursor = self._cursor()
+            values: list[Any] = [str(owner_id)]
+            where_user = ""
+            if user_id not in (None, 0):
+                where_user = " AND user_id = ?"
+                values.append(int(user_id))
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM accounts
+                WHERE owner = ?
+                  AND (account_frozen = 1 OR rental_frozen = 1)
+                  {where_user}
+                """,
+                values,
+            )
+            return cursor.fetchone()[0] > 0
+        except Exception as exc:
+            logger.error(f"Error checking frozen rentals for {owner_id}: {exc}")
+            return False
+        finally:
+            cursor.close()
 
     def update_password_by_owner(self, owner_name: str, new_password: str) -> bool:
         """
@@ -1123,14 +1198,14 @@ class MySQLDB:
         if user_id is None:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json, account_frozen, rental_frozen, rental_frozen_at
                 FROM accounts
                 """
             )
         else:
             cursor.execute(
                 """
-                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json
+                SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json, account_frozen, rental_frozen, rental_frozen_at
                 FROM accounts
                 WHERE user_id = ?
                 """,
@@ -1152,6 +1227,9 @@ class MySQLDB:
                 "rental_start": row[9],
                 "user_id": row[10] if len(row) > 10 else None,
                 "mafile_json": self._decrypt_value(row[11]) if len(row) > 11 else None,
+                "account_frozen": row[12] if len(row) > 12 else 0,
+                "rental_frozen": row[13] if len(row) > 13 else 0,
+                "rental_frozen_at": row[14] if len(row) > 14 else None,
             }
             for row in rows
         ]
@@ -1311,7 +1389,7 @@ class MySQLDB:
                 SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
-                WHERE a.owner IS NULL
+                WHERE a.owner IS NULL AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
                 ORDER BY l.lot_number
                 """
             )
@@ -1321,7 +1399,7 @@ class MySQLDB:
                 SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
-                WHERE a.owner IS NULL AND a.user_id = ?
+                WHERE a.owner IS NULL AND a.user_id = ? AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
                 ORDER BY l.lot_number
                 """,
                 (user_id,),
@@ -1330,26 +1408,29 @@ class MySQLDB:
         if self.db_type == "mysql":
             cursor.close()
         return [
-            {
-                "id": row[0],
-                "account_name": row[1],
-                "owner": row[2],
-                "rental_start": row[3],
-                "rental_duration": row[4],
-                "rental_duration_minutes": row[5],
-                "mmr": row[6],
-                "lot_number": row[7],
-                "lot_url": row[8],
-            }
-            for row in rows
-        ]
+              {
+                  "id": row[0],
+                  "account_name": row[1],
+                  "owner": row[2],
+                  "rental_start": row[3],
+                  "rental_duration": row[4],
+                  "rental_duration_minutes": row[5],
+                  "mmr": row[6],
+                  "lot_number": row[7],
+                  "lot_url": row[8],
+                  "account_frozen": row[9] if len(row) > 9 else 0,
+                  "rental_frozen": row[10] if len(row) > 10 else 0,
+                  "rental_frozen_at": row[11] if len(row) > 11 else None,
+              }
+              for row in rows
+          ]
 
     def get_all_lot_accounts(self, user_id: int | None = None) -> list:
         cursor = self._cursor()
         if user_id is None:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url, a.account_frozen, a.rental_frozen, a.rental_frozen_at
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 ORDER BY l.lot_number
@@ -1358,7 +1439,7 @@ class MySQLDB:
         else:
             cursor.execute(
                 """
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url, a.account_frozen, a.rental_frozen, a.rental_frozen_at
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
                 WHERE l.user_id = ?
@@ -1397,11 +1478,11 @@ class MySQLDB:
             cursor.execute(
                 """
                 SELECT a.ID, a.account_name, a.mmr, a.owner, a.rental_start,
-                       a.rental_duration, a.rental_duration_minutes,
-                       l.lot_number, l.lot_url
+                        a.rental_duration, a.rental_duration_minutes,
+                        l.lot_number, l.lot_url
                 FROM accounts a
                 LEFT JOIN lots l ON l.account_id = a.ID
-                WHERE a.mmr BETWEEN ? AND ?
+                WHERE a.mmr BETWEEN ? AND ? AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
                 ORDER BY a.mmr, a.ID
                 """,
                 (low, high),
@@ -1410,11 +1491,11 @@ class MySQLDB:
             cursor.execute(
                 """
                 SELECT a.ID, a.account_name, a.mmr, a.owner, a.rental_start,
-                       a.rental_duration, a.rental_duration_minutes,
-                       l.lot_number, l.lot_url
+                        a.rental_duration, a.rental_duration_minutes,
+                        l.lot_number, l.lot_url
                 FROM accounts a
                 LEFT JOIN lots l ON l.account_id = a.ID AND l.user_id = ?
-                WHERE a.user_id = ? AND a.mmr BETWEEN ? AND ?
+                WHERE a.user_id = ? AND a.mmr BETWEEN ? AND ? AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
                 ORDER BY a.mmr, a.ID
                 """,
                 (user_id, user_id, low, high),
@@ -1499,7 +1580,7 @@ class MySQLDB:
                 cursor.execute(
                     """
                     UPDATE accounts
-                    SET owner = NULL, rental_start = NULL
+                    SET owner = NULL, rental_start = NULL, rental_frozen = 0, rental_frozen_at = NULL
                     WHERE ID = ?
                     """,
                     (account_id,),
@@ -1508,7 +1589,7 @@ class MySQLDB:
                 cursor.execute(
                     """
                     UPDATE accounts
-                    SET owner = NULL, rental_start = NULL
+                    SET owner = NULL, rental_start = NULL, rental_frozen = 0, rental_frozen_at = NULL
                     WHERE ID = ? AND user_id = ?
                     """,
                     (account_id, user_id),
@@ -1599,7 +1680,9 @@ class MySQLDB:
         """Retrieve account names for accounts with no owner."""
         try:
             cursor = self._cursor()
-            cursor.execute("SELECT account_name FROM accounts WHERE owner IS NULL")
+            cursor.execute(
+                "SELECT account_name FROM accounts WHERE owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL)"
+            )
             unowned_account_names = [row[0] for row in cursor.fetchall()]
             return unowned_account_names
         except Exception as e:
@@ -1656,21 +1739,23 @@ class MySQLDB:
             if user_id is None:
                 cursor.execute(
                     """
-                    SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json
-                    FROM accounts 
-                    WHERE ID = ?
-                    """,
+                      SELECT ID, account_name, path_to_maFile, login, password, 
+                             rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json,
+                             account_frozen, rental_frozen, rental_frozen_at
+                      FROM accounts 
+                      WHERE ID = ?
+                      """,
                     (account_id,),
                 )
             else:
                 cursor.execute(
                     """
-                    SELECT ID, account_name, path_to_maFile, login, password, 
-                           rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json
-                    FROM accounts 
-                    WHERE ID = ? AND user_id = ?
-                    """,
+                      SELECT ID, account_name, path_to_maFile, login, password, 
+                             rental_duration, rental_duration_minutes, mmr, owner, rental_start, mafile_json,
+                             account_frozen, rental_frozen, rental_frozen_at
+                      FROM accounts 
+                      WHERE ID = ? AND user_id = ?
+                      """,
                     (account_id, user_id),
                 )
             row = cursor.fetchone()
@@ -1684,10 +1769,13 @@ class MySQLDB:
                     "rental_duration": row[5],
                     "rental_duration_minutes": row[6],
                     "mmr": row[7],
-                    "owner": row[8],
-                    "rental_start": row[9],
-                    "mafile_json": self._decrypt_value(row[10]),
-                }
+                      "owner": row[8],
+                      "rental_start": row[9],
+                      "mafile_json": self._decrypt_value(row[10]),
+                      "account_frozen": row[11],
+                      "rental_frozen": row[12],
+                      "rental_frozen_at": row[13],
+                  }
             return None
         except Exception as e:
             logger.error(f"Error getting account by ID: {str(e)}")
@@ -1721,9 +1809,19 @@ class MySQLDB:
             
             # Available accounts
             if user_id is None:
-                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NULL")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM accounts WHERE owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL)"
+                )
             else:
-                cursor.execute("SELECT COUNT(*) FROM accounts WHERE owner IS NULL AND user_id = ?", (user_id,))
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM accounts
+                    WHERE owner IS NULL AND user_id = ?
+                      AND (account_frozen = 0 OR account_frozen IS NULL)
+                    """,
+                    (user_id,),
+                )
             available_accounts = cursor.fetchone()[0]
             
             # Total rental hours
@@ -2100,6 +2198,74 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def set_account_frozen(self, account_id: int, frozen: bool, user_id: int | None = None) -> bool:
+        try:
+            cursor = self._cursor()
+            values: list[Any] = [1 if frozen else 0, int(account_id)]
+            where_user = ""
+            if user_id not in (None, 0):
+                where_user = " AND user_id = ?"
+                values.append(int(user_id))
+            cursor.execute(
+                f"""
+                UPDATE accounts
+                SET account_frozen = ?
+                WHERE ID = ?{where_user}
+                """,
+                values,
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as exc:
+            logger.error(f"Error setting account frozen state: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def set_rental_freeze_state(
+        self,
+        account_id: int,
+        frozen: bool,
+        *,
+        rental_start: datetime | None = None,
+        frozen_at: datetime | None = None,
+        user_id: int | None = None,
+    ) -> bool:
+        try:
+            cursor = self._cursor()
+            sets = ["rental_frozen = ?"]
+            values: list[Any] = [1 if frozen else 0]
+            if frozen_at is not None:
+                sets.append("rental_frozen_at = ?")
+                values.append(frozen_at.strftime("%Y-%m-%d %H:%M:%S"))
+            elif not frozen:
+                sets.append("rental_frozen_at = NULL")
+            if rental_start is not None:
+                sets.append("rental_start = ?")
+                values.append(rental_start.strftime("%Y-%m-%d %H:%M:%S"))
+            values.append(int(account_id))
+            where_user = ""
+            if user_id not in (None, 0):
+                where_user = " AND user_id = ?"
+                values.append(int(user_id))
+            cursor.execute(
+                f"""
+                UPDATE accounts
+                SET {", ".join(sets)}
+                WHERE ID = ?{where_user}
+                """,
+                values,
+            )
+            success = cursor.rowcount > 0
+            self.conn.commit()
+            return success
+        except Exception as exc:
+            logger.error(f"Error updating rental freeze state: {exc}")
+            return False
+        finally:
+            cursor.close()
+
     def search_order_history(
         self,
         query: str | None = None,
@@ -2395,6 +2561,8 @@ class MySQLDB:
                     UPDATE accounts
                     SET rental_start = ?
                     WHERE owner = ? AND rental_start IS NULL
+                      AND (account_frozen = 0 OR account_frozen IS NULL)
+                      AND (rental_frozen = 0 OR rental_frozen IS NULL)
                     """,
                     (rental_start, owner_id),
                 )
@@ -2404,6 +2572,8 @@ class MySQLDB:
                     UPDATE accounts
                     SET rental_start = ?
                     WHERE owner = ? AND rental_start IS NULL AND user_id = ?
+                      AND (account_frozen = 0 OR account_frozen IS NULL)
+                      AND (rental_frozen = 0 OR rental_frozen IS NULL)
                     """,
                     (rental_start, owner_id, user_id),
                 )
@@ -2793,7 +2963,10 @@ class MySQLDB:
                         rental_duration_minutes,
                         path_to_maFile,
                         login,
-                        mafile_json
+                        mafile_json,
+                        account_frozen,
+                        rental_frozen,
+                        rental_frozen_at
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
@@ -2812,7 +2985,10 @@ class MySQLDB:
                         rental_duration_minutes,
                         path_to_maFile,
                         login,
-                        mafile_json
+                        mafile_json,
+                        account_frozen,
+                        rental_frozen,
+                        rental_frozen_at
                     FROM accounts 
                     WHERE owner IS NOT NULL 
                     AND owner != 'OTHER_ACCOUNT'
@@ -2833,6 +3009,9 @@ class MySQLDB:
                     "path_to_maFile": row[6],
                     "login": row[7],
                     "mafile_json": self._decrypt_value(row[8]) if include_mafile else None,
+                    "account_frozen": row[9] if len(row) > 9 else 0,
+                    "rental_frozen": row[10] if len(row) > 10 else 0,
+                    "rental_frozen_at": row[11] if len(row) > 11 else None,
                 }
                 for row in rows
             ]
@@ -3016,7 +3195,8 @@ class MySQLDB:
             cursor = self._cursor()
             cursor.execute(
                 """
-                SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
+                SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start,
+                       account_frozen, rental_frozen, rental_frozen_at
                 FROM accounts 
                 WHERE owner = ? AND account_name = ?
                 """,
@@ -3032,6 +3212,9 @@ class MySQLDB:
                     "rental_duration": row[4],
                     "rental_duration_minutes": row[5],
                     "rental_start": row[6],
+                    "account_frozen": row[7],
+                    "rental_frozen": row[8],
+                    "rental_frozen_at": row[9],
                 }
                 for row in rows
             ]
@@ -3056,7 +3239,8 @@ class MySQLDB:
             if user_id in (None, 0):
                 cursor.execute(
                     """
-                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
+                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start,
+                           account_frozen, rental_frozen, rental_frozen_at
                     FROM accounts 
                     WHERE owner = ?
                     ORDER BY rental_start DESC
@@ -3066,7 +3250,8 @@ class MySQLDB:
             else:
                 cursor.execute(
                     """
-                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start
+                    SELECT ID, account_name, login, password, rental_duration, rental_duration_minutes, rental_start,
+                           account_frozen, rental_frozen, rental_frozen_at
                     FROM accounts 
                     WHERE owner = ? AND user_id = ?
                     ORDER BY rental_start DESC
@@ -3083,6 +3268,9 @@ class MySQLDB:
                     "rental_duration": row[4],
                     "rental_duration_minutes": row[5],
                     "rental_start": row[6],
+                    "account_frozen": row[7],
+                    "rental_frozen": row[8],
+                    "rental_frozen_at": row[9],
                 }
                 for row in rows
             ]
@@ -3209,7 +3397,7 @@ class MySQLDB:
             if user_id in (None, 0):
                 cursor.execute(
                     """
-                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
+                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url, a.account_frozen, a.rental_frozen, a.rental_frozen_at
                     FROM accounts a
                     LEFT JOIN lots l ON l.account_id = a.ID
                     WHERE a.owner = ?
@@ -3220,7 +3408,7 @@ class MySQLDB:
             else:
                 cursor.execute(
                     """
-                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url
+                    SELECT a.ID, a.account_name, a.login, a.password, a.rental_duration, a.rental_duration_minutes, a.rental_start, l.lot_number, l.lot_url, a.account_frozen, a.rental_frozen, a.rental_frozen_at
                     FROM accounts a
                     LEFT JOIN lots l ON l.account_id = a.ID AND l.user_id = ?
                     WHERE a.owner = ? AND a.user_id = ?
@@ -3240,6 +3428,9 @@ class MySQLDB:
                     "rental_start": row[6],
                     "lot_number": row[7],
                     "lot_url": row[8],
+                    "account_frozen": row[9],
+                    "rental_frozen": row[10],
+                    "rental_frozen_at": row[11],
                 }
                 for row in rows
             ]

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import Toast from "./components/common/Toast";
 import LoginPage from "./pages/LoginPage";
 import { createApiClient } from "./services/api";
+import { connectChatWS } from "./services/ws";
 import { useToast } from "./hooks/useToast";
 import AddAccountForm from "./components/account/AddAccountForm";
 
@@ -32,6 +33,9 @@ type AccountRow = {
   rentalStart?: string | null;
   rentalDurationMinutes?: number | null;
   rentalDurationHours?: number | null;
+  accountFrozen?: boolean;
+  rentalFrozen?: boolean;
+  rentalFrozenAt?: string | null;
 };
 
 type RentalRow = {
@@ -50,6 +54,8 @@ type RentalRow = {
   chatUrl?: string | null;
   adminCalls?: number;
   adminLastCalledAt?: string | null;
+  rentalFrozen?: boolean;
+  rentalFrozenAt?: string | null;
 };
 
 type NotificationItem = {
@@ -544,8 +550,10 @@ const App: React.FC = () => {
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | number | null>(null);
   const [assignOwner, setAssignOwner] = useState("");
-  const [extendHours, setExtendHours] = useState("");
-  const [extendMinutes, setExtendMinutes] = useState("");
+  const [accountEditName, setAccountEditName] = useState("");
+  const [accountEditLogin, setAccountEditLogin] = useState("");
+  const [accountEditPassword, setAccountEditPassword] = useState("");
+  const [accountEditMmr, setAccountEditMmr] = useState("");
   const [accountActionBusy, setAccountActionBusy] = useState(false);
   const [reviewRange, setReviewRange] = useState<"daily" | "weekly" | "monthly">("weekly");
   const [orderRange, setOrderRange] = useState<"daily" | "weekly" | "monthly">("weekly");
@@ -562,6 +570,10 @@ const App: React.FC = () => {
   const [chatStreamActive, setChatStreamActive] = useState(false);
   const chatListStreamRef = useRef<EventSource | null>(null);
   const chatHistoryStreamRef = useRef<EventSource | null>(null);
+  const chatWsRef = useRef<WebSocket | null>(null);
+  const [chatWsConnected, setChatWsConnected] = useState(false);
+  const chatWsSubscribedRef = useRef<string | null>(null);
+  const chatWsHeartbeatRef = useRef<number | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [ordersHistory, setOrdersHistory] = useState<OrderHistoryItem[]>([]);
@@ -684,6 +696,64 @@ const App: React.FC = () => {
     [token, apiFetch]
   );
 
+  const sendChatWs = useCallback((payload: any) => {
+    const ws = chatWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const updateChatPreview = useCallback((chatId: string | number, item: ChatMessage) => {
+    const idKey = String(chatId);
+    setChats((prev) =>
+      prev.map((chat) =>
+        String(chat.id) === idKey
+          ? {
+              ...chat,
+              last: item.text || chat.last,
+              time: item.sentAt || chat.time,
+            }
+          : chat
+      )
+    );
+  }, []);
+
+  const appendChatMessage = useCallback(
+    (chatId: string | number, item: ChatMessage) => {
+      const idKey = String(chatId);
+      const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${idKey}`);
+      setChatMessages((prev) => {
+        if (!item) return prev;
+        const incomingId = item.id ?? "";
+        const incomingKey = String(incomingId);
+        if (prev.some((m) => String(m.id) === incomingKey)) {
+          return prev;
+        }
+        const last = prev[prev.length - 1];
+        let next = prev;
+        if (
+          last &&
+          String(last.id).startsWith("local-") &&
+          last.text === item.text &&
+          (item.byBot || last.byBot)
+        ) {
+          next = [...prev];
+          next[next.length - 1] = item;
+        } else {
+          next = [...prev, item];
+        }
+        writeCache(cacheKey, next);
+        return next;
+      });
+      updateChatPreview(idKey, item);
+    },
+    [updateChatPreview, scopedKey]
+  );
+
   const swrFetch = useCallback(
     async <T,>({
       key,
@@ -780,6 +850,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!selectedAccount) {
       setAssignOwner("");
+      setAccountEditName("");
+      setAccountEditLogin("");
+      setAccountEditPassword("");
+      setAccountEditMmr("");
       return;
     }
     const owner =
@@ -787,6 +861,12 @@ const App: React.FC = () => {
         ? selectedAccount.owner
         : "";
     setAssignOwner(owner);
+    setAccountEditName(selectedAccount.name || "");
+    setAccountEditLogin(selectedAccount.login || "");
+    setAccountEditPassword(selectedAccount.password || "");
+    setAccountEditMmr(
+      selectedAccount.mmr !== null && selectedAccount.mmr !== undefined ? String(selectedAccount.mmr) : ""
+    );
   }, [selectedAccount]);
 
   useEffect(() => {
@@ -889,12 +969,22 @@ const App: React.FC = () => {
       chatListStreamRef.current.close();
       chatListStreamRef.current = null;
     }
-    if (chatHistoryStreamRef.current) {
-      chatHistoryStreamRef.current.close();
-      chatHistoryStreamRef.current = null;
-    }
-    lastSessionRef.current = sessionKey;
-  }, [sessionChecked, sessionKey]);
+      if (chatHistoryStreamRef.current) {
+        chatHistoryStreamRef.current.close();
+        chatHistoryStreamRef.current = null;
+      }
+      if (chatWsRef.current) {
+        chatWsRef.current.close();
+        chatWsRef.current = null;
+      }
+      if (chatWsHeartbeatRef.current) {
+        window.clearInterval(chatWsHeartbeatRef.current);
+        chatWsHeartbeatRef.current = null;
+      }
+      chatWsSubscribedRef.current = null;
+      setChatWsConnected(false);
+      lastSessionRef.current = sessionKey;
+    }, [sessionChecked, sessionKey]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
@@ -1036,6 +1126,9 @@ const App: React.FC = () => {
             rentalStart: a.rental_start ?? a.rentalStart ?? null,
             rentalDurationMinutes: Number.isFinite(durationMinutesRaw) ? durationMinutesRaw : null,
             rentalDurationHours: Number.isFinite(durationHoursRaw) ? durationHoursRaw : null,
+            accountFrozen: !!(a.account_frozen ?? a.accountFrozen),
+            rentalFrozen: !!(a.rental_frozen ?? a.rentalFrozen),
+            rentalFrozenAt: a.rental_frozen_at ?? a.rentalFrozenAt ?? null,
           };
         });
         setAccountsTable(mappedAccounts);
@@ -1106,6 +1199,8 @@ const App: React.FC = () => {
               presenceObservedAt: presenceFetchedAt,
               adminCalls: Number(r.admin_calls ?? r.adminCalls ?? 0) || 0,
               adminLastCalledAt: r.admin_last_called_at ?? r.adminLastCalledAt ?? null,
+              rentalFrozen: !!(r.rental_frozen ?? r.rentalFrozen),
+              rentalFrozenAt: r.rental_frozen_at ?? r.rentalFrozenAt ?? null,
             };
           })
         );
@@ -1334,6 +1429,152 @@ const App: React.FC = () => {
   }, [token, sessionKey, activeNav, selectedChat, loadChatHistory, scopedKey]);
 
   useEffect(() => {
+    if (!token || activeNav !== "chats") {
+      if (chatWsRef.current) {
+        chatWsRef.current.close();
+        chatWsRef.current = null;
+      }
+      if (chatWsHeartbeatRef.current) {
+        window.clearInterval(chatWsHeartbeatRef.current);
+        chatWsHeartbeatRef.current = null;
+      }
+      chatWsSubscribedRef.current = null;
+      setChatWsConnected(false);
+      return;
+    }
+    if (chatWsRef.current) return;
+
+    const ws = connectChatWS({
+      onOpen: () => {
+        setChatWsConnected(true);
+        if (chatWsHeartbeatRef.current) {
+          window.clearInterval(chatWsHeartbeatRef.current);
+        }
+        chatWsHeartbeatRef.current = window.setInterval(() => {
+          sendChatWs({ type: "ping" });
+        }, 15000);
+        if (selectedChat !== null && selectedChat !== undefined) {
+          const key = String(selectedChat);
+          chatWsSubscribedRef.current = key;
+          sendChatWs({ type: "subscribe", chat_id: selectedChat });
+        }
+      },
+      onMessage: (event) => {
+        try {
+          const payload = JSON.parse(event.data || "{}");
+          const eventType = payload?.type;
+          if (eventType === "chats:list") {
+            const items = mapChatItems(payload);
+            const nextItems = applyAdminCallOverrides(items);
+            setChats(nextItems);
+            writeCache(scopedKey(CHAT_LIST_CACHE_KEY), nextItems);
+            if ((selectedChat === null || selectedChat === undefined) && items.length) {
+              setSelectedChat(items[0].id);
+            }
+            const nowTs = Date.now();
+            const prevCounts = adminCallCountsRef.current;
+            const nextCounts: Record<string, number> = {};
+            nextItems.forEach((chat) => {
+              const key = String(chat.id ?? "");
+              const count = Number(chat.adminCalls || 0);
+              nextCounts[key] = count;
+              const prev = prevCounts[key] || 0;
+              if (count > prev && activeNav !== "chats") {
+                const lastToastAt = adminCallToastRef.current || 0;
+                if (nowTs - lastToastAt > 1500) {
+                  adminCallToastRef.current = nowTs;
+                  showToast(`Admin call: ${chat.name || "Buyer"}`, "error");
+                  playAdminCallSound();
+                }
+              }
+            });
+            adminCallCountsRef.current = nextCounts;
+          } else if (eventType === "chats:update") {
+            const mapped = mapChatItems({ items: payload.item ? [payload.item] : [] });
+            const nextItems = applyAdminCallOverrides(mapped);
+            if (nextItems.length) {
+              const next = nextItems[0];
+              setChats((prev) => {
+                const updated = prev.map((chat) =>
+                  String(chat.id) === String(next.id) ? { ...chat, ...next } : chat
+                );
+                writeCache(scopedKey(CHAT_LIST_CACHE_KEY), updated);
+                return updated;
+              });
+            }
+          } else if (eventType === "chat:history") {
+            const chatId = payload.chat_id;
+            if (String(selectedChatRef.current ?? "") !== String(chatId)) {
+              return;
+            }
+            const items = mapChatMessages({ items: payload.items || [] });
+            setChatMessages(items);
+            writeCache(scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatId}`), items);
+          } else if (eventType === "chat:message") {
+            const chatId = payload.chat_id;
+            if (chatId === null || chatId === undefined) return;
+            const mapped = mapChatMessages({ items: payload.item ? [payload.item] : [] });
+            const next = mapped[0];
+            if (!next) return;
+            if (String(selectedChatRef.current ?? "") === String(chatId)) {
+              appendChatMessage(chatId, next);
+            }
+            updateChatPreview(chatId, next);
+          }
+        } catch {
+          // ignore ws parse errors
+        }
+      },
+      onClose: () => {
+        setChatWsConnected(false);
+        if (chatWsHeartbeatRef.current) {
+          window.clearInterval(chatWsHeartbeatRef.current);
+          chatWsHeartbeatRef.current = null;
+        }
+        chatWsSubscribedRef.current = null;
+        chatWsRef.current = null;
+      },
+      onError: () => {
+        setChatWsConnected(false);
+      },
+    });
+
+    chatWsRef.current = ws;
+    return () => {
+      ws.close();
+    };
+  }, [
+    token,
+    activeNav,
+    selectedChat,
+    mapChatItems,
+    mapChatMessages,
+    applyAdminCallOverrides,
+    appendChatMessage,
+    updateChatPreview,
+    scopedKey,
+    sendChatWs,
+    showToast,
+  ]);
+
+  useEffect(() => {
+    if (!chatWsConnected) return;
+    const current = selectedChat !== null && selectedChat !== undefined ? String(selectedChat) : null;
+    const previous = chatWsSubscribedRef.current;
+    if (previous && previous !== current) {
+      sendChatWs({ type: "unsubscribe", chat_id: previous });
+    }
+    if (current && previous !== current) {
+      sendChatWs({ type: "subscribe", chat_id: current });
+      chatWsSubscribedRef.current = current;
+    }
+  }, [chatWsConnected, selectedChat, sendChatWs]);
+
+  useEffect(() => {
+    if (chatWsConnected && activeNav === "chats") {
+      setChatStreamActive(false);
+      return;
+    }
     if (!token) {
       if (chatListStreamRef.current) {
         chatListStreamRef.current.close();
@@ -1412,9 +1653,25 @@ const App: React.FC = () => {
       }
       setChatStreamActive(false);
     };
-  }, [token, sessionKey, activeNav, mapChatItems, scopedKey, showToast, applyAdminCallOverrides]);
+  }, [
+    token,
+    sessionKey,
+    activeNav,
+    mapChatItems,
+    scopedKey,
+    showToast,
+    applyAdminCallOverrides,
+    chatWsConnected,
+  ]);
 
   useEffect(() => {
+    if (chatWsConnected && activeNav === "chats") {
+      if (chatHistoryStreamRef.current) {
+        chatHistoryStreamRef.current.close();
+        chatHistoryStreamRef.current = null;
+      }
+      return;
+    }
     if (!token || activeNav !== "chats" || !selectedChat) {
       if (chatHistoryStreamRef.current) {
         chatHistoryStreamRef.current.close();
@@ -1467,7 +1724,7 @@ const App: React.FC = () => {
         chatHistoryStreamRef.current = null;
       }
     };
-  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages, scopedKey]);
+  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages, scopedKey, chatWsConnected]);
 
   useEffect(() => {
     if (activeNav !== "chats") return;
@@ -1517,8 +1774,10 @@ const App: React.FC = () => {
       return;
     }
     if (activeNav === "chats") {
-      loadChats(true);
-      loadChatHistory(selectedChat, true);
+      if (!chatWsConnected) {
+        loadChats(true);
+        loadChatHistory(selectedChat, true);
+      }
       return;
     }
     if (activeNav === "orders") {
@@ -1533,6 +1792,7 @@ const App: React.FC = () => {
     loadChats,
     loadChatHistory,
     loadOrdersHistory,
+    chatWsConnected,
   ]);
 
   useEffect(() => {
@@ -1558,7 +1818,7 @@ const App: React.FC = () => {
       intervalId = window.setInterval(() => {
         loadOverview();
       }, 20000);
-    } else if (activeNav === "chats" && !chatStreamActive) {
+    } else if (activeNav === "chats" && !chatStreamActive && !chatWsConnected) {
       intervalId = window.setInterval(() => {
         loadChats(true);
         loadChatHistory(selectedChat, true);
@@ -1582,6 +1842,7 @@ const App: React.FC = () => {
     selectedChat,
     ordersQuery,
     chatStreamActive,
+    chatWsConnected,
     loadChats,
     loadChatHistory,
     loadOrdersHistory,
@@ -1645,13 +1906,17 @@ const App: React.FC = () => {
   const formatDuration = (
     seconds: number | null | undefined,
     startedAt?: string | number | null,
-    nowMs?: number
+    nowMs?: number,
+    freezeAt?: string | number | null
   ) => {
     let remaining = seconds ?? 0;
     if (startedAt !== null && startedAt !== undefined && seconds != null) {
       const startedAtMs = parseDateTime(startedAt);
       const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
-      const elapsed = startedAtMs ? Math.max(0, Math.floor((currentMs - startedAtMs) / 1000)) : 0;
+      const freezeMs = freezeAt !== undefined && freezeAt !== null ? parseDateTime(freezeAt) : null;
+      const effectiveNow =
+        freezeMs && Number.isFinite(freezeMs) && freezeMs < currentMs ? freezeMs : currentMs;
+      const elapsed = startedAtMs ? Math.max(0, Math.floor((effectiveNow - startedAtMs) / 1000)) : 0;
       remaining = Math.max(0, seconds - elapsed);
     }
     const h = Math.floor(remaining / 3600)
@@ -1738,6 +2003,7 @@ const App: React.FC = () => {
         : { className: "bg-rose-50 text-rose-600", label: "Offline" };
     }
     const lower = (status || "").toLowerCase();
+    if (lower.includes("frozen")) return { className: "bg-slate-100 text-slate-700", label: "Frozen" };
     if (lower.includes("match")) return { className: "bg-emerald-50 text-emerald-600", label: "In match" };
     if (lower.includes("game")) return { className: "bg-amber-50 text-amber-600", label: "In game" };
     if (lower.includes("online") || lower === "1" || lower === "true") return { className: "bg-emerald-50 text-emerald-600", label: "Online" };
@@ -1895,8 +2161,13 @@ const App: React.FC = () => {
         {selectedAccount ? (
           (() => {
             const rented = isAccountRented(selectedAccount);
-            const stateLabel = rented ? "Rented out" : "Available";
-            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+            const frozen = !!selectedAccount.accountFrozen;
+            const stateLabel = frozen ? "Frozen" : rented ? "Rented out" : "Available";
+            const stateClass = frozen
+              ? "bg-slate-100 text-slate-700"
+              : rented
+                ? "bg-amber-50 text-amber-700"
+                : "bg-emerald-50 text-emerald-600";
             const ownerRaw = selectedAccount.owner ? String(selectedAccount.owner).trim() : "";
             const ownerKey = normalizeKey(ownerRaw);
             const ownerLabel =
@@ -1910,9 +2181,21 @@ const App: React.FC = () => {
               typeof totalMinutes === "number" && totalMinutes >= 0
                 ? `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`
                 : "-";
-            const canAssign = !ownerKey;
-            const canExtend = ownerKey && ownerKey !== "other_account";
-            const canRelease = !!ownerKey;
+            const canAssign = !ownerKey && !frozen;
+            const editName = accountEditName.trim();
+            const editLogin = accountEditLogin.trim();
+            const editPassword = accountEditPassword.trim();
+            const editMmrRaw = accountEditMmr.trim();
+            const editMmrValue = editMmrRaw ? Number(editMmrRaw) : null;
+            const editMmrValid = editMmrRaw === "" || (Number.isFinite(editMmrValue) && editMmrValue >= 0);
+            const nameChanged = editName && editName !== (selectedAccount.name || "");
+            const loginChanged = editLogin && editLogin !== (selectedAccount.login || "");
+            const passwordChanged = editPassword && editPassword !== (selectedAccount.password || "");
+            const mmrChanged =
+              editMmrRaw &&
+              Number.isFinite(editMmrValue) &&
+              String(editMmrValue) !== String(selectedAccount.mmr ?? "");
+            const hasChanges = nameChanged || loginChanged || passwordChanged || mmrChanged;
             return (
               <div className="space-y-4">
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
@@ -1954,51 +2237,52 @@ const App: React.FC = () => {
                     </button>
                     {!canAssign && (
                       <div className="text-xs text-neutral-500">
-                        Release the account before assigning a new buyer.
+                        {frozen ? "Unfreeze the account before assigning a buyer." : "Release the account first."}
                       </div>
                     )}
                   </div>
                 </div>
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                  <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">Update account</div>
+                  <div className="grid gap-3">
                     <input
-                      value={extendHours}
-                      onChange={(e) => setExtendHours(e.target.value)}
-                      placeholder="Hours"
-                      type="number"
-                      min="0"
+                      value={accountEditName}
+                      onChange={(e) => setAccountEditName(e.target.value)}
+                      placeholder="Account name"
                       className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                     />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input
+                        value={accountEditLogin}
+                        onChange={(e) => setAccountEditLogin(e.target.value)}
+                        placeholder="Login"
+                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                      />
+                      <input
+                        value={accountEditPassword}
+                        onChange={(e) => setAccountEditPassword(e.target.value)}
+                        placeholder="Password"
+                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                      />
+                    </div>
                     <input
-                      value={extendMinutes}
-                      onChange={(e) => setExtendMinutes(e.target.value)}
-                      placeholder="Minutes"
+                      value={accountEditMmr}
+                      onChange={(e) => setAccountEditMmr(e.target.value)}
+                      placeholder="MMR"
                       type="number"
                       min="0"
                       className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                     />
                   </div>
+                  {!editMmrValid && (
+                    <div className="mt-2 text-xs text-rose-500">MMR must be 0 or higher.</div>
+                  )}
                   <button
-                    onClick={handleExtendAccount}
-                    disabled={accountActionBusy || !canExtend}
+                    onClick={handleUpdateAccount}
+                    disabled={accountActionBusy || !hasChanges || !editMmrValid}
                     className="mt-3 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                   >
-                    Extend time
-                  </button>
-                  {!canExtend && (
-                    <div className="mt-2 text-xs text-neutral-500">Extension is available only for active rentals.</div>
-                  )}
-                </div>
-                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                  <div className="mb-2 text-sm font-semibold text-neutral-800">End rental</div>
-                  <p className="text-xs text-neutral-500">Clears the owner and stops the rental immediately.</p>
-                  <button
-                    onClick={handleReleaseAccount}
-                    disabled={accountActionBusy || !canRelease}
-                    className="mt-3 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
-                  >
-                    Release rental
+                    Save changes
                   </button>
                 </div>
               </div>
@@ -2006,7 +2290,7 @@ const App: React.FC = () => {
           })()
         ) : (
           <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-            Select an account to unlock rental actions.
+            Select an account to unlock account actions.
           </div>
         )}
       </div>
@@ -2023,15 +2307,23 @@ const App: React.FC = () => {
         {selectedRental ? (
           (() => {
             const presence = selectedRental.presence ?? null;
-            const presenceLabel = presence?.in_match
-              ? "In match"
-              : presence?.in_game
-                ? "In game"
-                : "Offline";
+            const frozen = !!selectedRental.rentalFrozen;
+            const presenceLabel = frozen
+              ? "Frozen"
+              : presence?.in_match
+                ? "In match"
+                : presence?.in_game
+                  ? "In game"
+                  : "Offline";
             const pill = statusPill(presenceLabel);
             const timeLeft =
               selectedRental.durationSec != null && selectedRental.startedAt != null
-                ? formatDuration(selectedRental.durationSec, selectedRental.startedAt, now)
+                ? formatDuration(
+                    selectedRental.durationSec,
+                    selectedRental.startedAt,
+                    now,
+                    frozen ? selectedRental.rentalFrozenAt ?? null : null
+                  )
                 : "-";
             const matchTime = getMatchTimeLabel(presence);
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
@@ -2059,6 +2351,9 @@ const App: React.FC = () => {
                     <span>
                       Started: {selectedRental.startedAt ? formatStartTime(selectedRental.startedAt) : "-"}
                     </span>
+                    {frozen && (
+                      <span className="text-rose-600">Frozen: timer paused until you unfreeze.</span>
+                    )}
                   </div>
                   {selectedRental.chatUrl && (
                     <a
@@ -2070,6 +2365,23 @@ const App: React.FC = () => {
                       Open chat
                     </a>
                   )}
+                </div>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-neutral-800">Freeze rental</div>
+                  <p className="text-xs text-neutral-500">
+                    Freezing pauses the timer and kicks the user from Steam.
+                  </p>
+                  <button
+                    onClick={() => handleToggleRentalFreeze(!frozen)}
+                    disabled={rentalActionBusy}
+                    className={`mt-3 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      frozen
+                        ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        : "border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    }`}
+                  >
+                    {frozen ? "Unfreeze rental" : "Freeze rental"}
+                  </button>
                 </div>
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                   <div className="mb-2 text-sm font-semibold text-neutral-800">Extend rental</div>
@@ -2122,6 +2434,54 @@ const App: React.FC = () => {
     );
   };
 
+  const renderInventoryActionsPanel = () => {
+    const frozen = !!selectedAccount?.accountFrozen;
+    return (
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-neutral-900">Account controls</h3>
+          <span className="text-xs text-neutral-500">{selectedAccount ? "Ready" : "Select an account"}</span>
+        </div>
+        {selectedAccount ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+              <div className="mb-2 text-sm font-semibold text-neutral-800">Freeze account</div>
+              <p className="text-xs text-neutral-500">
+                Frozen accounts are hidden from available slots until you unfreeze them.
+              </p>
+              <button
+                onClick={() => handleToggleAccountFreeze(!frozen)}
+                disabled={accountActionBusy}
+                className={`mt-3 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                  frozen
+                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    : "border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                }`}
+              >
+                {frozen ? "Unfreeze account" : "Freeze account"}
+              </button>
+            </div>
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+              <div className="mb-2 text-sm font-semibold text-neutral-800">Delete account</div>
+              <p className="text-xs text-neutral-500">Removes the account and its lot mapping.</p>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={accountActionBusy}
+                className="mt-3 w-full rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Delete account
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+            Select an account to manage freeze & deletion.
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const ToggleRow: React.FC<{
     label: string;
     enabled: boolean;
@@ -2164,6 +2524,10 @@ const App: React.FC = () => {
       return;
     }
     if (accountActionBusy) return;
+    if (selectedAccount.accountFrozen) {
+      showToast("Unfreeze the account before assigning a buyer.", "error");
+      return;
+    }
     const owner = assignOwner.trim();
     if (!owner) {
       showToast("Enter a buyer username.", "error");
@@ -2189,7 +2553,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExtendAccount = async () => {
+  const handleUpdateAccount = async () => {
     if (!selectedAccount) {
       showToast("Select an account first.", "error");
       return;
@@ -2200,32 +2564,43 @@ const App: React.FC = () => {
       showToast("Invalid account selected.", "error");
       return;
     }
-    const hoursValue = parseInt(extendHours, 10);
-    const minutesValue = parseInt(extendMinutes, 10);
-    const hours = Number.isFinite(hoursValue) && hoursValue > 0 ? hoursValue : 0;
-    const minutes = Number.isFinite(minutesValue) && minutesValue > 0 ? minutesValue : 0;
-    if (!hours && !minutes) {
-      showToast("Enter a time extension.", "error");
+    const payload: Record<string, unknown> = {};
+    const name = accountEditName.trim();
+    const login = accountEditLogin.trim();
+    const password = accountEditPassword.trim();
+    const mmrRaw = accountEditMmr.trim();
+
+    if (name && name !== (selectedAccount.name || "")) payload.account_name = name;
+    if (login && login !== (selectedAccount.login || "")) payload.login = login;
+    if (password && password !== (selectedAccount.password || "")) payload.password = password;
+    if (mmrRaw) {
+      const mmr = Number(mmrRaw);
+      if (!Number.isFinite(mmr) || mmr < 0) {
+        showToast("MMR must be 0 or higher.", "error");
+        return;
+      }
+      if (String(mmr) !== String(selectedAccount.mmr ?? "")) payload.mmr = mmr;
+    }
+    if (!Object.keys(payload).length) {
+      showToast("No changes to save.", "error");
       return;
     }
     setAccountActionBusy(true);
     try {
-      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/extend`, {
-        method: "POST",
-        body: JSON.stringify({ hours, minutes }),
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
       });
-      showToast("Rental extended.");
-      setExtendHours("");
-      setExtendMinutes("");
+      showToast("Account updated.");
       await Promise.all([loadOverview()]);
     } catch (error) {
-      showToast((error as Error).message || "Failed to extend rental.", "error");
+      showToast((error as Error).message || "Failed to update account.", "error");
     } finally {
       setAccountActionBusy(false);
     }
   };
 
-  const handleReleaseAccount = async () => {
+  const handleToggleAccountFreeze = async (nextFrozen: boolean) => {
     if (!selectedAccount) {
       showToast("Select an account first.", "error");
       return;
@@ -2238,11 +2613,40 @@ const App: React.FC = () => {
     }
     setAccountActionBusy(true);
     try {
-      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/release`, { method: "POST" });
-      showToast("Rental released.");
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/freeze`, {
+        method: "POST",
+        body: JSON.stringify({ frozen: nextFrozen }),
+      });
+      showToast(nextFrozen ? "Account frozen." : "Account unfrozen.");
       await Promise.all([loadOverview()]);
     } catch (error) {
-      showToast((error as Error).message || "Failed to release rental.", "error");
+      showToast((error as Error).message || "Failed to update freeze state.", "error");
+    } finally {
+      setAccountActionBusy(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!selectedAccount) {
+      showToast("Select an account first.", "error");
+      return;
+    }
+    if (accountActionBusy) return;
+    const accountId = selectedAccount.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid account selected.", "error");
+      return;
+    }
+    const label = selectedAccount.name || `ID ${accountId}`;
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setAccountActionBusy(true);
+    try {
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}`, { method: "DELETE" });
+      showToast("Account deleted.");
+      setSelectedAccountId(null);
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to delete account.", "error");
     } finally {
       setAccountActionBusy(false);
     }
@@ -2302,6 +2706,32 @@ const App: React.FC = () => {
       await Promise.all([loadOverview()]);
     } catch (error) {
       showToast((error as Error).message || "Failed to release rental.", "error");
+    } finally {
+      setRentalActionBusy(false);
+    }
+  };
+
+  const handleToggleRentalFreeze = async (nextFrozen: boolean) => {
+    if (!selectedRental) {
+      showToast("Select a rental first.", "error");
+      return;
+    }
+    if (rentalActionBusy) return;
+    const accountId = selectedRental.id;
+    if (accountId === null || accountId === undefined) {
+      showToast("Invalid rental selected.", "error");
+      return;
+    }
+    setRentalActionBusy(true);
+    try {
+      await apiFetch(`/api/rentals/${encodeURIComponent(String(accountId))}/freeze`, {
+        method: "POST",
+        body: JSON.stringify({ frozen: nextFrozen }),
+      });
+      showToast(nextFrozen ? "Rental frozen." : "Rental unfrozen.");
+      await Promise.all([loadOverview()]);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update rental state.", "error");
     } finally {
       setRentalActionBusy(false);
     }
@@ -2453,6 +2883,8 @@ const App: React.FC = () => {
       return;
     }
     setChatInput("");
+    const chatKey = String(selectedChat);
+    const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatKey}`);
     const optimistic: ChatMessage = {
       id: `local-${Date.now()}`,
       author: "You",
@@ -2460,7 +2892,15 @@ const App: React.FC = () => {
       sentAt: new Date().toLocaleTimeString(),
       byBot: true,
     };
-    setChatMessages((prev) => [...prev, optimistic]);
+    setChatMessages((prev) => {
+      const next = [...prev, optimistic];
+      writeCache(cacheKey, next);
+      return next;
+    });
+    updateChatPreview(chatKey, optimistic);
+    if (chatWsConnected && sendChatWs({ type: "send", chat_id: selectedChat, text })) {
+      return;
+    }
     try {
       await apiFetch(`/api/chats/${selectedChat}/send`, {
         method: "POST",
@@ -3125,17 +3565,25 @@ const App: React.FC = () => {
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
                             const timer = getMatchTimeLabel(presence);
-                            const presenceLabel = presence?.in_match
-                              ? "In match"
-                              : presence?.in_game
-                                ? "In game"
-                                : "Offline";
+                            const frozen = !!r.rentalFrozen;
+                            const presenceLabel = frozen
+                              ? "Frozen"
+                              : presence?.in_match
+                                ? "In match"
+                                : presence?.in_game
+                                  ? "In game"
+                                  : "Offline";
                             const pill = statusPill(presenceLabel);
                             const adminCalls = Number(r.adminCalls || 0);
                             const hasAdminCall = adminCalls > 0;
                             const timeLeft =
                               r.durationSec != null && r.startedAt != null
-                                ? formatDuration(r.durationSec, r.startedAt, now)
+                                ? formatDuration(
+                                    r.durationSec,
+                                    r.startedAt,
+                                    now,
+                                    frozen ? r.rentalFrozenAt ?? null : null
+                                  )
                                 : "-";
                             const rowId = r.id ?? idx;
                             const isSelected =
@@ -3674,8 +4122,13 @@ const App: React.FC = () => {
                               <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                                 {accountsTable.map((acc, idx) => {
                                   const rented = isAccountRented(acc);
-                                  const stateLabel = rented ? "Rented out" : "Available";
-                                  const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+                                  const frozen = !!acc.accountFrozen;
+                                  const stateLabel = frozen ? "Frozen" : rented ? "Rented out" : "Available";
+                                  const stateClass = frozen
+                                    ? "bg-slate-100 text-slate-700"
+                                    : rented
+                                      ? "bg-amber-50 text-amber-700"
+                                      : "bg-emerald-50 text-emerald-600";
                                   const rowId = acc.id ?? idx;
                                   const isSelected =
                                     selectedAccountId !== null && String(selectedAccountId) === String(rowId);
@@ -3751,7 +4204,10 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        {renderAccountActionsPanel("Rental controls")}
+                        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                          {renderAccountActionsPanel("Account actions")}
+                          {renderInventoryActionsPanel()}
+                        </div>
                       </div>
                     </motion.div>
                   ) : (
@@ -3778,8 +4234,13 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {accountsTable.map((acc, idx) => {
                             const rented = isAccountRented(acc);
-                            const stateLabel = rented ? "Rented out" : "Available";
-                            const stateClass = rented ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-600";
+                            const frozen = !!acc.accountFrozen;
+                            const stateLabel = frozen ? "Frozen" : rented ? "Rented out" : "Available";
+                            const stateClass = frozen
+                              ? "bg-slate-100 text-slate-700"
+                              : rented
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-emerald-50 text-emerald-600";
                             const rowId = acc.id ?? idx;
                             const isSelected =
                               selectedAccountId !== null && String(selectedAccountId) === String(rowId);
@@ -3859,17 +4320,25 @@ const App: React.FC = () => {
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
                             const timer = getMatchTimeLabel(presence);
-                            const presenceLabel = presence?.in_match
-                              ? "In match"
-                              : presence?.in_game
-                                ? "In game"
-                                : "Offline";
+                            const frozen = !!r.rentalFrozen;
+                            const presenceLabel = frozen
+                              ? "Frozen"
+                              : presence?.in_match
+                                ? "In match"
+                                : presence?.in_game
+                                  ? "In game"
+                                  : "Offline";
                             const pill = statusPill(presenceLabel);
                             const adminCalls = Number(r.adminCalls || 0);
                             const hasAdminCall = adminCalls > 0;
                             const timeLeft =
                               r.durationSec != null && r.startedAt != null
-                                ? formatDuration(r.durationSec, r.startedAt, now)
+                                ? formatDuration(
+                                    r.durationSec,
+                                    r.startedAt,
+                                    now,
+                                    frozen ? r.rentalFrozenAt ?? null : null
+                                  )
                                 : "-";
                             const rowId = r.id ?? idx;
                             const isSelected =

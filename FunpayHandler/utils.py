@@ -67,6 +67,21 @@ def get_remaining_time(account: dict, current_time: datetime):
     if not rental_start:
         return None, "неизвестно", "неизвестно"
 
+    freeze_at = account.get("rental_frozen_at")
+    if account.get("rental_frozen") and freeze_at:
+        if isinstance(freeze_at, datetime):
+            freeze_dt = freeze_at
+        else:
+            try:
+                freeze_dt = datetime.strptime(str(freeze_at), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                freeze_dt = None
+        if freeze_dt:
+            if freeze_dt.tzinfo is None:
+                freeze_dt = MOSCOW_TZ.localize(freeze_dt)
+            if current_time > freeze_dt:
+                current_time = freeze_dt
+
     if isinstance(rental_start, datetime):
         start_dt = rental_start
     else:

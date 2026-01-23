@@ -15,7 +15,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 import secrets
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +37,8 @@ from FunPayAPI import Account as FPAccount
 from FunPayAPI.common import enums as fp_enums
 from backend.logger import logger
 from backend.notifications import list_notifications
+from backend.realtime import manager as realtime_manager
+from backend.realtime import publish_chat_message, set_chat_cache
 from SteamHandler.changePassword import changeSteamPassword
 from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
@@ -281,6 +283,21 @@ class BotManager:
             except Exception as exc:
                 logger.error(f"Failed to start bot for user {user.get('id')}: {exc}")
 
+    def send_message(self, user_id: int, owner: str, message: str) -> bool:
+        if not owner or not message:
+            return False
+        with self._lock:
+            entry = self._bots.get(user_id)
+            bot = entry.get("bot") if entry else None
+        if not bot:
+            return False
+        try:
+            bot.send_message_by_owner(owner, message)
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to send message to {owner}: {exc}")
+            return False
+
 
 bot_manager = BotManager()
 
@@ -473,6 +490,7 @@ class ChatCache:
 
 
 chat_cache = ChatCache()
+set_chat_cache(chat_cache)
 
 
 class PresenceCache:
@@ -664,6 +682,36 @@ def require_admin(request: Request, response: Response) -> None:
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _get_session_from_websocket(websocket: WebSocket) -> dict | None:
+    session_id = websocket.cookies.get(SESSION_COOKIE_NAME)
+    if not session_id:
+        cookie_header = websocket.headers.get("cookie", "")
+        for part in cookie_header.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE_NAME:
+                session_id = value
+                break
+    if not session_id:
+        return None
+    session = db.get_session_user(session_id)
+    if not session:
+        return None
+    expires_at = _to_datetime(session.get("expires_at"))
+    last_seen_at = _to_datetime(session.get("last_seen_at"))
+    now = datetime.utcnow()
+    if expires_at and expires_at <= now:
+        db.delete_session(session_id)
+        return None
+    should_refresh = (
+        last_seen_at is None
+        or (now - last_seen_at).total_seconds() >= SESSION_REFRESH_WINDOW_SECONDS
+    )
+    if should_refresh:
+        new_expires = now + timedelta(days=SESSION_TTL_DAYS)
+        db.refresh_session(session_id, new_expires, now)
+    return session
+
+
 def current_user_id(request: Request) -> int | None:
     user = getattr(request.state, "user", None)
     return user.get("id") if user else None
@@ -720,6 +768,10 @@ class AssignRequest(BaseModel):
 class ExtendRequest(BaseModel):
     hours: int = Field(default=0, ge=0)
     minutes: int = Field(default=0, ge=0, le=59)
+
+
+class FreezeRequest(BaseModel):
+    frozen: bool = True
 
 
 class ChatMessage(BaseModel):
@@ -1628,6 +1680,77 @@ def extend_account(account_id: int, payload: ExtendRequest, request: Request) ->
     return {"status": "ok"}
 
 
+@app.post("/api/accounts/{account_id}/freeze", dependencies=[Depends(require_admin)])
+def freeze_account(account_id: int, payload: FreezeRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    success = db.set_account_frozen(account_id, payload.frozen, uid)
+    if not success:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"success": True, "frozen": payload.frozen}
+
+
+@app.post("/api/rentals/{account_id}/freeze", dependencies=[Depends(require_admin)])
+async def freeze_rental(account_id: int, payload: FreezeRequest, request: Request) -> dict:
+    uid = current_user_id(request)
+    account = db.get_account_by_id(account_id, uid)
+    if not account or not account.get("owner") or account.get("owner") == "OTHER_ACCOUNT":
+        raise HTTPException(status_code=404, detail="Rental not found")
+
+    owner = str(account.get("owner") or "").strip()
+    now = datetime.utcnow() + timedelta(hours=3)
+    if payload.frozen:
+        if account.get("rental_frozen"):
+            return {"success": True, "frozen": True}
+        ok = db.set_rental_freeze_state(account_id, True, frozen_at=now, user_id=uid)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Failed to freeze rental")
+        try:
+            mafile_json = account.get("mafile_json")
+            if mafile_json:
+                await logout_all_steam_sessions(
+                    steam_login=account.get("login") or account.get("account_name"),
+                    steam_password=account.get("password"),
+                    mafile_json=mafile_json,
+                )
+        except Exception as exc:
+            logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
+        if owner:
+            bot_manager.send_message(
+                uid,
+                owner,
+                "Администратор заморозил вашу аренду. Вход и Steam Guard временно отключены. "
+                "Если нужна помощь — !админ.",
+            )
+        return {"success": True, "frozen": True}
+
+    if not account.get("rental_frozen"):
+        return {"success": True, "frozen": False}
+
+    frozen_at = account.get("rental_frozen_at")
+    rental_start = account.get("rental_start")
+    new_start = None
+    if rental_start and frozen_at:
+        try:
+            start_dt = rental_start if isinstance(rental_start, datetime) else datetime.strptime(
+                str(rental_start), "%Y-%m-%d %H:%M:%S"
+            )
+            frozen_dt = frozen_at if isinstance(frozen_at, datetime) else datetime.strptime(
+                str(frozen_at), "%Y-%m-%d %H:%M:%S"
+            )
+            delta = now - frozen_dt
+            if delta.total_seconds() < 0:
+                delta = timedelta(0)
+            new_start = start_dt + delta
+        except Exception as exc:
+            logger.warning(f"Failed to adjust rental_start for account {account_id}: {exc}")
+            new_start = None
+
+    ok = db.set_rental_freeze_state(account_id, False, rental_start=new_start, user_id=uid)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to unfreeze rental")
+    return {"success": True, "frozen": False}
+
+
 @app.post("/api/accounts/{account_id}/steam/deauthorize", dependencies=[Depends(require_admin)])
 async def steam_deauthorize(account_id: int, request: Request) -> dict:
     uid = current_user_id(request)
@@ -1956,6 +2079,133 @@ async def stream_chat_history(
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    session = _get_session_from_websocket(websocket)
+    if not session:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    user_id = session.get("user_id")
+    token = session.get("golden_key") or ""
+    if user_id is None:
+        await websocket.close(code=4401)
+        return
+    await realtime_manager.connect(websocket, int(user_id))
+
+    try:
+        await websocket.send_json({"type": "hello", "user_id": int(user_id)})
+
+        items: list[dict] = []
+        if token:
+            cached, ts = chat_cache.get_cached_chats(int(user_id))
+            now = time.time()
+            if cached is None or ts is None or now - ts > CHAT_LIST_TTL:
+                try:
+                    items = chat_cache.refresh_chats_sync(int(user_id), token)
+                except Exception:
+                    items = cached or []
+            else:
+                items = cached or []
+            items = _attach_admin_call_counts(items, int(user_id))
+        await websocket.send_json({"type": "chats:list", "items": items})
+
+        while True:
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                continue
+
+            if not isinstance(data, dict):
+                continue
+            msg_type = data.get("type")
+
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            if msg_type == "subscribe":
+                chat_id_raw = data.get("chat_id")
+                try:
+                    chat_id = int(chat_id_raw)
+                except Exception:
+                    await websocket.send_json({"type": "error", "message": "Invalid chat id"})
+                    continue
+                await realtime_manager.subscribe(websocket, chat_id)
+                history_items: list[dict] = []
+                if token:
+                    cached, ts = chat_cache.get_cached_history(int(user_id), chat_id)
+                    now = time.time()
+                    if cached is None or ts is None or now - ts > CHAT_HISTORY_TTL:
+                        try:
+                            history_items = chat_cache.refresh_history_sync(int(user_id), chat_id, token)
+                        except Exception:
+                            history_items = cached or []
+                    else:
+                        history_items = cached or []
+                history_items = _annotate_admin_calls(history_items[-CHAT_HISTORY_MAX:])
+                await websocket.send_json(
+                    {"type": "chat:history", "chat_id": chat_id, "items": history_items}
+                )
+                continue
+
+            if msg_type == "unsubscribe":
+                chat_id_raw = data.get("chat_id")
+                try:
+                    chat_id = int(chat_id_raw)
+                except Exception:
+                    continue
+                await realtime_manager.unsubscribe(websocket, chat_id)
+                continue
+
+            if msg_type == "send":
+                chat_id_raw = data.get("chat_id")
+                text = (data.get("text") or "").strip()
+                if not text:
+                    await websocket.send_json({"type": "send:error", "message": "Message text is required"})
+                    continue
+                if not token:
+                    await websocket.send_json({"type": "send:error", "message": "FunPay token not configured"})
+                    continue
+                try:
+                    chat_id = int(chat_id_raw)
+                except Exception:
+                    await websocket.send_json({"type": "send:error", "message": "Invalid chat id"})
+                    continue
+                try:
+                    account = FPAccount(token).get()
+                    cached_chat = chat_cache.get_chat_summary(int(user_id), chat_id)
+                    chat_name = cached_chat.get("name") if cached_chat else None
+                    message = account.send_message(chat_id, text, chat_name)
+                    sent_time = _extract_message_time(getattr(message, "html", None))
+                    if not sent_time:
+                        sent_time = _normalize_time_label(datetime.now().strftime("%H:%M:%S"))
+                    item = {
+                        "id": message.id,
+                        "text": message.text,
+                        "author": message.author,
+                        "author_id": message.author_id,
+                        "chat_id": message.chat_id,
+                        "chat_name": message.chat_name,
+                        "image_link": message.image_link,
+                        "by_bot": message.by_bot,
+                        "by_vertex": message.by_vertex,
+                        "type": message.type.name if message.type else None,
+                        "sent_time": sent_time,
+                    }
+                    publish_chat_message(int(user_id), chat_id, item)
+                    await websocket.send_json(
+                        {"type": "send:ok", "chat_id": chat_id, "message_id": message.id}
+                    )
+                except Exception as exc:
+                    await websocket.send_json({"type": "send:error", "message": str(exc)})
+                continue
+
+    finally:
+        await realtime_manager.disconnect(websocket)
 
 @app.post("/api/chats/{chat_id}/send", dependencies=[Depends(require_admin)])
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:

@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Dict, Optional, Set
+
+from fastapi import WebSocket
+
+from backend.logger import logger
+
+
+class ConnectionState:
+    def __init__(self, websocket: WebSocket, user_id: int) -> None:
+        self.websocket = websocket
+        self.user_id = user_id
+        self.subscriptions: Set[int] = set()
+
+
+class ConnectionManager:
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._connections: Dict[WebSocket, ConnectionState] = {}
+        self._user_index: Dict[int, Set[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, user_id: int) -> None:
+        async with self._lock:
+            state = ConnectionState(websocket, user_id)
+            self._connections[websocket] = state
+            self._user_index.setdefault(user_id, set()).add(websocket)
+
+    async def disconnect(self, websocket: WebSocket) -> None:
+        async with self._lock:
+            state = self._connections.pop(websocket, None)
+            if not state:
+                return
+            user_set = self._user_index.get(state.user_id)
+            if user_set:
+                user_set.discard(websocket)
+                if not user_set:
+                    self._user_index.pop(state.user_id, None)
+
+    async def subscribe(self, websocket: WebSocket, chat_id: int) -> None:
+        async with self._lock:
+            state = self._connections.get(websocket)
+            if not state:
+                return
+            state.subscriptions.add(int(chat_id))
+
+    async def unsubscribe(self, websocket: WebSocket, chat_id: int) -> None:
+        async with self._lock:
+            state = self._connections.get(websocket)
+            if not state:
+                return
+            state.subscriptions.discard(int(chat_id))
+
+    async def _targets_for_user(self, user_id: int) -> list[ConnectionState]:
+        async with self._lock:
+            sockets = list(self._user_index.get(user_id, set()))
+            return [self._connections[socket] for socket in sockets if socket in self._connections]
+
+    async def _targets_for_chat(self, user_id: int, chat_id: int) -> list[ConnectionState]:
+        async with self._lock:
+            sockets = list(self._user_index.get(user_id, set()))
+            states = []
+            for socket in sockets:
+                state = self._connections.get(socket)
+                if not state:
+                    continue
+                if int(chat_id) in state.subscriptions:
+                    states.append(state)
+            return states
+
+    async def broadcast_user(self, user_id: int, event: Dict[str, Any]) -> None:
+        targets = await self._targets_for_user(user_id)
+        await self._send_to_targets(targets, event)
+
+    async def broadcast_user_chat(self, user_id: int, chat_id: int, event: Dict[str, Any]) -> None:
+        targets = await self._targets_for_chat(user_id, chat_id)
+        await self._send_to_targets(targets, event)
+
+    async def _send_to_targets(self, targets: list[ConnectionState], event: Dict[str, Any]) -> None:
+        if not targets:
+            return
+        dead: list[WebSocket] = []
+        for state in targets:
+            try:
+                await state.websocket.send_json(event)
+            except Exception:
+                dead.append(state.websocket)
+        for websocket in dead:
+            await self.disconnect(websocket)
+
+
+manager = ConnectionManager()
+_chat_cache: Any | None = None
+
+
+def set_chat_cache(cache: Any) -> None:
+    global _chat_cache
+    _chat_cache = cache
+
+
+def _run_async(coro: Any) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        loop.create_task(coro)
+        return
+    try:
+        asyncio.run(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+
+def broadcast_to_user(user_id: int, event_dict: Dict[str, Any]) -> None:
+    _run_async(manager.broadcast_user(user_id, event_dict))
+
+
+def broadcast_to_user_chat(user_id: int, chat_id: int, event_dict: Dict[str, Any]) -> None:
+    _run_async(manager.broadcast_user_chat(user_id, chat_id, event_dict))
+
+
+def publish_chat_message(user_id: int, chat_id: int, item: Dict[str, Any]) -> None:
+    if _chat_cache:
+        try:
+            _chat_cache.append_message(user_id, chat_id, dict(item))
+        except Exception as exc:
+            logger.warning(f"Failed to append chat message to cache: {exc}")
+    broadcast_to_user_chat(
+        user_id,
+        chat_id,
+        {"type": "chat:message", "chat_id": chat_id, "item": item},
+    )
+    if _chat_cache:
+        try:
+            summary = _chat_cache.get_chat_summary(user_id, chat_id)
+        except Exception:
+            summary = None
+        if summary:
+            broadcast_to_user(user_id, {"type": "chats:update", "chat_id": chat_id, "item": summary})

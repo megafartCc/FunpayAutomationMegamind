@@ -24,6 +24,7 @@ from backend.config import (
 from DatabaseHandler.databaseSetup import MySQLDB
 from backend.logger import logger
 from backend.notifications import send_message_to_admin
+from backend.realtime import publish_chat_message
 from FunPayAPI.common.utils import RegularExpressions
 from SteamHandler.SteamGuard import get_steam_guard_code
 from SteamHandler.deauthorize import logout_all_steam_sessions
@@ -61,6 +62,30 @@ COMMANDS_INLINE = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b: !acc/!\u0430\u043a\u043a, !code/!\u043a\u043e\u0434, !stock/!\u0441\u0442\u043e\u043a, !extend/!\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, "
     "!admin/!\u0430\u0434\u043c\u0438\u043d, !lpexchange/!\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430, !cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
 )
+MESSAGE_TIME_RE = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
+
+
+def _normalize_time_label(time_text: str) -> str:
+    parts = time_text.split(":")
+    if len(parts) not in (2, 3):
+        return time_text
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        return time_text
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _extract_message_time_from_text(text: str | None) -> Optional[str]:
+    if not text:
+        return None
+    cleaned = " ".join(str(text).split())
+    match = MESSAGE_TIME_RE.search(cleaned)
+    if not match:
+        return None
+    return _normalize_time_label(match.group(1))
 
 
 @dataclass(frozen=True)
@@ -851,6 +876,25 @@ class FunpayBot:
             return
 
         owner = event.message.author
+        if event.message.type == types.MessageTypes.NEW_MESSAGE and self._user_id is not None:
+            sent_time = _extract_message_time_from_text(getattr(event.message, "html", None))
+            if not sent_time:
+                sent_time = _extract_message_time_from_text(event.message.text or "")
+            item = {
+                "id": event.message.id,
+                "text": event.message.text,
+                "author": event.message.author,
+                "author_id": event.message.author_id,
+                "chat_id": event.message.chat_id,
+                "chat_name": event.message.chat_name,
+                "image_link": event.message.image_link,
+                "by_bot": event.message.by_bot,
+                "by_vertex": event.message.by_vertex,
+                "type": event.message.type.name if event.message.type else None,
+                "sent_time": sent_time,
+            }
+            publish_chat_message(self._user_id, chat_id, item)
+
         if event.message.type in (
             types.MessageTypes.NEW_FEEDBACK,
             types.MessageTypes.FEEDBACK_CHANGED,
@@ -1154,7 +1198,13 @@ class FunpayBot:
                     lines.append("⏱️ Аренда началась сейчас (с момента получения кода).")
                 acc.send_message(chat_id, "\n".join(lines))
             else:
-                acc.send_message(chat_id, USER.active_rentals_empty)
+                if self._db.owner_has_frozen_rental(owner, self._user_id):
+                    acc.send_message(
+                        chat_id,
+                        "Администратор заморозил вашу аренду. Коды временно недоступны. Если нужна помощь — !админ.",
+                    )
+                else:
+                    acc.send_message(chat_id, USER.active_rentals_empty)
         except Exception as exc:
             acc.send_message(chat_id, f"Ошибка при получении кода: {exc}")
 
@@ -1618,6 +1668,7 @@ class FunpayBot:
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
+                AND (a.rental_frozen = 0 OR a.rental_frozen IS NULL)
             """
             params: tuple[int, ...] = ()
             # When running multiple bots (one per dashboard user), do NOT leak expiration
