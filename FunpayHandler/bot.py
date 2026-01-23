@@ -507,6 +507,34 @@ class FunpayBot:
             logger.warning(f"Skipping order {order_id}: chat id not found")
             return
 
+        if self._db.is_blacklisted(buyer, self._user_id):
+            acc.send_message(
+                chat_id,
+                "\u0412\u044b \u043d\u0430\u0445\u043e\u0434\u0438\u0442\u0435\u0441\u044c \u0432 \u0447\u0435\u0440\u043d\u043e\u043c \u0441\u043f\u0438\u0441\u043a\u0435. "
+                "\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0434\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c \u043f\u043e\u043c\u043e\u0449\u0438 "
+                "\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0430."
+            )
+            send_message_to_admin(
+                "BLACKLISTED ORDER\n\n"
+                f"Buyer: {buyer}\n"
+                f"Order: {order_id}\n"
+                f"Description: {getattr(order, 'description', '')}\n"
+                f"Amount: {getattr(order, 'amount', '')}\n"
+                f"Price: {getattr(order, 'price', '')}"
+            )
+            self._db.log_order_event(
+                order_id=order_id,
+                owner_id=buyer,
+                action="blacklisted",
+                account_name=str(getattr(order, "description", "") or ""),
+                lot_number=parse_lot_number(str(getattr(order, "description", "") or "")),
+                amount=getattr(order, "amount", None),
+                price=getattr(order, "price", None),
+                user_id=self._user_id,
+            )
+            self._mark_order_processed(event)
+            return
+
         description = str(getattr(order, "description", "") or "")
         amount = int(getattr(order, "amount", 1) or 1)
 

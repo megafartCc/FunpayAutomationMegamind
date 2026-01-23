@@ -269,6 +269,19 @@ class MySQLDB:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS blacklist (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    owner VARCHAR(255) NOT NULL,
+                    reason TEXT NULL,
+                    user_id INT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY idx_blacklist_owner_user (owner, user_id),
+                    INDEX idx_blacklist_owner (owner)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         else:
             cursor.execute(
                 """
@@ -369,6 +382,18 @@ class MySQLDB:
                 )
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS blacklist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL,
+                    reason TEXT,
+                    user_id INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(owner, user_id)
+                )
+                """
+            )
         self.conn.commit()
         cursor.close()
         self._ensure_mafile_column()
@@ -378,6 +403,7 @@ class MySQLDB:
         self._ensure_users_table()
         self._ensure_user_owner_columns()
         self._ensure_feedback_rewards_table()
+        self._ensure_blacklist_table()
         self._ensure_feedback_rewards_revoked_column()
         self._migrate_lots_schema()
 
@@ -563,6 +589,42 @@ class MySQLDB:
                 )
                 """
             )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_blacklist_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS blacklist (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        owner VARCHAR(255) NOT NULL,
+                        reason TEXT NULL,
+                        user_id INT NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY idx_blacklist_owner_user (owner, user_id),
+                        INDEX idx_blacklist_owner (owner)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS blacklist (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner TEXT NOT NULL,
+                        reason TEXT,
+                        user_id INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(owner, user_id)
+                    )
+                    """
+                )
             self.conn.commit()
         except Exception:
             pass
@@ -1791,6 +1853,139 @@ class MySQLDB:
         except Exception as exc:
             logger.error(f"Error getting order history: {exc}")
             return []
+        finally:
+            cursor.close()
+
+    def list_blacklist(self, user_id: int | None = None, query: str | None = None) -> list:
+        try:
+            cursor = self._cursor()
+            owner_query = None
+            if query:
+                owner_query = f"%{str(query).strip().lower()}%"
+            if owner_query:
+                cursor.execute(
+                    """
+                    SELECT id, owner, reason, created_at
+                    FROM blacklist
+                    WHERE user_id = ? AND owner LIKE ?
+                    ORDER BY created_at DESC
+                    """,
+                    (int(user_id or 0), owner_query),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, owner, reason, created_at
+                    FROM blacklist
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    """,
+                    (int(user_id or 0),),
+                )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "owner": row[1],
+                    "reason": row[2],
+                    "created_at": row[3],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error listing blacklist: {exc}")
+            return []
+        finally:
+            cursor.close()
+
+    def is_blacklisted(self, owner: str, user_id: int | None = None) -> bool:
+        if not owner:
+            return False
+        owner_key = str(owner).strip().lower()
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT 1 FROM blacklist WHERE owner = ? AND user_id = ? LIMIT 1
+                """,
+                (owner_key, int(user_id or 0)),
+            )
+            return cursor.fetchone() is not None
+        except Exception as exc:
+            logger.error(f"Error checking blacklist for {owner}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def add_blacklist_entry(self, owner: str, reason: str | None = None, user_id: int | None = None) -> bool:
+        if not owner:
+            return False
+        owner_key = str(owner).strip().lower()
+        reason_value = reason.strip() if isinstance(reason, str) and reason.strip() else None
+        try:
+            cursor = self._cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO blacklist (owner, reason, user_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (owner_key, reason_value, int(user_id or 0)),
+                )
+                self.conn.commit()
+                return True
+            except Exception:
+                if reason_value is None:
+                    return False
+                cursor.execute(
+                    """
+                    UPDATE blacklist
+                    SET reason = ?
+                    WHERE owner = ? AND user_id = ?
+                    """,
+                    (reason_value, owner_key, int(user_id or 0)),
+                )
+                self.conn.commit()
+                return True
+        except Exception as exc:
+            logger.error(f"Error adding blacklist entry for {owner}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def remove_blacklist_entries(self, owners: list[str], user_id: int | None = None) -> int:
+        if not owners:
+            return 0
+        owner_keys = [str(owner).strip().lower() for owner in owners if str(owner).strip()]
+        if not owner_keys:
+            return 0
+        placeholders = ", ".join(["?"] * len(owner_keys))
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                f"DELETE FROM blacklist WHERE user_id = ? AND owner IN ({placeholders})",
+                (int(user_id or 0), *owner_keys),
+            )
+            self.conn.commit()
+            return max(0, cursor.rowcount)
+        except Exception as exc:
+            logger.error(f"Error removing blacklist entries: {exc}")
+            return 0
+        finally:
+            cursor.close()
+
+    def clear_blacklist(self, user_id: int | None = None) -> int:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                "DELETE FROM blacklist WHERE user_id = ?",
+                (int(user_id or 0),),
+            )
+            self.conn.commit()
+            return max(0, cursor.rowcount)
+        except Exception as exc:
+            logger.error(f"Error clearing blacklist: {exc}")
+            return 0
         finally:
             cursor.close()
 

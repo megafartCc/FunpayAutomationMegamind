@@ -40,6 +40,7 @@ type AccountRow = {
     steamId?: string;
     presence?: PresenceData | null;
     presenceLabel?: string | null;
+    presenceObservedAt?: number | null;
   };
 
   type NotificationItem = {
@@ -49,6 +50,13 @@ type AccountRow = {
   createdAt?: string;
   owner?: string;
   accountId?: string | number;
+};
+
+type BlacklistEntry = {
+  id?: string | number;
+  owner: string;
+  reason?: string | null;
+  createdAt?: string | null;
 };
 
 const extractSteamId = (a: any): string => {
@@ -115,6 +123,18 @@ const RentalsIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
       d="M12 13V9M21 6L19 4M10 2H14M12 21C7.58172 21 4 17.4183 4 13C4 8.58172 7.58172 5 12 5C16.4183 5 20 8.58172 20 13C20 17.4183 16.4183 21 12 21Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const BlacklistIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M5.75 5.75L18.25 18.25M12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12C21 16.9706 16.9706 21 12 21Z"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
@@ -206,6 +226,7 @@ const NAV_ITEMS = [
   { id: "funpay-stats", label: "Funpay Statistics", Icon: FunpayStatisticsIcon },
   { id: "overview", label: "Dashboard", Icon: DashboardIcon },
   { id: "rentals", label: "Active Rentals", Icon: RentalsIcon },
+  { id: "blacklist", label: "Blacklist", Icon: BlacklistIcon },
   { id: "inventory", label: "Inventory", Icon: InventoryIcon },
   { id: "lots", label: "Lots", Icon: LotsIcon },
   { id: "chats", label: "Chats", Icon: ChatsIcon },
@@ -266,6 +287,7 @@ const navIdToPath: Record<string, string> = {
   "funpay-stats": "/funpay-stats",
   overview: "/dashboard",
   rentals: "/rentals",
+  blacklist: "/blacklist",
   inventory: "/inventory",
   lots: "/lots",
   chats: "/chats",
@@ -291,6 +313,8 @@ const INVENTORY_GRID =
   "minmax(72px,0.6fr) minmax(180px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) minmax(190px,1.1fr) minmax(80px,0.6fr) minmax(110px,0.6fr)";
 const RENTALS_GRID =
   "minmax(64px,0.6fr) minmax(180px,1.4fr) minmax(160px,1.1fr) minmax(140px,1fr) minmax(120px,0.8fr) minmax(110px,0.8fr) minmax(140px,1fr) minmax(110px,0.7fr)";
+const BLACKLIST_GRID =
+  "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(220px,1.6fr) minmax(140px,0.8fr)";
 
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
@@ -318,7 +342,13 @@ const App: React.FC = () => {
   );
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [presenceCache, setPresenceCache] = useState<Record<string, PresenceData>>({});
-  const [, setTick] = useState(0);
+  const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
+  const [blacklistQuery, setBlacklistQuery] = useState("");
+  const [blacklistLoading, setBlacklistLoading] = useState(false);
+  const [blacklistOwner, setBlacklistOwner] = useState("");
+  const [blacklistReason, setBlacklistReason] = useState("");
+  const [blacklistSelected, setBlacklistSelected] = useState<string[]>([]);
+  const [tick, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
   const api = useMemo(
@@ -364,7 +394,13 @@ const App: React.FC = () => {
         try {
           const res = await fetch(`${base}/${id}`, { signal: controller.signal });
           if (!res.ok) throw new Error("bad status");
-          const data = (await res.json()) as PresenceData;
+          const raw = (await res.json()) as PresenceData;
+          const matchSecondsValue = Number((raw as any)?.match_seconds);
+          const data: PresenceData = {
+            ...raw,
+            match_seconds: Number.isFinite(matchSecondsValue) ? matchSecondsValue : null,
+            fetched_at: Date.now(),
+          };
           setPresenceCache((prev) => ({ ...prev, [id]: data }));
         } catch {
           // ignore per-id errors
@@ -485,6 +521,7 @@ const App: React.FC = () => {
                 r.presence_label;
               const matchSecondsRaw = Number(r.match_seconds);
               const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
+              const presenceFetchedAt = hasPresence ? Date.now() : null;
               const presence = hasPresence
                 ? {
                     in_match: !!r.in_match,
@@ -492,6 +529,7 @@ const App: React.FC = () => {
                     hero_name: r.hero_name ?? null,
                     match_time: r.match_time ?? null,
                     match_seconds: matchSeconds,
+                    fetched_at: presenceFetchedAt,
                   }
                 : null;
               const derivedStatus = presence
@@ -504,11 +542,10 @@ const App: React.FC = () => {
               const durationSec = (() => {
                 const explicit = Number(r.duration_sec ?? r.duration_seconds ?? r.seconds);
                 if (Number.isFinite(explicit) && explicit >= 0) return explicit;
-                const hoursRaw = Number(r.rental_duration);
                 const minutesRaw = Number(r.rental_duration_minutes ?? r.rental_minutes);
-                const hours = Number.isFinite(hoursRaw) ? hoursRaw : 0;
-                const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 0;
-                if (hours || minutes) return hours * 3600 + minutes * 60;
+                if (Number.isFinite(minutesRaw) && minutesRaw > 0) return minutesRaw * 60;
+                const hoursRaw = Number(r.rental_duration);
+                if (Number.isFinite(hoursRaw) && hoursRaw > 0) return hoursRaw * 3600;
                 return null;
               })();
               return {
@@ -529,6 +566,7 @@ const App: React.FC = () => {
                   (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
                 presence,
                 presenceLabel: r.presence_label ?? null,
+                presenceObservedAt: presenceFetchedAt,
               };
             })
           );
@@ -574,6 +612,14 @@ const App: React.FC = () => {
   }, [token, activeNav, selectedChat]);
 
   useEffect(() => {
+    if (!token || activeNav !== "blacklist") return;
+    const handle = setTimeout(() => {
+      loadBlacklist(blacklistQuery);
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [token, activeNav, blacklistQuery]);
+
+  useEffect(() => {
     localStorage.setItem("autoRaise", autoRaise ? "1" : "0");
   }, [autoRaise]);
 
@@ -594,7 +640,8 @@ const App: React.FC = () => {
 
   const parseDateTime = (value?: string) => {
     if (!value) return null;
-    const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
+    let normalized = value.includes(" ") ? value.replace(" ", "T") : value;
+    normalized = normalized.replace(/\.(\d{3})\d+/, ".$1");
     const parsed = new Date(normalized);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed.getTime();
@@ -620,9 +667,9 @@ const App: React.FC = () => {
   };
 
   const formatMatchTime = (matchTime?: string | null, matchSeconds?: number | null) => {
-    if (matchTime) return matchTime;
-    if (!Number.isFinite(matchSeconds)) return "";
-    const total = Math.max(0, Math.floor(matchSeconds || 0));
+    const numeric = typeof matchSeconds === "number" ? matchSeconds : Number(matchSeconds);
+    if (!Number.isFinite(numeric)) return matchTime || "";
+    const total = Math.max(0, Math.floor(numeric || 0));
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const seconds = total % 60;
@@ -632,9 +679,18 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
+  const getLiveMatchSeconds = (presence?: PresenceData | null, observedAt?: number | null) => {
+    const base = presence?.match_seconds;
+    if (!Number.isFinite(base)) return null;
+    if (!observedAt) return Math.floor(base || 0);
+    const delta = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+    return Math.floor((base || 0) + delta);
+  };
+
   const formatStartTime = (value?: string) => {
+    if (!value) return "";
     const ts = parseDateTime(value);
-    if (!ts) return "";
+    if (!ts) return value;
     return new Date(ts).toLocaleTimeString();
   };
 
@@ -728,6 +784,96 @@ const App: React.FC = () => {
     }
   };
 
+  const loadBlacklist = async (query?: string) => {
+    if (!token) return;
+    setBlacklistLoading(true);
+    try {
+      const trimmed = (query ?? "").trim();
+      const url = trimmed ? `/api/blacklist?query=${encodeURIComponent(trimmed)}` : "/api/blacklist";
+      const data = await apiFetch<{ items: any[] }>(url).catch(() => ({ items: [] }));
+      const mapped: BlacklistEntry[] = (data.items || [])
+        .map((item, idx) => ({
+          id: item.id ?? idx,
+          owner: String(item.owner ?? "").trim(),
+          reason: item.reason ?? null,
+          createdAt: item.created_at ?? item.createdAt ?? null,
+        }))
+        .filter((item) => item.owner);
+      setBlacklistEntries(mapped);
+      setBlacklistSelected((prev) => prev.filter((owner) => mapped.some((entry) => entry.owner === owner)));
+    } catch (error) {
+      showToast((error as Error).message || "Failed to load blacklist", "error");
+      setBlacklistEntries([]);
+    } finally {
+      setBlacklistLoading(false);
+    }
+  };
+
+  const toggleBlacklistSelected = (owner: string) => {
+    setBlacklistSelected((prev) => (prev.includes(owner) ? prev.filter((item) => item !== owner) : [...prev, owner]));
+  };
+
+  const toggleBlacklistSelectAll = () => {
+    if (!blacklistEntries.length) return;
+    setBlacklistSelected((prev) =>
+      prev.length === blacklistEntries.length ? [] : blacklistEntries.map((entry) => entry.owner)
+    );
+  };
+
+  const handleAddBlacklist = async () => {
+    const owner = blacklistOwner.trim();
+    if (!owner) {
+      showToast("Enter a buyer username.", "error");
+      return;
+    }
+    try {
+      await apiFetch("/api/blacklist", {
+        method: "POST",
+        body: JSON.stringify({ owner, reason: blacklistReason.trim() || null }),
+      });
+      showToast("User added to blacklist.");
+      setBlacklistOwner("");
+      setBlacklistReason("");
+      loadBlacklist(blacklistQuery);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to add user", "error");
+    }
+  };
+
+  const handleRemoveSelected = async () => {
+    if (!blacklistSelected.length) {
+      showToast("Select users to unblacklist.", "error");
+      return;
+    }
+    try {
+      await apiFetch("/api/blacklist/remove", {
+        method: "POST",
+        body: JSON.stringify({ owners: blacklistSelected }),
+      });
+      showToast("Selected users removed from blacklist.");
+      setBlacklistSelected([]);
+      loadBlacklist(blacklistQuery);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to unblacklist users", "error");
+    }
+  };
+
+  const handleClearBlacklist = async () => {
+    if (!blacklistEntries.length) {
+      showToast("Blacklist is already empty.", "error");
+      return;
+    }
+    if (!window.confirm("Remove everyone from the blacklist?")) return;
+    try {
+      await apiFetch("/api/blacklist/clear", { method: "POST" });
+      showToast("Blacklist cleared.");
+      setBlacklistSelected([]);
+      loadBlacklist(blacklistQuery);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to clear blacklist", "error");
+    }
+  };
+
   const sendChatMessage = async () => {
     const text = chatInput.trim();
     if (!text || selectedChat === null || selectedChat === undefined) {
@@ -754,6 +900,9 @@ const App: React.FC = () => {
       setChatMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
     }
   };
+
+  const allBlacklistSelected =
+    blacklistEntries.length > 0 && blacklistSelected.length === blacklistEntries.length;
 
   return (
     <>
@@ -822,35 +971,37 @@ const App: React.FC = () => {
                     if (!item) return null;
                     const isActive = activeNav === item.id;
                     return (
-                      <AnimatePresence>
-                        <motion.button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveNav(item.id);
-                            const nextPath = navIdToPath[item.id] || "/dashboard";
-                            window.history.replaceState(null, "", nextPath);
-                            setPathname(nextPath);
-                          }}
-                          className="relative mt-auto flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
-                          whileHover={{ scale: 1.01 }}
-                          transition={{ type: "spring", stiffness: 320, damping: 30 }}
-                        >
-                          {isActive && (
-                            <motion.span
-                              layoutId="navHighlight"
-                              className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
-                              transition={{ type: "spring", stiffness: 280, damping: 26 }}
-                            />
-                          )}
-                          <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
-                            <item.Icon />
-                          </span>
-                          <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
-                            {item.label}
-                          </span>
-                        </motion.button>
-                      </AnimatePresence>
+                      <div className="mt-auto pb-4">
+                        <AnimatePresence>
+                          <motion.button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setActiveNav(item.id);
+                              const nextPath = navIdToPath[item.id] || "/dashboard";
+                              window.history.replaceState(null, "", nextPath);
+                              setPathname(nextPath);
+                            }}
+                            className="relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-4 py-3 text-left text-sm font-semibold transition focus:outline-none"
+                            whileHover={{ scale: 1.01 }}
+                            transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                          >
+                            {isActive && (
+                              <motion.span
+                                layoutId="navHighlight"
+                                className="absolute inset-0 rounded-md bg-neutral-900 text-white shadow-[0_10px_25px_-15px_rgba(0,0,0,0.45)]"
+                                transition={{ type: "spring", stiffness: 280, damping: 26 }}
+                              />
+                            )}
+                            <span className={`relative z-10 text-base ${isActive ? "text-white" : "text-neutral-500"}`}>
+                              <item.Icon />
+                            </span>
+                            <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
+                              {item.label}
+                            </span>
+                          </motion.button>
+                        </AnimatePresence>
+                      </div>
                     );
                   })()}
                 </nav>
@@ -1203,11 +1354,11 @@ const App: React.FC = () => {
                         <div className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-semibold text-white">
                           {rentalsTable.length} active rentals
                         </div>
-                        <div className="text-sm text-neutral-500">Updated live every minute</div>
+                        <div className="text-sm text-neutral-500">Updated live every second</div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                         <div
-                          className="grid gap-2 text-xs font-semibold text-neutral-500"
+                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
                           style={{ gridTemplateColumns: RENTALS_GRID }}
                         >
                           <span>ID</span>
@@ -1223,7 +1374,9 @@ const App: React.FC = () => {
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
                             const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
-                            const timer = formatMatchTime(presence?.match_time, presence?.match_seconds) || "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const liveSeconds = getLiveMatchSeconds(presence, observedAt);
+                            const timer = formatMatchTime(presence?.match_time, liveSeconds) || "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1235,16 +1388,16 @@ const App: React.FC = () => {
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
-                                <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
-                                <span className="truncate text-neutral-800">{r.accountName || ""}</span>
-                                <span className="truncate text-neutral-700">{r.buyer || ""}</span>
-                                <span className="truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
-                                <span className="truncate font-mono text-neutral-900">{timeLeft}</span>
-                                <span className="truncate font-mono text-neutral-900">{timer}</span>
-                                <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
+                                <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-700">{r.buyer || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
+                                <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
+                                <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
+                                <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
                                 <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
                               </motion.div>
                             );
@@ -1254,6 +1407,143 @@ const App: React.FC = () => {
                               No active rentals yet.
                             </div>
                           )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "blacklist" ? (
+                    <motion.div
+                      key="blacklist"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 space-y-6"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">Blacklist</h3>
+                            <p className="text-sm text-neutral-500">
+                              Block buyers from renting and auto-reply with an admin notice.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                              {blacklistEntries.length} blocked
+                            </span>
+                            <button
+                              onClick={() => loadBlacklist(blacklistQuery)}
+                              className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+                            >
+                              Refresh
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
+                          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                            <div className="mb-2 text-sm font-semibold text-neutral-800">Add to blacklist</div>
+                            <div className="space-y-3">
+                              <input
+                                value={blacklistOwner}
+                                onChange={(e) => setBlacklistOwner(e.target.value)}
+                                placeholder="Buyer username"
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              />
+                              <input
+                                value={blacklistReason}
+                                onChange={(e) => setBlacklistReason(e.target.value)}
+                                placeholder="Reason (optional)"
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              />
+                              <button
+                                onClick={handleAddBlacklist}
+                                disabled={!blacklistOwner.trim()}
+                                className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                              >
+                                Add user
+                              </button>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                            <div className="mb-2 text-sm font-semibold text-neutral-800">Manage</div>
+                            <input
+                              value={blacklistQuery}
+                              onChange={(e) => setBlacklistQuery(e.target.value)}
+                              placeholder="Search by buyer"
+                              type="search"
+                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                            />
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                onClick={handleRemoveSelected}
+                                disabled={!blacklistSelected.length}
+                                className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                              >
+                                Unblacklist selected
+                              </button>
+                              <button
+                                onClick={handleClearBlacklist}
+                                disabled={!blacklistEntries.length}
+                                className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                              >
+                                Unblacklist all
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-5 rounded-2xl border border-neutral-200 bg-white">
+                          <div
+                            className="grid gap-3 px-6 py-3 text-xs font-semibold text-neutral-500"
+                            style={{ gridTemplateColumns: BLACKLIST_GRID }}
+                          >
+                            <label className="flex items-center justify-center">
+                              <input
+                                type="checkbox"
+                                checked={allBlacklistSelected}
+                                onChange={toggleBlacklistSelectAll}
+                                className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
+                              />
+                            </label>
+                            <span>Buyer</span>
+                            <span>Reason</span>
+                            <span>Added</span>
+                          </div>
+                          <div className="divide-y divide-neutral-100">
+                            {blacklistLoading ? (
+                              <div className="px-6 py-6 text-center text-sm text-neutral-500">
+                                Loading blacklist...
+                              </div>
+                            ) : blacklistEntries.length ? (
+                              blacklistEntries.map((entry, idx) => {
+                                const isSelected = blacklistSelected.includes(entry.owner);
+                                return (
+                                  <div
+                                    key={entry.id ?? entry.owner ?? idx}
+                                    className={`grid items-center gap-3 px-6 py-3 text-sm ${
+                                      isSelected ? "bg-neutral-50" : "bg-white"
+                                    }`}
+                                    style={{ gridTemplateColumns: BLACKLIST_GRID }}
+                                  >
+                                    <label className="flex items-center justify-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => toggleBlacklistSelected(entry.owner)}
+                                        className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
+                                      />
+                                    </label>
+                                    <span className="min-w-0 truncate font-semibold text-neutral-900">{entry.owner}</span>
+                                    <span className="min-w-0 truncate text-neutral-600">{entry.reason || "—"}</span>
+                                    <span className="text-xs text-neutral-500">
+                                      {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="px-6 py-6 text-center text-sm text-neutral-500">
+                                Blacklist is empty.
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </motion.div>
@@ -1411,7 +1701,7 @@ const App: React.FC = () => {
                           <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
                         </div>
                         <div
-                          className="grid gap-2 text-xs font-semibold text-neutral-500"
+                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
                           style={{ gridTemplateColumns: RENTALS_GRID }}
                         >
                           <span>ID</span>
@@ -1427,7 +1717,9 @@ const App: React.FC = () => {
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
                             const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
-                            const timer = formatMatchTime(presence?.match_time, presence?.match_seconds) || "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const liveSeconds = getLiveMatchSeconds(presence, observedAt);
+                            const timer = formatMatchTime(presence?.match_time, liveSeconds) || "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1439,16 +1731,16 @@ const App: React.FC = () => {
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
-                                <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
-                                <span className="truncate text-neutral-800">{r.accountName || ""}</span>
-                                <span className="truncate text-neutral-700">{r.buyer || ""}</span>
-                                <span className="truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
-                                <span className="truncate font-mono text-neutral-900">{timeLeft}</span>
-                                <span className="truncate font-mono text-neutral-900">{timer}</span>
-                                <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
+                                <span className="min-w-0 truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-700">{r.buyer || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
+                                <span className="min-w-0 truncate font-mono text-neutral-900">{timeLeft}</span>
+                                <span className="min-w-0 truncate font-mono text-neutral-900">{timer}</span>
+                                <span className="min-w-0 truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
                                 <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
                               </motion.div>
                             );
@@ -1480,4 +1772,5 @@ type PresenceData = {
   hero_name?: string | null;
   match_time?: string | null;
   match_seconds?: number | null;
+  fetched_at?: number | null;
 };

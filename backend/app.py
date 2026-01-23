@@ -628,6 +628,15 @@ class GoldenKeyUpdate(BaseModel):
     golden_key: str
 
 
+class BlacklistCreate(BaseModel):
+    owner: str
+    reason: Optional[str] = None
+
+
+class BlacklistRemove(BaseModel):
+    owners: list[str]
+
+
 @app.get("/api/health")
 def health() -> dict:
     funpay_available = db.has_any_golden_key()
@@ -696,6 +705,39 @@ def stats(request: Request) -> dict:
 @app.get("/api/notifications", dependencies=[Depends(require_admin)])
 def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
+
+
+@app.get("/api/blacklist", dependencies=[Depends(require_admin)])
+def blacklist_list(request: Request, query: str = "") -> dict:
+    uid = current_user_id(request)
+    items = db.list_blacklist(uid, query=query or None)
+    return {"items": items}
+
+
+@app.post("/api/blacklist", dependencies=[Depends(require_admin)])
+def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
+    uid = current_user_id(request)
+    owner = (payload.owner or "").strip()
+    if not owner:
+        raise HTTPException(status_code=400, detail="Owner is required")
+    success = db.add_blacklist_entry(owner, payload.reason, uid)
+    if not success:
+        raise HTTPException(status_code=400, detail="User already blacklisted")
+    return {"success": True}
+
+
+@app.post("/api/blacklist/remove", dependencies=[Depends(require_admin)])
+def blacklist_remove(payload: BlacklistRemove, request: Request) -> dict:
+    uid = current_user_id(request)
+    removed = db.remove_blacklist_entries(payload.owners, uid)
+    return {"removed": removed}
+
+
+@app.post("/api/blacklist/clear", dependencies=[Depends(require_admin)])
+def blacklist_clear(request: Request) -> dict:
+    uid = current_user_id(request)
+    removed = db.clear_blacklist(uid)
+    return {"removed": removed}
 
 
 def _format_match_time(seconds: int | float | None) -> str | None:
