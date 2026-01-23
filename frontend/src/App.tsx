@@ -572,6 +572,7 @@ const App: React.FC = () => {
   const { toast, showToast } = useToast();
   const sessionKey = useMemo(() => (token ? profileName || "session" : ""), [token, profileName]);
   const lastSessionRef = useRef<string>("");
+  const presenceWarmupRef = useRef<number>(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1170,6 +1171,25 @@ const App: React.FC = () => {
       loadNotifications();
     }
   }, [token, sessionKey, loadOverview, loadNotifications]);
+
+  useEffect(() => {
+    if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
+    if (!rentalsTable.length) return;
+    const anyPresence = rentalsTable.some((item) => item.presence);
+    if (!anyPresence) return;
+    const allOffline = rentalsTable.every((item) => {
+      const presence = item.presence;
+      return !presence || (!presence.in_game && !presence.in_match);
+    });
+    if (!allOffline) return;
+    const nowTs = Date.now();
+    if (nowTs - presenceWarmupRef.current < 8000) return;
+    presenceWarmupRef.current = nowTs;
+    const handle = window.setTimeout(() => {
+      loadOverview();
+    }, 2000);
+    return () => window.clearTimeout(handle);
+  }, [token, activeNav, rentalsTable, loadOverview]);
 
   // load chat list when on chats tab
   useEffect(() => {
