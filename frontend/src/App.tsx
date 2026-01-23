@@ -601,6 +601,20 @@ const App: React.FC = () => {
   const chatHistoryRequestRef = useRef<number>(0);
   const lastClearedChatRef = useRef<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const clearedAdminCallsRef = useRef<Record<string, number>>({});
+
+  const parseAdminCallTimestamp = (value?: string | null) => {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric)) return null;
+      return numeric < 1e12 ? numeric * 1000 : numeric;
+    }
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? null : parsed;
+  };
 
   useEffect(() => {
     const root = document.documentElement;
@@ -628,6 +642,25 @@ const App: React.FC = () => {
 
   const { apiFetch, apiFetchWithMeta } = api;
 
+  const applyAdminCallOverrides = useCallback((items: ChatItem[]) => {
+    const cleared = clearedAdminCallsRef.current;
+    return items.map((chat) => {
+      const key = String(chat.id ?? "");
+      const clearedAt = cleared[key];
+      if (!clearedAt) return chat;
+      const lastCalledAt = parseAdminCallTimestamp(chat.adminLastCalledAt);
+      if (lastCalledAt && lastCalledAt > clearedAt) {
+        delete cleared[key];
+        return chat;
+      }
+      if (!chat.adminCalls && !lastCalledAt) {
+        delete cleared[key];
+        return chat;
+      }
+      return { ...chat, adminCalls: 0, adminLastCalledAt: null };
+    });
+  }, []);
+
   const clearAdminCall = useCallback(
     async (chatId: string | number | null) => {
       if (!token || chatId === null || chatId === undefined) return;
@@ -635,6 +668,7 @@ const App: React.FC = () => {
       const currentCount = adminCallCountsRef.current[chatKey] || 0;
       if (lastClearedChatRef.current === chatKey && currentCount === 0) return;
       lastClearedChatRef.current = chatKey;
+      clearedAdminCallsRef.current[chatKey] = Date.now();
       adminCallCountsRef.current[chatKey] = 0;
       setChats((prev) =>
         prev.map((chat) =>
@@ -1172,7 +1206,8 @@ const App: React.FC = () => {
         revalidate,
         onLoading: setChatListLoading,
         onData: (items) => {
-          setChats(items);
+          const nextItems = applyAdminCallOverrides(items);
+          setChats(nextItems);
           if ((selectedChat === null || selectedChat === undefined) && items.length) {
             setSelectedChat(items[0].id);
           }
@@ -1180,7 +1215,7 @@ const App: React.FC = () => {
         map: mapChatItems,
       });
     },
-    [token, selectedChat, swrFetch, mapChatItems, scopedKey]
+    [token, selectedChat, swrFetch, mapChatItems, scopedKey, applyAdminCallOverrides]
   );
 
   const loadChatHistory = useCallback(
@@ -1328,8 +1363,9 @@ const App: React.FC = () => {
       try {
         const payload = JSON.parse(event.data || "{}");
         const items = mapChatItems(payload);
-        setChats(items);
-        writeCache(scopedKey(CHAT_LIST_CACHE_KEY), items);
+        const nextItems = applyAdminCallOverrides(items);
+        setChats(nextItems);
+        writeCache(scopedKey(CHAT_LIST_CACHE_KEY), nextItems);
         if (items.length) {
           setSelectedChat((prev) => (prev === null || prev === undefined ? items[0].id : prev));
         }
@@ -1337,7 +1373,7 @@ const App: React.FC = () => {
         const nowTs = Date.now();
         const prevCounts = adminCallCountsRef.current;
         const nextCounts: Record<string, number> = {};
-        items.forEach((chat) => {
+        nextItems.forEach((chat) => {
           const key = String(chat.id ?? "");
           const count = Number(chat.adminCalls || 0);
           nextCounts[key] = count;
@@ -1376,7 +1412,7 @@ const App: React.FC = () => {
       }
       setChatStreamActive(false);
     };
-  }, [token, sessionKey, activeNav, mapChatItems, scopedKey, showToast]);
+  }, [token, sessionKey, activeNav, mapChatItems, scopedKey, showToast, applyAdminCallOverrides]);
 
   useEffect(() => {
     if (!token || activeNav !== "chats" || !selectedChat) {
