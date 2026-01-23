@@ -47,6 +47,7 @@ PENDING_EXTEND_TTL_SECONDS = 6 * 60 * 60
 MMR_RANGE_DEFAULT = 1000
 STOCK_LIST_LIMIT = 8
 LP_EXCHANGE_WINDOW_MINUTES = 10
+RUNNER_REQUEST_DELAY_SECONDS = 1.5
 ACCOUNT_LABEL_NOISE_RE = re.compile(r"\b(?:\u0430\u0440\u0435\u043d\u0434\u0430|rent(?:al)?)\b", re.IGNORECASE)
 COMMANDS_HELP = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
@@ -372,7 +373,7 @@ class FunpayBot:
         if self._runner is None:
             raise RuntimeError("Runner not initialized")
 
-        for event in self._runner.listen(requests_delay=8):
+        for event in self._runner.listen(requests_delay=RUNNER_REQUEST_DELAY_SECONDS):
             try:
                 self._tick_refresh_if_needed()
 
