@@ -436,8 +436,10 @@ class MySQLDB:
         self._ensure_users_table()
         self._ensure_user_owner_columns()
         self._ensure_feedback_rewards_table()
+        self._ensure_feedback_rewards_user_column()
         self._ensure_blacklist_table()
         self._ensure_feedback_rewards_revoked_column()
+        self._ensure_funpay_balance_table()
         self._ensure_order_history_columns()
         self._migrate_lots_schema()
 
@@ -614,6 +616,7 @@ class MySQLDB:
                 CREATE TABLE IF NOT EXISTS feedback_rewards (
                     order_id VARCHAR(16) PRIMARY KEY,
                     owner VARCHAR(255) NOT NULL,
+                    user_id INT NOT NULL DEFAULT 0,
                     rating INT NOT NULL,
                     review_text TEXT DEFAULT NULL,
                     reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -623,6 +626,71 @@ class MySQLDB:
                 )
                 """
             )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_feedback_rewards_user_column(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = ? AND table_name = 'feedback_rewards' AND column_name = 'user_id'
+                    """,
+                    (MYSQLDATABASE,),
+                )
+                exists = cursor.fetchone()[0] > 0
+                if not exists:
+                    cursor.execute("ALTER TABLE feedback_rewards ADD COLUMN user_id INT NOT NULL DEFAULT 0")
+                    self.conn.commit()
+            else:
+                cursor.execute("PRAGMA table_info(feedback_rewards)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if "user_id" not in cols:
+                    cursor.execute("ALTER TABLE feedback_rewards ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+                    self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_funpay_balance_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS funpay_balance_snapshots (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        user_id INT NOT NULL DEFAULT 0,
+                        total_rub DECIMAL(12,2) NULL,
+                        available_rub DECIMAL(12,2) NULL,
+                        total_usd DECIMAL(12,2) NULL,
+                        total_eur DECIMAL(12,2) NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_balance_user_created (user_id, created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS funpay_balance_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL DEFAULT 0,
+                        total_rub REAL,
+                        available_rub REAL,
+                        total_usd REAL,
+                        total_eur REAL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
             self.conn.commit()
         except Exception:
             pass
@@ -2052,6 +2120,161 @@ class MySQLDB:
             if cursor:
                 cursor.close()
 
+    def insert_balance_snapshot(
+        self,
+        user_id: int | None,
+        total_rub: float | None,
+        available_rub: float | None,
+        total_usd: float | None,
+        total_eur: float | None,
+    ) -> bool:
+        cursor = None
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                INSERT INTO funpay_balance_snapshots (
+                    user_id, total_rub, available_rub, total_usd, total_eur
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    int(user_id or 0),
+                    float(total_rub) if total_rub is not None else None,
+                    float(available_rub) if available_rub is not None else None,
+                    float(total_usd) if total_usd is not None else None,
+                    float(total_eur) if total_eur is not None else None,
+                ),
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Error inserting balance snapshot: {exc}")
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_latest_balance_snapshot(self, user_id: int | None = None) -> dict | None:
+        cursor = None
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT total_rub, available_rub, total_usd, total_eur, created_at
+                FROM funpay_balance_snapshots
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (int(user_id or 0),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "total_rub": row[0],
+                "available_rub": row[1],
+                "total_usd": row[2],
+                "total_eur": row[3],
+                "created_at": row[4],
+            }
+        except Exception as exc:
+            logger.error(f"Error reading balance snapshot: {exc}")
+            return None
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_balance_snapshots(self, user_id: int | None = None, days: int = 30) -> list:
+        cursor = None
+        try:
+            since = (datetime.utcnow() - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT total_rub, available_rub, total_usd, total_eur, created_at
+                FROM funpay_balance_snapshots
+                WHERE user_id = ? AND created_at >= ?
+                ORDER BY created_at ASC
+                """,
+                (int(user_id or 0), since),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "total_rub": row[0],
+                    "available_rub": row[1],
+                    "total_usd": row[2],
+                    "total_eur": row[3],
+                    "created_at": row[4],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error reading balance snapshots: {exc}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_order_counts_by_day(
+        self,
+        user_id: int | None,
+        actions: list[str] | None = None,
+        days: int = 30,
+    ) -> dict:
+        cursor = None
+        if not actions:
+            return {}
+        try:
+            since = (datetime.utcnow() - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor = self._cursor()
+            placeholders = ", ".join(["?"] * len(actions))
+            cursor.execute(
+                f"""
+                SELECT DATE(created_at) as day, COUNT(*)
+                FROM order_history
+                WHERE (user_id = ? OR user_id = 0) AND action IN ({placeholders}) AND created_at >= ?
+                GROUP BY day
+                """,
+                (int(user_id or 0), *actions, since),
+            )
+            rows = cursor.fetchall()
+            return {str(row[0]): int(row[1]) for row in rows}
+        except Exception as exc:
+            logger.error(f"Error reading order counts: {exc}")
+            return {}
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_review_counts_by_day(
+        self,
+        user_id: int | None = None,
+        days: int = 30,
+    ) -> dict:
+        cursor = None
+        try:
+            since = (datetime.utcnow() - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT DATE(reviewed_at) as day, COUNT(*)
+                FROM feedback_rewards
+                WHERE (user_id = ? OR user_id = 0) AND reviewed_at >= ?
+                GROUP BY day
+                """,
+                (int(user_id or 0), since),
+            )
+            rows = cursor.fetchall()
+            return {str(row[0]): int(row[1]) for row in rows}
+        except Exception as exc:
+            logger.error(f"Error reading review counts: {exc}")
+            return {}
+        finally:
+            if cursor:
+                cursor.close()
+
     def _ensure_order_history_columns(self):
         cursor = self._cursor()
         try:
@@ -2400,34 +2623,44 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def upsert_feedback_reward(self, order_id: str, owner: str, rating: int, review_text: str | None) -> bool:
+    def upsert_feedback_reward(
+        self,
+        order_id: str,
+        owner: str,
+        rating: int,
+        review_text: str | None,
+        user_id: int | None = None,
+    ) -> bool:
         try:
             cursor = self._cursor()
+            uid = int(user_id or 0)
             if self.db_type == "mysql":
                 cursor.execute(
                     """
-                    INSERT INTO feedback_rewards (order_id, owner, rating, review_text)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO feedback_rewards (order_id, owner, user_id, rating, review_text)
+                    VALUES (?, ?, ?, ?, ?)
                     ON DUPLICATE KEY UPDATE
                         owner = VALUES(owner),
+                        user_id = VALUES(user_id),
                         rating = VALUES(rating),
                         review_text = VALUES(review_text),
                         reviewed_at = CURRENT_TIMESTAMP
                     """,
-                    (order_id, owner, int(rating), review_text),
+                    (order_id, owner, uid, int(rating), review_text),
                 )
             else:
                 cursor.execute(
                     """
-                    INSERT INTO feedback_rewards (order_id, owner, rating, review_text, reviewed_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO feedback_rewards (order_id, owner, user_id, rating, review_text, reviewed_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(order_id) DO UPDATE SET
                         owner = excluded.owner,
+                        user_id = excluded.user_id,
                         rating = excluded.rating,
                         review_text = excluded.review_text,
                         reviewed_at = excluded.reviewed_at
                     """,
-                    (order_id, owner, int(rating), review_text),
+                    (order_id, owner, uid, int(rating), review_text),
                 )
             self.conn.commit()
             return True
@@ -2437,18 +2670,24 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def get_unclaimed_feedback_reward(self, owner: str, min_rating: int = 5) -> dict | None:
+    def get_unclaimed_feedback_reward(
+        self,
+        owner: str,
+        min_rating: int = 5,
+        user_id: int | None = None,
+    ) -> dict | None:
         try:
             cursor = self._cursor()
+            uid = int(user_id or 0)
             cursor.execute(
                 """
                 SELECT order_id, rating, review_text, reviewed_at
                 FROM feedback_rewards
-                WHERE owner = ? AND claimed_at IS NULL AND rating >= ?
+                WHERE owner = ? AND (user_id = ? OR user_id = 0) AND claimed_at IS NULL AND rating >= ?
                 ORDER BY reviewed_at DESC
                 LIMIT 1
                 """,
-                (owner, int(min_rating)),
+                (owner, uid, int(min_rating)),
             )
             row = cursor.fetchone()
             if not row:
@@ -2465,16 +2704,22 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def mark_feedback_reward_claimed(self, order_id: str, account_id: int | None = None) -> bool:
+    def mark_feedback_reward_claimed(
+        self,
+        order_id: str,
+        account_id: int | None = None,
+        user_id: int | None = None,
+    ) -> bool:
         try:
             cursor = self._cursor()
+            uid = int(user_id or 0)
             cursor.execute(
                 """
                 UPDATE feedback_rewards
                 SET claimed_at = CURRENT_TIMESTAMP, account_id = ?
-                WHERE order_id = ? AND claimed_at IS NULL
+                WHERE order_id = ? AND claimed_at IS NULL AND (user_id = ? OR user_id = 0)
                 """,
-                (account_id, order_id),
+                (account_id, order_id, uid),
             )
             self.conn.commit()
             return cursor.rowcount > 0
@@ -2484,16 +2729,17 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def get_feedback_reward(self, order_id: str) -> dict | None:
+    def get_feedback_reward(self, order_id: str, user_id: int | None = None) -> dict | None:
         try:
             cursor = self._cursor()
+            uid = int(user_id or 0)
             cursor.execute(
                 """
-                SELECT order_id, owner, rating, review_text, reviewed_at, claimed_at, account_id, revoked_at
+                SELECT order_id, owner, rating, review_text, reviewed_at, claimed_at, account_id, revoked_at, user_id
                 FROM feedback_rewards
-                WHERE order_id = ?
+                WHERE order_id = ? AND (user_id = ? OR user_id = 0)
                 """,
-                (order_id,),
+                (order_id, uid),
             )
             row = cursor.fetchone()
             if not row:
@@ -2507,6 +2753,7 @@ class MySQLDB:
                 "claimed_at": row[5],
                 "account_id": row[6],
                 "revoked_at": row[7],
+                "user_id": row[8],
             }
         except Exception as e:
             logger.error(f"Error reading feedback reward: {str(e)}")
@@ -2514,16 +2761,17 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def mark_feedback_reward_revoked(self, order_id: str) -> bool:
+    def mark_feedback_reward_revoked(self, order_id: str, user_id: int | None = None) -> bool:
         try:
             cursor = self._cursor()
+            uid = int(user_id or 0)
             cursor.execute(
                 """
                 UPDATE feedback_rewards
                 SET revoked_at = CURRENT_TIMESTAMP
-                WHERE order_id = ? AND revoked_at IS NULL
+                WHERE order_id = ? AND revoked_at IS NULL AND (user_id = ? OR user_id = 0)
                 """,
-                (order_id,),
+                (order_id, uid),
             )
             self.conn.commit()
             return cursor.rowcount > 0

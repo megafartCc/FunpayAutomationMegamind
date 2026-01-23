@@ -59,6 +59,28 @@ type NotificationItem = {
   accountId?: string | number;
 };
 
+type FunpayStatsPayload = {
+  balance?: {
+    total_rub?: number | null;
+    available_rub?: number | null;
+    total_usd?: number | null;
+    total_eur?: number | null;
+    created_at?: string | null;
+  } | null;
+  balance_series?: number[];
+  orders?: {
+    daily?: number[];
+    weekly?: number[];
+    monthly?: number[];
+  };
+  reviews?: {
+    daily?: number[];
+    weekly?: number[];
+    monthly?: number[];
+  };
+  generated_at?: string | null;
+};
+
 type OrderHistoryItem = {
   id?: string | number;
   orderId?: string;
@@ -373,6 +395,12 @@ const App: React.FC = () => {
     past24: null,
     totalHours: null,
   });
+  const [funpayStats, setFunpayStats] = useState<FunpayStatsPayload>({
+    balance_series: [],
+    orders: { daily: [], weekly: [], monthly: [] },
+    reviews: { daily: [], weekly: [], monthly: [] },
+  });
+  const [funpayStatsLoading, setFunpayStatsLoading] = useState(false);
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | number | null>(null);
   const [assignOwner, setAssignOwner] = useState("");
@@ -662,20 +690,14 @@ const App: React.FC = () => {
             const hasPresence =
               r.in_match !== undefined ||
               r.in_game !== undefined ||
-              r.match_time ||
-              r.match_seconds !== undefined ||
               r.hero_name ||
               r.presence_label;
-            const matchSecondsRaw = Number(r.match_seconds);
-            const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
             const presenceFetchedAt = hasPresence ? Date.now() : null;
             const presence = hasPresence
               ? {
                   in_match: !!r.in_match,
                   in_game: !!r.in_game,
                   hero_name: r.hero_name ?? null,
-                  match_time: r.match_time ?? null,
-                  match_seconds: matchSeconds,
                   fetched_at: presenceFetchedAt,
                 }
               : null;
@@ -742,6 +764,31 @@ const App: React.FC = () => {
     }
   }, [apiFetch]);
 
+  const loadFunpayStats = useCallback(
+    async (force = false) => {
+      setFunpayStatsLoading(true);
+      try {
+        const qs = new URLSearchParams();
+        if (force) qs.set("refresh", "1");
+        const query = qs.toString();
+        const url = query ? `/api/funpay/stats?${query}` : "/api/funpay/stats";
+        const data = await apiFetch<FunpayStatsPayload>(url).catch(() => null);
+        if (data) {
+          setFunpayStats({
+            balance: data.balance ?? null,
+            balance_series: data.balance_series ?? [],
+            orders: data.orders ?? { daily: [], weekly: [], monthly: [] },
+            reviews: data.reviews ?? { daily: [], weekly: [], monthly: [] },
+            generated_at: data.generated_at ?? null,
+          });
+        }
+      } finally {
+        setFunpayStatsLoading(false);
+      }
+    },
+    [apiFetch]
+  );
+
   const loadOrdersHistory = useCallback(
     async (queryText: string) => {
       setOrdersLoading(true);
@@ -805,6 +852,11 @@ const App: React.FC = () => {
     }, 250);
     return () => clearTimeout(handle);
   }, [token, activeNav, blacklistQuery]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "funpay-stats") return;
+    loadFunpayStats(false);
+  }, [token, activeNav, loadFunpayStats]);
 
   useEffect(() => {
     if (!token || activeNav !== "orders") return;
@@ -892,29 +944,6 @@ const App: React.FC = () => {
     return `${h}:${m}:${s}`;
   };
 
-  const formatMatchTime = (matchSeconds?: number | null) => {
-    const numeric = typeof matchSeconds === "number" ? matchSeconds : Number(matchSeconds);
-    if (!Number.isFinite(numeric)) return "";
-    const total = Math.max(0, Math.floor(numeric || 0));
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
-    if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-    }
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
-  };
-
-  const getMatchTimeDisplay = (presence?: PresenceData | null) => {
-    if (!presence) return null;
-    const rawSeconds = presence.match_seconds;
-    if (Number.isFinite(rawSeconds)) return formatMatchTime(rawSeconds);
-    const raw = presence.match_time;
-    if (raw === null || raw === undefined) return null;
-    const cleaned = String(raw).trim();
-    return cleaned ? cleaned : null;
-  };
-
   const formatStartTime = (value?: string | number | null) => {
     if (value === null || value === undefined || value === "") return "";
     const ts = parseDateTime(value);
@@ -954,6 +983,7 @@ const App: React.FC = () => {
     if (lower.includes("extend")) return { className: "bg-sky-50 text-sky-600", label: "Extended" };
     if (lower.includes("paid")) return { className: "bg-amber-50 text-amber-600", label: "Paid" };
     if (lower.includes("refund")) return { className: "bg-rose-50 text-rose-600", label: "Refunded" };
+    if (lower.includes("closed")) return { className: "bg-neutral-200 text-neutral-700", label: "Closed" };
     if (lower.includes("blacklist")) return { className: "bg-neutral-200 text-neutral-700", label: "Blacklisted" };
     if (!lower) return { className: "bg-neutral-100 text-neutral-600", label: "-" };
     return { className: "bg-neutral-100 text-neutral-700", label: action || "-" };
@@ -966,20 +996,6 @@ const App: React.FC = () => {
   ];
 
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-  const makeSeries = (seed: number, points: number, min: number, max: number) => {
-    const values: number[] = [];
-    let s = Math.max(1, Math.floor(seed));
-    let current = clamp(min + (s % Math.max(1, max - min)), min, max);
-    for (let i = 0; i < points; i += 1) {
-      s = (s * 9301 + 49297) % 233280;
-      const rand = s / 233280;
-      const delta = Math.round((rand - 0.5) * (max - min) * 0.12);
-      current = clamp(current + delta, min, max);
-      values.push(current);
-    }
-    return values;
-  };
 
   const toLinePath = (values: number[]) => {
     if (!values.length) return "";
@@ -1028,36 +1044,30 @@ const App: React.FC = () => {
     );
   };
 
-  const statsSeed = useMemo(() => {
-    const seed =
-      (overview.activeRentals ?? 3) * 37 +
-      (overview.totalAccounts ?? 10) * 13 +
-      (overview.past24 ?? 1) * 7 +
-      19;
-    return seed || 17;
-  }, [overview.activeRentals, overview.totalAccounts, overview.past24]);
-
-  const balanceSeries = useMemo(() => makeSeries(statsSeed + 11, 22, 850, 5200), [statsSeed]);
+  const balanceSeries = funpayStats.balance_series ?? [];
   const reviewSeriesByRange = useMemo(
     () => ({
-      daily: makeSeries(statsSeed + 21, 14, 6, 28),
-      weekly: makeSeries(statsSeed + 22, 8, 40, 140),
-      monthly: makeSeries(statsSeed + 23, 12, 180, 520),
+      daily: funpayStats.reviews?.daily ?? [],
+      weekly: funpayStats.reviews?.weekly ?? [],
+      monthly: funpayStats.reviews?.monthly ?? [],
     }),
-    [statsSeed]
+    [funpayStats.reviews]
   );
   const orderSeriesByRange = useMemo(
     () => ({
-      daily: makeSeries(statsSeed + 31, 14, 4, 30),
-      weekly: makeSeries(statsSeed + 32, 8, 30, 120),
-      monthly: makeSeries(statsSeed + 33, 12, 120, 520),
+      daily: funpayStats.orders?.daily ?? [],
+      weekly: funpayStats.orders?.weekly ?? [],
+      monthly: funpayStats.orders?.monthly ?? [],
     }),
-    [statsSeed]
+    [funpayStats.orders]
   );
 
-  const reviewSeries = reviewSeriesByRange[reviewRange];
-  const orderSeries = orderSeriesByRange[orderRange];
-  const balanceCurrent = balanceSeries[balanceSeries.length - 1] ?? 0;
+  const reviewSeries = reviewSeriesByRange[reviewRange] ?? [];
+  const orderSeries = orderSeriesByRange[orderRange] ?? [];
+  const balanceCurrent =
+    funpayStats.balance?.total_rub ??
+    balanceSeries[balanceSeries.length - 1] ??
+    0;
   const balanceStart = balanceSeries[0] ?? balanceCurrent;
   const balanceDelta = balanceCurrent - balanceStart;
   const balanceDeltaPct = balanceStart ? Math.round((balanceDelta / balanceStart) * 100) : 0;
@@ -1243,7 +1253,7 @@ const App: React.FC = () => {
               selectedRental.durationSec != null && selectedRental.startedAt != null
                 ? formatDuration(selectedRental.durationSec, selectedRental.startedAt, now)
                 : "-";
-            const matchTime = getMatchTimeDisplay(presence) ?? "-";
+            const matchTime = "Placeholder";
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
             return (
               <div className="space-y-4">
@@ -1865,14 +1875,31 @@ const App: React.FC = () => {
                   )}
                   {activeNav === "funpay-stats" && (
                     <div className="mt-6 space-y-6">
-                      <div className="mb-2 text-lg font-semibold text-neutral-800">Funpay Statistics</div>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-lg font-semibold text-neutral-800">Funpay Statistics</div>
+                          <div className="text-xs text-neutral-500">
+                            {funpayStatsLoading ? "Refreshing..." : "Live data from your FunPay account."}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => loadFunpayStats(true)}
+                          className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-600"
+                        >
+                          Refresh
+                        </button>
+                      </div>
                       <div className="grid gap-6 lg:grid-cols-2">
                         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                           <div className="flex items-center justify-between">
                             <div>
                               <div className="text-sm font-semibold text-neutral-700">Balance</div>
                               <div className="mt-2 text-3xl font-bold text-neutral-900">RUB {balanceCurrent.toLocaleString()}</div>
-                              <div className="mt-1 text-xs text-neutral-500">Last 30 days</div>
+                              <div className="mt-1 text-xs text-neutral-500">
+                                {funpayStats.balance?.created_at
+                                  ? `Updated ${new Date(funpayStats.balance.created_at).toLocaleString()}`
+                                  : "Last 30 days"}
+                              </div>
                             </div>
                             <div
                               className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -1884,7 +1911,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                           <div className="mt-4 h-28">
-                            <Sparkline values={balanceSeries} colorClass="text-emerald-500" />
+                            <Sparkline values={balanceSeries.length ? balanceSeries : [0]} colorClass="text-emerald-500" />
                           </div>
                         </div>
                         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
@@ -1911,7 +1938,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                           <div className="mt-4 h-28">
-                            <Sparkline values={reviewSeries} colorClass="text-sky-500" />
+                            <Sparkline values={reviewSeries.length ? reviewSeries : [0]} colorClass="text-sky-500" />
                           </div>
                         </div>
                       </div>
@@ -1940,7 +1967,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                           <div className="mt-4">
-                            <BarChart values={orderSeries} barClass="bg-amber-500/80" />
+                            <BarChart values={orderSeries.length ? orderSeries : [0]} barClass="bg-amber-500/80" />
                           </div>
                         </div>
                         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
@@ -2261,7 +2288,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const timer = "Placeholder";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -2922,7 +2949,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const timer = "Placeholder";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game

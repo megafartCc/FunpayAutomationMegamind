@@ -1,6 +1,7 @@
 import html as html_module
 import json
 import os
+import random
 import re
 import subprocess
 import time
@@ -30,6 +31,7 @@ from backend.config import (
 )
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
+from FunPayAPI.common import enums as fp_enums
 from backend.logger import logger
 from backend.notifications import list_notifications
 from SteamHandler.changePassword import changeSteamPassword
@@ -200,6 +202,9 @@ CHAT_HISTORY_TTL = 3.0
 CHAT_HISTORY_MAX = 200
 PRESENCE_TTL = 10.0
 PRESENCE_OFFLINE_GRACE = 45.0
+BALANCE_REFRESH_SECONDS = 15 * 60
+BALANCE_SERIES_DAYS = 30
+STATS_SERIES_DAYS = 370
 
 
 class BotManager:
@@ -782,6 +787,89 @@ def notifications(limit: int = 50) -> dict:
     return {"items": list_notifications(limit=limit)}
 
 
+@app.get("/api/funpay/stats", dependencies=[Depends(require_admin)])
+def funpay_stats(request: Request, refresh: bool = False) -> dict:
+    user_id, token = require_funpay_token(request)
+    now = datetime.utcnow()
+    latest = db.get_latest_balance_snapshot(user_id)
+
+    latest_dt = None
+    if latest and latest.get("created_at"):
+        value = latest.get("created_at")
+        if isinstance(value, datetime):
+            latest_dt = value
+        else:
+            try:
+                latest_dt = datetime.fromisoformat(str(value))
+            except Exception:
+                try:
+                    latest_dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    latest_dt = None
+
+    should_refresh = refresh or latest is None
+    if latest_dt and not refresh:
+        age = (now - latest_dt).total_seconds()
+        if age < BALANCE_REFRESH_SECONDS:
+            should_refresh = False
+        else:
+            should_refresh = True
+
+    if should_refresh:
+        try:
+            balance = _fetch_funpay_balance(token)
+            if balance:
+                db.insert_balance_snapshot(
+                    user_id,
+                    balance.get("total_rub"),
+                    balance.get("available_rub"),
+                    balance.get("total_usd"),
+                    balance.get("total_eur"),
+                )
+                latest = {
+                    **balance,
+                    "created_at": now,
+                }
+        except Exception as exc:
+            logger.warning(f"Failed to refresh FunPay balance: {exc}")
+
+    snapshots = db.get_balance_snapshots(user_id, BALANCE_SERIES_DAYS)
+    if not snapshots and latest and latest.get("total_rub") is not None:
+        snapshots = [
+            {
+                "total_rub": latest.get("total_rub"),
+                "available_rub": latest.get("available_rub"),
+                "total_usd": latest.get("total_usd"),
+                "total_eur": latest.get("total_eur"),
+                "created_at": latest.get("created_at") or now,
+            }
+        ]
+    balance_series = _balance_series_from_snapshots(snapshots, BALANCE_SERIES_DAYS)
+
+    order_counts = db.get_order_counts_by_day(
+        user_id,
+        actions=["issued", "extended"],
+        days=STATS_SERIES_DAYS,
+    )
+    review_counts = db.get_review_counts_by_day(user_id, STATS_SERIES_DAYS)
+
+    return {
+        "balance": latest,
+        "balance_series": balance_series,
+        "orders": {
+            "daily": _build_daily_series(order_counts, 14),
+            "weekly": _build_weekly_series(order_counts, 8),
+            "monthly": _build_monthly_series(order_counts, 12),
+        },
+        "reviews": {
+            "daily": _build_daily_series(review_counts, 14),
+            "weekly": _build_weekly_series(review_counts, 8),
+            "monthly": _build_monthly_series(review_counts, 12),
+        },
+        "generated_at": now,
+    }
+
+
 @app.get("/api/orders/history", dependencies=[Depends(require_admin)])
 def orders_history(
     request: Request,
@@ -901,7 +989,51 @@ def orders_history(
         else:
             item["chat_url"] = None
 
-    return {"items": items}
+    allowed_actions = {"issued", "extended", "refunded", "closed"}
+    action_priority = {"refunded": 4, "extended": 3, "issued": 2, "closed": 1}
+
+    def created_key(value: Any) -> float:
+        if isinstance(value, datetime):
+            return value.timestamp()
+        if isinstance(value, (int, float)):
+            return float(value)
+        if value:
+            try:
+                return datetime.fromisoformat(str(value)).timestamp()
+            except Exception:
+                return 0.0
+        return 0.0
+
+    filtered = []
+    for item in items:
+        action = str(item.get("action") or "").lower()
+        if action in allowed_actions:
+            filtered.append(item)
+
+    dedup: dict[str, dict] = {}
+    for item in filtered:
+        order_id = str(item.get("order_id") or "")
+        if not order_id:
+            continue
+        action = str(item.get("action") or "").lower()
+        priority = action_priority.get(action, 0)
+        existing = dedup.get(order_id)
+        if not existing:
+            dedup[order_id] = item
+            continue
+        existing_action = str(existing.get("action") or "").lower()
+        existing_priority = action_priority.get(existing_action, 0)
+        if priority > existing_priority:
+            dedup[order_id] = item
+            continue
+        if priority == existing_priority:
+            if created_key(item.get("created_at")) > created_key(existing.get("created_at")):
+                dedup[order_id] = item
+
+    merged = list(dedup.values())
+    merged.sort(key=lambda row: created_key(row.get("created_at")), reverse=True)
+
+    return {"items": merged}
 
 
 @app.get("/api/blacklist", dependencies=[Depends(require_admin)])
@@ -950,6 +1082,135 @@ def _format_match_time(seconds: int | float | None) -> str | None:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+def _coerce_date(value: Any) -> datetime.date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(float(value)).date()
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _build_daily_series(counts: dict[str, int], days: int) -> list[int]:
+    total_days = max(1, int(days))
+    today = datetime.utcnow().date()
+    start = today - timedelta(days=total_days - 1)
+    series: list[int] = []
+    for idx in range(total_days):
+        day = start + timedelta(days=idx)
+        series.append(int(counts.get(day.isoformat(), 0)))
+    return series
+
+
+def _build_weekly_series(counts: dict[str, int], weeks: int) -> list[int]:
+    total_weeks = max(1, int(weeks))
+    today = datetime.utcnow().date()
+    current_week_start = today - timedelta(days=today.weekday())
+    series: list[int] = []
+    for idx in range(total_weeks):
+        week_start = current_week_start - timedelta(days=7 * (total_weeks - 1 - idx))
+        week_total = 0
+        for offset in range(7):
+            day = week_start + timedelta(days=offset)
+            week_total += int(counts.get(day.isoformat(), 0))
+        series.append(week_total)
+    return series
+
+
+def _add_months(base: datetime.date, delta: int) -> datetime.date:
+    month_index = (base.year * 12 + (base.month - 1)) + delta
+    year = month_index // 12
+    month = month_index % 12 + 1
+    return datetime(year, month, 1).date()
+
+
+def _build_monthly_series(counts: dict[str, int], months: int) -> list[int]:
+    total_months = max(1, int(months))
+    today = datetime.utcnow().date()
+    current_month_start = today.replace(day=1)
+    series: list[int] = []
+    for idx in range(total_months):
+        month_start = _add_months(current_month_start, -(total_months - 1 - idx))
+        next_month = _add_months(month_start, 1)
+        month_total = 0
+        day = month_start
+        while day < next_month:
+            month_total += int(counts.get(day.isoformat(), 0))
+            day += timedelta(days=1)
+        series.append(month_total)
+    return series
+
+
+def _balance_series_from_snapshots(snapshots: list[dict], days: int) -> list[float]:
+    total_days = max(1, int(days))
+    today = datetime.utcnow().date()
+    start = today - timedelta(days=total_days - 1)
+    daily: dict[str, float] = {}
+    for snap in snapshots:
+        snap_date = _coerce_date(snap.get("created_at"))
+        if not snap_date:
+            continue
+        key = snap_date.isoformat()
+        value = snap.get("total_rub")
+        if value is None:
+            continue
+        try:
+            daily[key] = float(value)
+        except Exception:
+            continue
+    series: list[float] = []
+    last_value: float | None = None
+    for idx in range(total_days):
+        day = start + timedelta(days=idx)
+        key = day.isoformat()
+        if key in daily:
+            last_value = daily[key]
+        if last_value is None:
+            series.append(0.0)
+        else:
+            series.append(last_value)
+    return series
+
+
+def _fetch_funpay_balance(token: str) -> dict | None:
+    account = FPAccount(token).get()
+    subcats = account.get_sorted_subcategories().get(fp_enums.SubCategoryTypes.COMMON, {}) or {}
+    subcat_ids = list(subcats.keys())
+    random.shuffle(subcat_ids)
+    for subcat_id in subcat_ids:
+        try:
+            lots = account.get_subcategory_public_lots(fp_enums.SubCategoryTypes.COMMON, subcat_id) or []
+        except Exception:
+            lots = []
+        if not lots:
+            continue
+        lot = random.choice(lots)
+        balance = account.get_balance(lot.id)
+        return {
+            "total_rub": balance.total_rub,
+            "available_rub": balance.available_rub,
+            "total_usd": balance.total_usd,
+            "total_eur": balance.total_eur,
+        }
+    return None
 
 
 def _presence_for_steamid(

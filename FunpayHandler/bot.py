@@ -466,16 +466,17 @@ class FunpayBot:
         price = getattr(order, "price", None)
         lot_number = parse_lot_number(description)
 
-        self._db.log_order_event(
-            order_id=order_id,
-            owner_id=buyer,
-            action=action,
-            account_name=description or None,
-            lot_number=lot_number,
-            amount=amount,
-            price=price,
-            user_id=self._user_id,
-        )
+        if action.lower() != "paid":
+            self._db.log_order_event(
+                order_id=order_id,
+                owner_id=buyer,
+                action=action,
+                account_name=description or None,
+                lot_number=lot_number,
+                amount=amount,
+                price=price,
+                user_id=self._user_id,
+            )
 
         send_message_to_admin(
             f"ORDER {action.upper()}\n\n"
@@ -993,10 +994,10 @@ class FunpayBot:
             return
         rating = int(review.stars)
         review_text = review.text or ""
-        self._db.upsert_feedback_reward(order_id, owner, rating, review_text)
+        self._db.upsert_feedback_reward(order_id, owner, rating, review_text, self._user_id)
         if rating < 5:
             return
-        reward = self._db.get_feedback_reward(order_id)
+        reward = self._db.get_feedback_reward(order_id, self._user_id)
         if reward and reward.get("claimed_at"):
             return
         if reward and reward.get("revoked_at"):
@@ -1022,7 +1023,7 @@ class FunpayBot:
             )
             return
 
-        if not self._db.mark_feedback_reward_claimed(order_id, account_id):
+        if not self._db.mark_feedback_reward_claimed(order_id, account_id, self._user_id):
             logger.warning(f"Failed to mark feedback reward claimed for order {order_id}.")
 
         updated = self._db.get_account_by_id(account_id, self._user_id)
@@ -1052,7 +1053,7 @@ class FunpayBot:
         if not owner:
             return
 
-        reward = self._db.get_feedback_reward(order_id)
+        reward = self._db.get_feedback_reward(order_id, self._user_id)
         if not reward:
             return
         if reward.get("revoked_at"):
@@ -1079,7 +1080,7 @@ class FunpayBot:
                 f"Owner: {reward_owner}\n"
                 "Reason: no active rental to deduct.",
             )
-            self._db.mark_feedback_reward_revoked(order_id)
+            self._db.mark_feedback_reward_revoked(order_id, self._user_id)
             return
 
         if not self._db.reduce_rental_duration_for_owner(
@@ -1093,7 +1094,7 @@ class FunpayBot:
             )
             return
 
-        self._db.mark_feedback_reward_revoked(order_id)
+        self._db.mark_feedback_reward_revoked(order_id, self._user_id)
         updated = self._db.get_account_by_id(target_account["id"], self._user_id)
         total_minutes = get_duration_minutes(updated or {})
         if total_minutes <= 0:
