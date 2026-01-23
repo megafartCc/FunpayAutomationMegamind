@@ -381,33 +381,10 @@ class FunpayBot:
         self._last_refresh_ts = now
 
     def _get_active_accounts_for_owner(self, owner: str) -> list[dict]:
-        accounts = self._db.get_user_active_accounts(owner, self._user_id)
-        if accounts:
-            return accounts
-        if self._user_id in (None, 0):
-            return []
-        fallback = self._db.get_user_active_accounts(owner)
-        if fallback:
-            logger.warning(
-                "Active rental fallback used for owner %s (user_id %s).",
-                owner,
-                self._user_id,
-            )
-        return fallback
+        return self._db.get_user_active_accounts(owner, self._user_id) or []
 
     def _get_available_lots(self) -> list[dict]:
-        lots = self._db.get_available_lot_accounts(self._user_id)
-        if lots:
-            return lots
-        if self._user_id in (None, 0):
-            return lots
-        fallback = self._db.get_available_lot_accounts(None)
-        if fallback:
-            logger.warning(
-                "Available lot fallback used (user_id %s).",
-                self._user_id,
-            )
-        return fallback
+        return self._db.get_available_lot_accounts(self._user_id) or []
 
     def _clean_account_label(self, text: Optional[str]) -> str:
         if not text:

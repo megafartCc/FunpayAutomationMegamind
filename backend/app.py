@@ -1298,36 +1298,30 @@ def _fetch_funpay_balance(token: str) -> dict | None:
     return None
 
 
+def _presence_empty() -> dict:
+    return {
+        "in_game": False,
+        "in_match": False,
+        "lobby_info": "",
+        "hero_name": None,
+        "hero_token": None,
+        "presence_label": "Оффлайн",
+        "hero_level": None,
+        "match_seconds": None,
+        "match_time": None,
+    }
+
+
 def _presence_for_steamid(
     steamid64: int | None,
     bridge_presence: dict | None = None,
 ) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
-        return {
-            "in_game": False,
-            "in_match": False,
-            "lobby_info": "",
-            "hero_name": None,
-            "hero_token": None,
-            "presence_label": "Оффлайн",
-            "hero_level": None,
-            "match_seconds": None,
-            "match_time": None,
-        }
+        return _presence_empty()
     if bridge_presence is None:
         bridge_presence = _fetch_bridge_presence(steamid64)
     if not bridge_presence:
-        return {
-            "in_game": False,
-            "in_match": False,
-            "lobby_info": "",
-            "hero_name": None,
-            "hero_token": None,
-            "presence_label": "Оффлайн",
-            "hero_level": None,
-            "match_seconds": None,
-            "match_time": None,
-        }
+        return _presence_empty()
     in_match = bool(bridge_presence.get("in_match"))
     in_game = bool(bridge_presence.get("in_game"))
     hero_name = bridge_presence.get("hero_name") or None
@@ -1366,7 +1360,7 @@ def _presence_for_steamid_cached(
     fast: bool = True,
 ) -> dict:
     if not steamid64 or not STEAM_BRIDGE_URL:
-        return _presence_for_steamid(steamid64)
+        return _presence_empty()
 
     cached, ts = presence_cache.get_cached(steamid64)
     now = time.time()
@@ -1390,6 +1384,10 @@ def _presence_for_steamid_cached(
         if should_keep_cached(data):
             return None
         return data
+
+    if cached is None and fast:
+        presence_cache.refresh_async(steamid64, fetch_presence)
+        return _presence_empty()
 
     if cached is not None and fast:
         presence_cache.refresh_async(steamid64, fetch_presence)
