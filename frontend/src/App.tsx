@@ -597,6 +597,8 @@ const App: React.FC = () => {
   );
   const adminCallCountsRef = useRef<Record<string, number>>({});
   const adminCallToastRef = useRef<number>(0);
+  const selectedChatRef = useRef<string | number | null>(null);
+  const chatHistoryRequestRef = useRef<number>(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -606,6 +608,10 @@ const App: React.FC = () => {
       root.classList.remove("dark");
     }
   }, [uiMode]);
+
+  useEffect(() => {
+    selectedChatRef.current = selectedChat;
+  }, [selectedChat]);
 
   const api = useMemo(
     () =>
@@ -1154,16 +1160,30 @@ const App: React.FC = () => {
   );
 
   const loadChatHistory = useCallback(
-    async (chatId: string | number | null, revalidate = false) => {
-      if (!token || !chatId) return;
-      const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatId}`);
+    async (chatId: string | number | null, revalidate = false, force = false) => {
+      if (!token || chatId === null || chatId === undefined) return;
+      const requestId = ++chatHistoryRequestRef.current;
+      const chatKey = String(chatId);
+      const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatKey}`);
+      const qs = new URLSearchParams();
+      qs.set("limit", "80");
+      qs.set("fast", "1");
+      if (force) qs.set("refresh", "1");
       await swrFetch<ChatMessage[]>({
         key: cacheKey,
-        url: `/api/chats/${chatId}/history?limit=80`,
+        url: `/api/chats/${encodeURIComponent(chatKey)}/history?${qs.toString()}`,
         ttl: CACHE_TTLS.chatHistory,
         revalidate,
-        onLoading: setChatLoading,
-        onData: setChatMessages,
+        onLoading: (loading) => {
+          if (chatHistoryRequestRef.current !== requestId) return;
+          if (String(selectedChatRef.current ?? "") !== chatKey) return;
+          setChatLoading(loading);
+        },
+        onData: (items) => {
+          if (chatHistoryRequestRef.current !== requestId) return;
+          if (String(selectedChatRef.current ?? "") !== chatKey) return;
+          setChatMessages(items);
+        },
         map: mapChatMessages,
       });
     },
@@ -1236,8 +1256,23 @@ const App: React.FC = () => {
   // load chat history when selection changes
   useEffect(() => {
     if (!token || activeNav !== "chats") return;
-    loadChatHistory(selectedChat, true);
-  }, [token, sessionKey, activeNav, selectedChat, loadChatHistory]);
+    if (selectedChat === null || selectedChat === undefined) {
+      setChatMessages([]);
+      setChatLoading(false);
+      return;
+    }
+    selectedChatRef.current = selectedChat;
+    const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${selectedChat}`);
+    const cached = readCache<ChatMessage[]>(cacheKey, CACHE_TTLS.chatHistory);
+    if (cached?.data) {
+      setChatMessages(cached.data);
+      setChatLoading(false);
+    } else {
+      setChatMessages([]);
+      setChatLoading(true);
+    }
+    loadChatHistory(selectedChat, true, true);
+  }, [token, sessionKey, activeNav, selectedChat, loadChatHistory, scopedKey]);
 
   useEffect(() => {
     if (!token) {
@@ -1341,13 +1376,17 @@ const App: React.FC = () => {
       chatHistoryStreamRef.current.close();
     }
     chatHistoryStreamRef.current = source;
+    const streamChatId = String(selectedChat);
 
     const handleHistory = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || "{}");
+        if (String(selectedChatRef.current ?? "") !== streamChatId) {
+          return;
+        }
         const items = mapChatMessages(payload);
         setChatMessages(items);
-        writeCache(scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${selectedChat}`), items);
+        writeCache(scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${streamChatId}`), items);
       } catch {
         // ignore stream parse errors
       }
@@ -1368,7 +1407,7 @@ const App: React.FC = () => {
         chatHistoryStreamRef.current = null;
       }
     };
-  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages]);
+  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages, scopedKey]);
 
   useEffect(() => {
     if (!token || activeNav !== "chats" || !selectedChat) return;

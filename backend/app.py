@@ -1889,7 +1889,15 @@ def chat_history(
     cached, ts = chat_cache.get_cached_history(user_id, chat_id)
     now = time.time()
     if fast and cached is not None:
-        if refresh or ts is None or now - ts > max_age:
+        if refresh:
+            try:
+                items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+                items = _annotate_admin_calls(items[-limit:])
+                return _etag_response(request, {"items": items})
+            except Exception:
+                items = _annotate_admin_calls(cached[-limit:])
+                return _etag_response(request, {"items": items})
+        if ts is None or now - ts > max_age:
             chat_cache.refresh_history_async(user_id, chat_id, token)
         items = _annotate_admin_calls(cached[-limit:])
         return _etag_response(request, {"items": items})
