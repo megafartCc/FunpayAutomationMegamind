@@ -951,6 +951,13 @@ const App: React.FC = () => {
     return new Date(ts).toLocaleTimeString();
   };
 
+  const formatMoscowDateTime = (value?: string | number | null) => {
+    if (value === null || value === undefined || value === "") return "-";
+    const ts = parseDateTime(value);
+    if (!ts) return String(value);
+    return new Date(ts).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" });
+  };
+
   const statusPill = (status?: string | boolean) => {
     if (typeof status === "boolean") {
       return status
@@ -2657,7 +2664,7 @@ const App: React.FC = () => {
                                         {pill.label}
                                       </span>
                                       <span className="min-w-0 truncate text-xs text-neutral-500">
-                                        {order.createdAt ? new Date(order.createdAt).toLocaleString() : "-"}
+                                        {formatMoscowDateTime(order.createdAt)}
                                       </span>
                                       {order.chatUrl ? (
                                         <a
