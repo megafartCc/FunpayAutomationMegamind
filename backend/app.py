@@ -199,9 +199,46 @@ def _extract_message_time(html: str | None) -> str | None:
             return parsed
     text = html_module.unescape(soup.get_text(" ", strip=True))
     return _extract_message_time_from_text(text)
+
+
+def _extract_avatar_url(html: str | None) -> str | None:
+    if not html:
+        return None
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        return None
+    avatar = soup.select_one(".avatar-photo") or soup.select_one(".avatar") or soup.select_one(".chat-avatar")
+    if avatar:
+        style = avatar.get("style") or ""
+        match = re.search(r"url\\(([^)]+)\\)", style)
+        if match:
+            url = match.group(1).strip(" '\"")
+            if url.startswith("//"):
+                url = f"https:{url}"
+            if url.startswith("/"):
+                url = f"https://funpay.com{url}"
+            return url
+        img = avatar.find("img")
+        if img and img.get("src"):
+            url = img.get("src")
+            if url.startswith("//"):
+                url = f"https:{url}"
+            if url.startswith("/"):
+                url = f"https://funpay.com{url}"
+            return url
+    img = soup.find("img")
+    if img and img.get("src"):
+        url = img.get("src")
+        if url.startswith("//"):
+            url = f"https:{url}"
+        if url.startswith("/"):
+            url = f"https://funpay.com{url}"
+        return url
+    return None
 db = MySQLDB()
-CHAT_LIST_TTL = 5.0
-CHAT_HISTORY_TTL = 3.0
+CHAT_LIST_TTL = 2.0
+CHAT_HISTORY_TTL = 1.0
 CHAT_HISTORY_MAX = 200
 PRESENCE_TTL = 10.0
 PRESENCE_OFFLINE_GRACE = 45.0
@@ -300,7 +337,18 @@ class ChatCache:
 
     def _set_chats(self, user_id: int, items: list[dict]) -> None:
         with self._lock:
-            self._chats[user_id] = {"items": list(items), "ts": time.time()}
+            existing = self._chats.get(user_id, {}).get("items") if self._chats.get(user_id) else []
+            avatar_map = {
+                chat.get("id"): chat.get("avatar_url")
+                for chat in (existing or [])
+                if chat.get("id") is not None and chat.get("avatar_url")
+            }
+            merged = []
+            for item in items:
+                if not item.get("avatar_url") and item.get("id") in avatar_map:
+                    item["avatar_url"] = avatar_map.get(item.get("id"))
+                merged.append(item)
+            self._chats[user_id] = {"items": merged, "ts": time.time()}
 
     def _set_history(self, user_id: int, chat_id: int, items: list[dict]) -> None:
         with self._lock:
@@ -339,6 +387,7 @@ class ChatCache:
         items = []
         for chat in chats_map.values():
             last_message_time = _extract_message_time(getattr(chat, "html", None))
+            avatar_url = _extract_avatar_url(getattr(chat, "html", None))
             items.append(
                 {
                     "id": chat.id,
@@ -348,6 +397,7 @@ class ChatCache:
                     "unread": chat.unread,
                     "node_msg_id": chat.node_msg_id,
                     "user_msg_id": chat.user_msg_id,
+                    "avatar_url": avatar_url,
                 }
             )
         return items
@@ -993,8 +1043,8 @@ def orders_history(
         else:
             item["chat_url"] = None
 
-    allowed_actions = {"issued", "extended", "refunded", "closed"}
-    action_priority = {"refunded": 4, "extended": 3, "issued": 2, "closed": 1}
+    allowed_actions = {"issued", "extended", "refunded", "closed", "paid"}
+    action_priority = {"refunded": 5, "closed": 4, "extended": 3, "issued": 2, "paid": 1}
 
     def created_key(value: Any) -> float:
         if isinstance(value, datetime):
@@ -1036,6 +1086,10 @@ def orders_history(
 
     merged = list(dedup.values())
     merged.sort(key=lambda row: created_key(row.get("created_at")), reverse=True)
+
+    for item in merged:
+        if str(item.get("action") or "").lower() == "paid":
+            item["action"] = "issued"
 
     payload = {"items": merged}
     return _etag_response(request, payload)

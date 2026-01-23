@@ -59,6 +59,24 @@ type NotificationItem = {
   accountId?: string | number;
 };
 
+type ChatItem = {
+  id?: string | number;
+  name?: string;
+  last?: string;
+  time?: string;
+  unread?: boolean;
+  avatarUrl?: string | null;
+  _hidden?: boolean;
+};
+
+type ChatMessage = {
+  id?: string | number;
+  author?: string;
+  text?: string;
+  sentAt?: string;
+  byBot?: boolean;
+};
+
 type FunpayStatsPayload = {
   balance?: {
     total_rub?: number | null;
@@ -143,6 +161,33 @@ const extractSteamId = (a: any): string => {
 
 const normalizeKey = (value?: string | number | null) =>
   value === null || value === undefined ? "" : String(value).trim().toLowerCase();
+
+const getInitials = (value?: string | null) => {
+  const clean = String(value || "").trim();
+  if (!clean) return "?";
+  const parts = clean.split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] || "";
+  const second = parts.length > 1 ? parts[parts.length - 1]?.[0] || "" : "";
+  const initials = (first + second).toUpperCase();
+  return initials || clean.slice(0, 2).toUpperCase();
+};
+
+const hashToHue = (value?: string | null) => {
+  const text = String(value || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) % 360;
+  }
+  return Math.abs(hash) % 360;
+};
+
+const avatarStyle = (name?: string | null) => {
+  const hue = hashToHue(name);
+  const hue2 = (hue + 36) % 360;
+  return {
+    background: `linear-gradient(135deg, hsl(${hue} 70% 45%), hsl(${hue2} 70% 55%))`,
+  } as React.CSSProperties;
+};
 
 const DashboardIcon = () => (
   <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -759,6 +804,7 @@ const App: React.FC = () => {
         last: c.last_message_text || c.preview || "",
         time: c.last_message_time || c.time || "",
         unread: !!c.unread,
+        avatarUrl: c.avatar_url ?? c.avatarUrl ?? c.avatar ?? null,
       })),
     []
   );
@@ -1390,7 +1436,7 @@ const App: React.FC = () => {
     const lower = (action || "").toLowerCase();
     if (lower.includes("issued")) return { className: "bg-emerald-50 text-emerald-600", label: "Issued" };
     if (lower.includes("extend")) return { className: "bg-sky-50 text-sky-600", label: "Extended" };
-    if (lower.includes("paid")) return { className: "bg-amber-50 text-amber-600", label: "Paid" };
+    if (lower.includes("paid")) return { className: "bg-emerald-50 text-emerald-600", label: "Issued" };
     if (lower.includes("refund")) return { className: "bg-rose-50 text-rose-600", label: "Refunded" };
     if (lower.includes("closed")) return { className: "bg-neutral-200 text-neutral-700", label: "Closed" };
     if (lower.includes("blacklist")) return { className: "bg-neutral-200 text-neutral-700", label: "Blacklisted" };
@@ -2480,16 +2526,35 @@ const App: React.FC = () => {
                                       : "border-neutral-100 bg-white hover:border-neutral-200"
                                   }`}
                                 >
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="truncate font-semibold text-neutral-900">{chat.name}</span>
-                                      {chat.unread && (
-                                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">
-                                          new
-                                        </span>
+                                  <div className="flex min-w-0 items-start gap-3">
+                                    <div
+                                      className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs font-semibold uppercase text-white"
+                                      style={avatarStyle(chat.name)}
+                                    >
+                                      {chat.avatarUrl ? (
+                                        <img
+                                          src={chat.avatarUrl}
+                                          alt={chat.name || "Avatar"}
+                                          className="h-full w-full object-cover"
+                                          loading="lazy"
+                                        />
+                                      ) : (
+                                        getInitials(chat.name)
                                       )}
                                     </div>
-                                    <p className="truncate text-xs text-neutral-500">{chat.last || "No messages yet"}</p>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="truncate font-semibold text-neutral-900">{chat.name}</span>
+                                        {chat.unread && (
+                                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">
+                                            new
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="truncate text-xs text-neutral-500">
+                                        {chat.last || "No messages yet"}
+                                      </p>
+                                    </div>
                                   </div>
                                   <span className="shrink-0 text-[11px] text-neutral-400">{chat.time || ""}</span>
                                 </button>

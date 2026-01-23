@@ -466,17 +466,16 @@ class FunpayBot:
         price = getattr(order, "price", None)
         lot_number = parse_lot_number(description)
 
-        if action.lower() != "paid":
-            self._db.log_order_event(
-                order_id=order_id,
-                owner_id=buyer,
-                action=action,
-                account_name=description or None,
-                lot_number=lot_number,
-                amount=amount,
-                price=price,
-                user_id=self._user_id,
-            )
+        self._db.log_order_event(
+            order_id=order_id,
+            owner_id=buyer,
+            action=action,
+            account_name=description or None,
+            lot_number=lot_number,
+            amount=amount,
+            price=price,
+            user_id=self._user_id,
+        )
 
         send_message_to_admin(
             f"ORDER {action.upper()}\n\n"
