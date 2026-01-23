@@ -66,6 +66,8 @@ type ChatItem = {
   time?: string;
   unread?: boolean;
   avatarUrl?: string | null;
+  adminCalls?: number;
+  adminLastCalledAt?: string | null;
   _hidden?: boolean;
 };
 
@@ -75,6 +77,7 @@ type ChatMessage = {
   text?: string;
   sentAt?: string;
   byBot?: boolean;
+  adminCall?: boolean;
 };
 
 type FunpayStatsPayload = {
@@ -179,6 +182,12 @@ const hashToHue = (value?: string | null) => {
     hash = (hash * 31 + text.charCodeAt(i)) % 360;
   }
   return Math.abs(hash) % 360;
+};
+
+const isAdminCallText = (value?: string | null) => {
+  if (!value) return false;
+  const trimmed = String(value).trim().toLowerCase();
+  return /^!(admin|админ)\b/.test(trimmed);
 };
 
 const avatarStyle = (name?: string | null) => {
@@ -859,6 +868,8 @@ const App: React.FC = () => {
         time: c.last_message_time || c.time || "",
         unread: !!c.unread,
         avatarUrl: c.avatar_url ?? c.avatarUrl ?? c.avatar ?? null,
+        adminCalls: Number(c.admin_calls ?? c.adminCalls ?? 0) || 0,
+        adminLastCalledAt: c.admin_last_called_at ?? c.adminLastCalledAt ?? null,
       })),
     []
   );
@@ -871,6 +882,7 @@ const App: React.FC = () => {
         text: m.text || m.body || "",
         sentAt: m.sent_time || m.sent_at || m.time || "",
         byBot: !!m.by_bot,
+        adminCall: typeof m.admin_call === "boolean" ? m.admin_call : isAdminCallText(m.text || m.body || ""),
       })),
     []
   );
@@ -1175,8 +1187,9 @@ const App: React.FC = () => {
     if (token) {
       loadOverview();
       loadNotifications();
+      loadChats(false);
     }
-  }, [token, sessionKey, loadOverview, loadNotifications]);
+  }, [token, sessionKey, loadOverview, loadNotifications, loadChats]);
 
   useEffect(() => {
     if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
@@ -2314,6 +2327,10 @@ const App: React.FC = () => {
   const activeLabel =
     activeNav === "profile" ? "Profile" : NAV_ITEMS.find((n) => n.id === activeNav)?.label || "Dashboard";
   const profileInitial = (profileName || "U").trim().charAt(0).toUpperCase();
+  const totalAdminCalls = useMemo(
+    () => chats.reduce((sum, chat) => sum + (chat.adminCalls || 0), 0),
+    [chats]
+  );
 
   if (!sessionChecked) {
     return null;
@@ -2351,6 +2368,7 @@ const App: React.FC = () => {
                     <AnimatePresence>
                       {NAV_ITEMS.filter((i) => !BOTTOM_NAV_IDS.has(i.id)).map((item) => {
                         const isActive = activeNav === item.id;
+                        const showAdminBadge = item.id === "chats" && totalAdminCalls > 0;
                         return (
                           <motion.button
                             key={item.id}
@@ -2378,6 +2396,15 @@ const App: React.FC = () => {
                             <span className={`relative z-10 truncate ${isActive ? "text-white" : "text-neutral-700"}`}>
                               {item.label}
                             </span>
+                            {showAdminBadge && (
+                              <span
+                                className={`relative z-10 ml-auto rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  isActive ? "bg-white/20 text-white" : "bg-rose-100 text-rose-600"
+                                }`}
+                              >
+                                {totalAdminCalls}
+                              </span>
+                            )}
                           </motion.button>
                         );
                       })}
@@ -2695,7 +2722,9 @@ const App: React.FC = () => {
                                   className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-3 text-left text-sm transition ${
                                     selectedChat === chat.id
                                       ? "border-neutral-300 bg-neutral-50"
-                                      : "border-neutral-100 bg-white hover:border-neutral-200"
+                                      : `border-neutral-100 bg-white hover:border-neutral-200 ${
+                                          chat.adminCalls ? "ring-1 ring-rose-200" : ""
+                                        }`
                                   }`}
                                 >
                                   <div className="flex min-w-0 items-start gap-3">
@@ -2722,6 +2751,11 @@ const App: React.FC = () => {
                                             new
                                           </span>
                                         )}
+                                        {chat.adminCalls ? (
+                                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-600">
+                                            {chat.adminCalls}
+                                          </span>
+                                        ) : null}
                                       </div>
                                       <p className="truncate text-xs text-neutral-500">
                                         {chat.last || "No messages yet"}
@@ -2765,7 +2799,7 @@ const App: React.FC = () => {
                                   key={m.id}
                                   className={`max-w-[86%] rounded-2xl px-4 py-3 shadow-sm ${
                                     m.byBot ? "ml-auto bg-neutral-900 text-white" : "bg-white text-neutral-900"
-                                  }`}
+                                  } ${m.adminCall && !m.byBot ? "border border-amber-300 bg-amber-50" : ""}`}
                                 >
                                   <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
                                     <span className={m.byBot ? "text-neutral-200" : "text-neutral-500"}>{m.author || "User"}</span>

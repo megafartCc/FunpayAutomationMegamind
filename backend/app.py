@@ -1210,6 +1210,36 @@ def _etag_response(request: Request, payload: Any) -> Response:
     return JSONResponse(content=encoded_payload, headers=headers)
 
 
+def _is_admin_call_message(text: str | None) -> bool:
+    if not text:
+        return False
+    value = str(text).strip().lower()
+    return value.startswith("!admin") or value.startswith("!админ")
+
+
+def _annotate_admin_calls(items: list[dict]) -> list[dict]:
+    annotated: list[dict] = []
+    for item in items:
+        entry = dict(item)
+        entry["admin_call"] = _is_admin_call_message(entry.get("text") or "")
+        annotated.append(entry)
+    return annotated
+
+
+def _attach_admin_call_counts(items: list[dict], user_id: int) -> list[dict]:
+    counts = db.get_admin_call_counts(user_id)
+    merged: list[dict] = []
+    for item in items:
+        entry = dict(item)
+        chat_id = entry.get("id")
+        if chat_id is not None:
+            meta = counts.get(int(chat_id))
+            entry["admin_calls"] = int(meta.get("count", 0)) if meta else 0
+            entry["admin_last_called_at"] = meta.get("last_called_at") if meta else None
+        merged.append(entry)
+    return merged
+
+
 def _format_match_time(seconds: int | float | None) -> str | None:
     if seconds is None:
         return None
@@ -1770,14 +1800,17 @@ def chats(
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
             chat_cache.refresh_chats_async(user_id, token)
-        return _etag_response(request, {"items": cached})
+        items_with_calls = _attach_admin_call_counts(cached, user_id)
+        return _etag_response(request, {"items": items_with_calls})
 
     try:
         items = chat_cache.refresh_chats_sync(user_id, token)
-        return _etag_response(request, {"items": items})
+        items_with_calls = _attach_admin_call_counts(items, user_id)
+        return _etag_response(request, {"items": items_with_calls})
     except Exception as exc:
         if cached is not None:
-            return _etag_response(request, {"items": cached})
+            items_with_calls = _attach_admin_call_counts(cached, user_id)
+            return _etag_response(request, {"items": items_with_calls})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1805,7 +1838,8 @@ async def stream_chats(
                     items = chat_cache.refresh_chats_sync(user_id, token)
                 except Exception:
                     items = cached or []
-            payload = {"items": items or []}
+            merged = _attach_admin_call_counts(items or [], user_id)
+            payload = {"items": merged}
             encoded = jsonable_encoder(payload)
             etag = _payload_etag({"user_id": user_id, "payload": encoded})
             if etag != last_etag:
@@ -1840,14 +1874,17 @@ def chat_history(
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
             chat_cache.refresh_history_async(user_id, chat_id, token)
-        return _etag_response(request, {"items": cached[-limit:]})
+        items = _annotate_admin_calls(cached[-limit:])
+        return _etag_response(request, {"items": items})
 
     try:
         items = chat_cache.refresh_history_sync(user_id, chat_id, token)
-        return _etag_response(request, {"items": items[-limit:]})
+        items = _annotate_admin_calls(items[-limit:])
+        return _etag_response(request, {"items": items})
     except Exception as exc:
         if cached is not None:
-            return _etag_response(request, {"items": cached[-limit:]})
+            items = _annotate_admin_calls(cached[-limit:])
+            return _etag_response(request, {"items": items})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1878,7 +1915,7 @@ async def stream_chat_history(
                     items = chat_cache.refresh_history_sync(user_id, chat_id, token)
                 except Exception:
                     items = cached or []
-            payload = {"items": (items or [])[-limit:]}
+            payload = {"items": _annotate_admin_calls((items or [])[-limit:])}
             encoded = jsonable_encoder(payload)
             etag = _payload_etag({"user_id": user_id, "payload": encoded})
             if etag != last_etag:

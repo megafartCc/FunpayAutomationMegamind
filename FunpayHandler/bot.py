@@ -51,12 +51,13 @@ COMMANDS_HELP = (
     "!code / !\u043a\u043e\u0434 \u2014 \u043a\u043e\u0434 Steam Guard\n"
     "!stock / !\u0441\u0442\u043e\u043a \u2014 \u043d\u0430\u043b\u0438\u0447\u0438\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432\n"
     "!extend / !\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c <\u0447\u0430\u0441\u044b> <ID_\u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430> \u2014 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443\n"
+    "!admin / !\u0430\u0434\u043c\u0438\u043d \u2014 \u0432\u044b\u0437\u0432\u0430\u0442\u044c \u043f\u0440\u043e\u0434\u0430\u0432\u0446\u0430\n"
     "!lpexchange / !\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430 <ID> \u2014 \u0437\u0430\u043c\u0435\u043d\u0430 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 (10 \u043c\u0438\u043d\u0443\u0442 \u043f\u043e\u0441\u043b\u0435 !\u043a\u043e\u0434)\n"
     "!cancel / !\u043e\u0442\u043c\u0435\u043d\u0430 <ID> \u2014 \u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0430\u0440\u0435\u043d\u0434\u0443"
 )
 COMMANDS_INLINE = (
     "\u041a\u043e\u043c\u0430\u043d\u0434\u044b: !acc/!\u0430\u043a\u043a, !code/!\u043a\u043e\u0434, !stock/!\u0441\u0442\u043e\u043a, !extend/!\u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, "
-    "!lpexchange/!\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430, !cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
+    "!admin/!\u0430\u0434\u043c\u0438\u043d, !lpexchange/!\u043b\u043f\u0437\u0430\u043c\u0435\u043d\u0430, !cancel/!\u043e\u0442\u043c\u0435\u043d\u0430"
 )
 
 
@@ -542,7 +543,7 @@ class FunpayBot:
     ) -> None:
         mapping = self._db.get_lot_mapping(lot_number, self._user_id)
         if not mapping:
-            acc.send_message(chat_id, "Лот не привязан к аккаунту. Дождитесь ответа администратора.")
+            acc.send_message(chat_id, "Лот не привязан к аккаунту. Вызовите администратора командой !админ.")
             send_message_to_admin(
                 "ЛОТ БЕЗ ПРИВЯЗКИ\n\n"
                 f"Покупатель: {buyer}\n"
@@ -553,7 +554,7 @@ class FunpayBot:
 
         account = self._db.get_account_by_lot_number(lot_number, self._user_id)
         if not account:
-            acc.send_message(chat_id, "Ошибка: лот привязан к аккаунту, но аккаунт не найден. Напишите администратору.")
+            acc.send_message(chat_id, "Ошибка: лот привязан к аккаунту, но аккаунт не найден. Напишите !админ.")
             send_message_to_admin(
                 "ОШИБКА ПРИ ВЫДАЧЕ\n\n"
                 f"Покупатель: {buyer}\n"
@@ -664,7 +665,7 @@ class FunpayBot:
             acc.send_message(
                 chat_id,
                 f"Ошибка: аккаунт '{display_name}' не найден.\n"
-                "Возврат оформлен. Напишите, поможем.",
+                "Возврат оформлен. Если нужна помощь — напишите !админ.",
             )
             return
 
@@ -683,7 +684,7 @@ class FunpayBot:
                 chat_id,
                 f"Вы оплатили {amount} шт. '{display_name}'.\n"
                 f"Продление будет на {total_label} (1 шт = {unit_label}).\n\n"
-                "Если нужен другой вариант — напишите в чат.",
+                "Если нужен другой вариант — напишите !админ.",
             )
 
         existing_rentals = self._db.get_user_accounts_by_name(buyer, account_name)
@@ -810,7 +811,7 @@ class FunpayBot:
             f"\u0410\u0440\u0435\u043d\u0434\u0430: {duration_label}\n\n"
             "\u23f1\ufe0f \u041e\u0442\u0441\u0447\u0435\u0442 \u0430\u0440\u0435\u043d\u0434\u044b \u043d\u0430\u0447\u043d\u0435\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u043f\u0435\u0440\u0432\u043e\u0433\u043e \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f \u043a\u043e\u0434\u0430 (!code / !\u043a\u043e\u0434).\n\n"
             f"{COMMANDS_HELP}\n\n"
-            "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c \u2014 \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442."
+            "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c \u2014 \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 !\u0430\u0434\u043c\u0438\u043d."
         )
         if note:
             message = f"{note}\n\n{message}"
@@ -911,6 +912,10 @@ class FunpayBot:
 
         if message_text in ("!stock", "!сток"):
             self._handle_stock(acc, chat_id)
+            return
+
+        if message_text in ("!admin", "!админ"):
+            self._handle_admin_call(acc, chat_id, event.message.author)
             return
 
         if message_text.startswith("!отмена"):
@@ -1257,7 +1262,7 @@ class FunpayBot:
             if not lot_number:
                 acc.send_message(
                     chat_id,
-                    f"Аккаунт {login} (ID {account_id}) не привязан к лоту. Напишите администратору.",
+                    f"Аккаунт {login} (ID {account_id}) не привязан к лоту. Напишите !админ.",
                 )
                 return
 
@@ -1302,6 +1307,25 @@ class FunpayBot:
         except Exception as exc:
             logger.error(f"Failed to load stock: {exc}")
             acc.send_message(chat_id, USER.stock_failed)
+
+    def _handle_admin_call(self, acc: Account, chat_id: int, owner: str) -> None:
+        try:
+            self._db.log_admin_call(owner, chat_id, self._user_id)
+            acc.send_message(
+                chat_id,
+                "Админ вызван. Мы ответим как можно скорее. "
+                "Если вопрос срочный — кратко опишите проблему одним сообщением.",
+            )
+            chat_link = f"https://funpay.com/chat/?node={chat_id}"
+            send_message_to_admin(
+                "ADMIN CALL\n\n"
+                f"Owner: {owner}\n"
+                f"Chat ID: {chat_id}\n"
+                f"Chat: {chat_link}"
+            )
+        except Exception as exc:
+            logger.error(f"Failed to handle admin call for {owner}: {exc}")
+            acc.send_message(chat_id, "Не удалось вызвать администратора. Попробуйте позже.")
 
     def _handle_lp_exchange(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
@@ -1358,7 +1382,7 @@ class FunpayBot:
                 try:
                     start_dt = datetime.strptime(str(rental_start), "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    acc.send_message(chat_id, "Не удалось определить время начала аренды. Напишите администратору.")
+                    acc.send_message(chat_id, "Не удалось определить время начала аренды. Напишите !админ.")
                     return
             if start_dt.tzinfo is None:
                 start_dt = MOSCOW_TZ.localize(start_dt)
@@ -1819,6 +1843,7 @@ class FunpayBot:
                 "!код — код Steam Guard\n"
                 "!сток — наличие\n"
                 "!продлить <часы> <ID аккаунта> — продлить аренду\n"
+                "!админ — вызвать продавца\n"
                 "!лпзамена <ID> — замена аккаунта (10 минут после !код)\n"
                 "!отмена <ID> — отменить аренду\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",

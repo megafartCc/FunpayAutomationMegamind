@@ -301,6 +301,20 @@ class MySQLDB:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_calls (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL DEFAULT 0,
+                    chat_id BIGINT NOT NULL,
+                    owner VARCHAR(255) NOT NULL,
+                    count INT NOT NULL DEFAULT 0,
+                    last_called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY idx_admin_calls_user_chat (user_id, chat_id),
+                    INDEX idx_admin_calls_user_owner (user_id, owner)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         else:
             cursor.execute(
                 """
@@ -427,6 +441,19 @@ class MySQLDB:
                 )
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_calls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL DEFAULT 0,
+                    chat_id INTEGER NOT NULL,
+                    owner TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    last_called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, chat_id)
+                )
+                """
+            )
         self.conn.commit()
         cursor.close()
         self._ensure_mafile_column()
@@ -438,6 +465,7 @@ class MySQLDB:
         self._ensure_feedback_rewards_table()
         self._ensure_feedback_rewards_user_column()
         self._ensure_blacklist_table()
+        self._ensure_admin_calls_table()
         self._ensure_feedback_rewards_revoked_column()
         self._ensure_funpay_balance_table()
         self._ensure_order_history_columns()
@@ -724,6 +752,44 @@ class MySQLDB:
                         user_id INTEGER NOT NULL DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(owner, user_id)
+                    )
+                    """
+                )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_admin_calls_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS admin_calls (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        user_id INT NOT NULL DEFAULT 0,
+                        chat_id BIGINT NOT NULL,
+                        owner VARCHAR(255) NOT NULL,
+                        count INT NOT NULL DEFAULT 0,
+                        last_called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY idx_admin_calls_user_chat (user_id, chat_id),
+                        INDEX idx_admin_calls_user_owner (user_id, owner)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS admin_calls (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL DEFAULT 0,
+                        chat_id INTEGER NOT NULL,
+                        owner TEXT NOT NULL,
+                        count INTEGER NOT NULL DEFAULT 0,
+                        last_called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, chat_id)
                     )
                     """
                 )
@@ -2504,6 +2570,73 @@ class MySQLDB:
         except Exception as exc:
             logger.error(f"Error removing blacklist entries: {exc}")
             return 0
+        finally:
+            cursor.close()
+
+    def log_admin_call(self, owner: str, chat_id: int, user_id: int | None = None) -> bool:
+        if not owner or chat_id is None:
+            return False
+        owner_key = str(owner).strip().lower()
+        try:
+            cursor = self._cursor()
+            uid = int(user_id or 0)
+            chat_value = int(chat_id)
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT INTO admin_calls (user_id, chat_id, owner, count, last_called_at)
+                    VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE
+                        owner = VALUES(owner),
+                        count = count + 1,
+                        last_called_at = CURRENT_TIMESTAMP
+                    """,
+                    (uid, chat_value, owner_key),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO admin_calls (user_id, chat_id, owner, count, last_called_at)
+                    VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                        owner = excluded.owner,
+                        count = admin_calls.count + 1,
+                        last_called_at = CURRENT_TIMESTAMP
+                    """,
+                    (uid, chat_value, owner_key),
+                )
+            self.conn.commit()
+            return True
+        except Exception as exc:
+            logger.error(f"Error logging admin call for {owner}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def get_admin_call_counts(self, user_id: int | None = None) -> dict:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT chat_id, owner, count, last_called_at
+                FROM admin_calls
+                WHERE user_id = ?
+                """,
+                (int(user_id or 0),),
+            )
+            rows = cursor.fetchall()
+            data = {}
+            for row in rows:
+                data[int(row[0])] = {
+                    "chat_id": int(row[0]),
+                    "owner": row[1],
+                    "count": int(row[2] or 0),
+                    "last_called_at": row[3],
+                }
+            return data
+        except Exception as exc:
+            logger.error(f"Error loading admin calls: {exc}")
+            return {}
         finally:
             cursor.close()
 
