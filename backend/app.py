@@ -5,7 +5,7 @@ import random
 import re
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from threading import Lock
@@ -1084,7 +1084,7 @@ def _format_match_time(seconds: int | float | None) -> str | None:
     return f"{minutes}:{secs:02d}"
 
 
-def _coerce_date(value: Any) -> datetime.date | None:
+def _coerce_date(value: Any) -> date | None:
     if value is None:
         return None
     if isinstance(value, datetime):
