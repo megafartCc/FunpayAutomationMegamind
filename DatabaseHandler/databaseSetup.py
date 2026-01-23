@@ -258,18 +258,6 @@ class MySQLDB:
             )
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS ai_memory_facts (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    owner VARCHAR(255) NOT NULL,
-                    user_id INT NOT NULL DEFAULT 0,
-                    fact TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_memory_owner (owner, user_id, id)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """
-            )
-            cursor.execute(
-                """
                 CREATE TABLE IF NOT EXISTS order_history (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     order_id VARCHAR(32) NOT NULL,
@@ -399,17 +387,6 @@ class MySQLDB:
                     last_message_id INTEGER NOT NULL DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (owner, user_id)
-                )
-                """
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS ai_memory_facts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    owner TEXT NOT NULL,
-                    user_id INTEGER NOT NULL DEFAULT 0,
-                    fact TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -1974,91 +1951,6 @@ class MySQLDB:
         except Exception as exc:
             logger.error(f"Error updating chat summary: {exc}")
             return False
-        finally:
-            cursor.close()
-
-    def add_memory_fact(
-        self,
-        owner_id: str,
-        fact: str,
-        user_id: int | None = None,
-        max_facts: int = 20,
-    ) -> bool:
-        if not owner_id or not fact:
-            return False
-        try:
-            cursor = self._cursor()
-            cursor.execute(
-                """
-                INSERT INTO ai_memory_facts (owner, user_id, fact)
-                VALUES (?, ?, ?)
-                """,
-                (str(owner_id), int(user_id or 0), str(fact)),
-            )
-            self.conn.commit()
-            if max_facts and int(max_facts) > 0:
-                cursor.execute(
-                    """
-                    DELETE FROM ai_memory_facts
-                    WHERE owner = ? AND user_id = ?
-                    AND id NOT IN (
-                        SELECT id FROM (
-                            SELECT id
-                            FROM ai_memory_facts
-                            WHERE owner = ? AND user_id = ?
-                            ORDER BY id DESC
-                            LIMIT ?
-                        ) AS recent
-                    )
-                    """,
-                    (
-                        str(owner_id),
-                        int(user_id or 0),
-                        str(owner_id),
-                        int(user_id or 0),
-                        int(max_facts),
-                    ),
-                )
-                self.conn.commit()
-            return True
-        except Exception as exc:
-            logger.error(f"Error adding memory fact: {exc}")
-            return False
-        finally:
-            cursor.close()
-
-    def get_memory_facts(
-        self,
-        owner_id: str,
-        user_id: int | None = None,
-        limit: int = 20,
-    ) -> list:
-        if not owner_id:
-            return []
-        try:
-            limit_value = int(limit or 0)
-        except Exception:
-            limit_value = 20
-        try:
-            cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT id, fact, created_at
-                FROM ai_memory_facts
-                WHERE owner = ? AND user_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (str(owner_id), int(user_id or 0), int(limit_value)),
-            )
-            rows = cursor.fetchall()
-            rows.reverse()
-            return [
-                {"id": row[0], "text": row[1], "created_at": row[2]} for row in rows
-            ]
-        except Exception as exc:
-            logger.error(f"Error getting memory facts: {exc}")
-            return []
         finally:
             cursor.close()
 
