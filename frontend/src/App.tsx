@@ -979,7 +979,7 @@ const App: React.FC = () => {
                               e.preventDefault();
                               sendChatMessage();
                             }}
-                            className="mt-1 grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
+                            className="mt-auto flex items-center gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2 shadow-sm"
                           >
                             <textarea
                               value={chatInput}
@@ -987,17 +987,15 @@ const App: React.FC = () => {
                               placeholder={selectedChat !== null && selectedChat !== undefined ? "Type a message..." : "Select a chat to start typing"}
                               disabled={selectedChat === null || selectedChat === undefined}
                               rows={2}
-                              className="w-full resize-none rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800 outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
+                              className="w-full min-h-[44px] max-h-[120px] resize-none rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800 outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
                             />
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                type="submit"
-                                disabled={(selectedChat === null || selectedChat === undefined) || !chatInput.trim()}
-                                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
-                              >
-                                Send
-                              </button>
-                            </div>
+                            <button
+                              type="submit"
+                              disabled={(selectedChat === null || selectedChat === undefined) || !chatInput.trim()}
+                              className="h-[44px] rounded-lg bg-neutral-900 px-4 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                            >
+                              Send
+                            </button>
                           </form>
                         </div>
                       </div>
