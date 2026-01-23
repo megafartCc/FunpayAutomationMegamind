@@ -1077,8 +1077,18 @@ const App: React.FC = () => {
       setChatStreamActive(false);
       return;
     }
+    if (typeof EventSource === "undefined") {
+      setChatStreamActive(false);
+      return;
+    }
 
-    const source = new EventSource("/api/stream/chats");
+    let source: EventSource;
+    try {
+      source = new EventSource("/api/stream/chats");
+    } catch {
+      setChatStreamActive(false);
+      return;
+    }
     if (chatListStreamRef.current) {
       chatListStreamRef.current.close();
     }
@@ -1127,8 +1137,16 @@ const App: React.FC = () => {
       }
       return;
     }
+    if (typeof EventSource === "undefined") {
+      return;
+    }
 
-    const source = new EventSource(`/api/stream/chats/${selectedChat}/history`);
+    let source: EventSource;
+    try {
+      source = new EventSource(`/api/stream/chats/${selectedChat}/history`);
+    } catch {
+      return;
+    }
     if (chatHistoryStreamRef.current) {
       chatHistoryStreamRef.current.close();
     }
