@@ -4,6 +4,7 @@ import Toast from "./components/common/Toast";
 import LoginPage from "./pages/LoginPage";
 import { createApiClient } from "./services/api";
 import { useToast } from "./hooks/useToast";
+import AddAccountForm from "./components/account/AddAccountForm";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -275,7 +276,7 @@ const overviewCards = [
   { key: "totalAccounts", title: "Total Accounts", delta: "+12%", deltaTone: "positive", Icon: CardUsersIcon },
   { key: "activeRentals", title: "Active Rentals", delta: "-3%", deltaTone: "negative", Icon: CardUsersIcon },
   { key: "freeAccounts", title: "Free Accounts", delta: "+6%", deltaTone: "positive", Icon: CardCloudCheckIcon },
-  { key: "past24", title: "Past 24 hours", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
+  { key: "past24", title: "Past 24h", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
 ];
 
 const INVENTORY_GRID =
@@ -305,6 +306,7 @@ const App: React.FC = () => {
   const [uiMode, setUiMode] = useState<"light" | "dark">(
     () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
   );
+  const [submittingAccount, setSubmittingAccount] = useState(false);
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -561,11 +563,22 @@ const App: React.FC = () => {
         unread: !!c.unread,
       }));
       setChats(mapped);
-      if (!selectedChat && mapped.length) {
+      if ((selectedChat === null || selectedChat === undefined) && mapped.length) {
         setSelectedChat(mapped[0].id);
       }
     } finally {
       setChatListLoading(false);
+    }
+  };
+
+  const handleCreateAccount = async (payload: Record<string, unknown>) => {
+    if (!token) throw new Error("Not authorized");
+    setSubmittingAccount(true);
+    try {
+      await apiFetch("/api/accounts", { method: "POST", body: JSON.stringify(payload) });
+      await Promise.all([loadOverview()]);
+    } finally {
+      setSubmittingAccount(false);
     }
   };
 
@@ -589,7 +602,7 @@ const App: React.FC = () => {
 
   const sendChatMessage = async () => {
     const text = chatInput.trim();
-    if (!text || !selectedChat) {
+    if (!text || selectedChat === null || selectedChat === undefined) {
       showToast("Select a chat and type a message.", "error");
       return;
     }
@@ -772,7 +785,7 @@ const App: React.FC = () => {
                               </div>
                               <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
                               <div className="mt-2 text-2xl font-semibold text-neutral-900">
-                                {value === null ? "–" : value.toLocaleString()}
+                                {value === null ? "0" : value.toLocaleString()}
                               </div>
                             </motion.div>
                           );
@@ -799,7 +812,7 @@ const App: React.FC = () => {
                           <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
                             <div className="text-sm font-semibold text-neutral-700">Rentals Last 24h</div>
                             <div className="mt-2 text-3xl font-bold text-neutral-900">
-                              {overview.past24 === null ? "–" : overview.past24}
+                              {overview.past24 === null ? "0" : overview.past24}
                             </div>
                             <div className="mt-1 text-xs text-neutral-500">Completed in past day</div>
                           </div>
@@ -932,15 +945,15 @@ const App: React.FC = () => {
                             <textarea
                               value={chatInput}
                               onChange={(e) => setChatInput(e.target.value)}
-                              placeholder={selectedChat ? "Type a message..." : "Select a chat to start typing"}
-                              disabled={!selectedChat}
+                              placeholder={selectedChat !== null && selectedChat !== undefined ? "Type a message..." : "Select a chat to start typing"}
+                              disabled={selectedChat === null || selectedChat === undefined}
                               rows={2}
                               className="w-full resize-none rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800 outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
                             />
                             <div className="flex items-center justify-end gap-2">
                               <button
                                 type="submit"
-                                disabled={!selectedChat || !chatInput.trim()}
+                                disabled={(selectedChat === null || selectedChat === undefined) || !chatInput.trim()}
                                 className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                               >
                                 Send
@@ -1024,6 +1037,184 @@ const App: React.FC = () => {
                               </div>
                             )}
                           </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "add" ? (
+                    <motion.div
+                      key="add"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">Add Account</h3>
+                            <p className="text-sm text-neutral-500">Quickly onboard a new Steam account.</p>
+                          </div>
+                          <div className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                            Secure fields stay local
+                          </div>
+                        </div>
+                        <AddAccountForm
+                          onToast={(msg, err) => showToast(msg, err ? "error" : "success")}
+                          onSubmit={handleCreateAccount}
+                        />
+                        {submittingAccount && (
+                          <div className="mt-3 text-sm text-neutral-500">Creating account…</div>
+                        )}
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "rentals" ? (
+                    <motion.div
+                      key="rentals"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 space-y-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-semibold text-white">
+                          {rentalsTable.length} active rentals
+                        </div>
+                        <div className="text-sm text-neutral-500">Updated live every minute</div>
+                      </div>
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
+                          <span>ID</span>
+                          <span>Account</span>
+                          <span>Buyer</span>
+                          <span>Started</span>
+                          <span>Remaining</span>
+                          <span>Hero</span>
+                          <span className="text-right">Presence</span>
+                        </div>
+                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                          {rentalsTable.map((r, idx) => {
+                            const pill = statusPill(r.status);
+                            return (
+                              <motion.div
+                                key={r.id ?? idx}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
+                                className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                              >
+                                <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
+                                <span className="truncate text-neutral-800">{r.accountName || ""}</span>
+                                <span className="truncate text-neutral-700">{r.buyer || ""}</span>
+                                <span className="truncate text-neutral-600">
+                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : ""}
+                                </span>
+                                <span className="truncate font-mono text-neutral-900">
+                                  {formatDuration(r.durationSec ?? null, r.startedAt)}
+                                </span>
+                                <span className="truncate text-neutral-700">{r.hero || ""}</span>
+                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{pill.label}</span>
+                              </motion.div>
+                            );
+                          })}
+                          {rentalsTable.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No active rentals yet.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "notifications" ? (
+                    <motion.div
+                      key="notifications"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-lg font-semibold text-neutral-900">System Notifications</h3>
+                          <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                            {notifications.length} items
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          {notifications.map((n, idx) => (
+                            <motion.div
+                              key={n.id ?? idx}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0, transition: { duration: 0.2, delay: idx * 0.02, ease: EASE } }}
+                              className="rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3 text-sm text-neutral-800"
+                            >
+                              <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500">
+                                <span className="font-semibold">{n.level?.toUpperCase() || "INFO"}</span>
+                                <span>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
+                              </div>
+                              <div className="text-neutral-900">{n.message || "—"}</div>
+                              <div className="text-xs text-neutral-500">
+                                Owner: {n.owner || "—"} • Account: {n.accountId || "—"}
+                              </div>
+                            </motion.div>
+                          ))}
+                          {notifications.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No notifications yet.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "inventory" ? (
+                    <motion.div
+                      key="inventory"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
+                        </div>
+                        <div
+                          className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: INVENTORY_GRID }}
+                        >
+                          <span>ID</span>
+                          <span>Name</span>
+                          <span>Login</span>
+                          <span>Password</span>
+                          <span>Steam ID</span>
+                          <span>MMR</span>
+                          <span className="text-right">State</span>
+                        </div>
+                        <div className="mt-3 space-y-3 overflow-x-auto pr-1" style={{ maxHeight: "640px" }}>
+                          {accountsTable.map((acc, idx) => {
+                            return (
+                              <motion.div
+                                key={acc.id ?? idx}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
+                                className="grid min-w-full items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                style={{ gridTemplateColumns: INVENTORY_GRID }}
+                              >
+                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
+                                <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
+                                  {acc.name || "Account"}
+                                </span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>{acc.login || ""}</span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>{acc.password || ""}</span>
+                                <span className="min-w-0 truncate font-mono text-xs leading-tight text-neutral-800 tabular-nums" title={acc.steamId || ""}>
+                                  {acc.steamId || ""}
+                                </span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? ""}>{acc.mmr ?? ""}</span>
+                                <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
+                                  Available
+                                </span>
+                              </motion.div>
+                            );
+                          })}
+                          {accountsTable.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No accounts loaded yet.
+                            </div>
+                          )}
                         </div>
                       </div>
                     </motion.div>
