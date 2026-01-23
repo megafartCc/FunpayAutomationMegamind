@@ -1076,12 +1076,8 @@ def active_rentals(
                     chat_map = {}
 
     for item in items:
-        steamid64 = None
-        if include_presence or include_steamid:
-            steamid64 = _steamid64_from_mafile(item.get("mafile_json"))
-            item["steamid"] = str(steamid64) if steamid64 is not None else None
-        else:
-            item["steamid"] = None
+        steamid64 = _steamid64_from_mafile(item.get("mafile_json"))
+        item["steamid"] = str(steamid64) if steamid64 is not None else None
 
         if include_presence:
             item.update(_presence_for_steamid_cached(steamid64, max_age=max_age, fast=fast))
