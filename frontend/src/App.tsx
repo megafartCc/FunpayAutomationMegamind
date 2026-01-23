@@ -41,6 +41,7 @@ type RentalRow = {
   steamId?: string;
   presence?: PresenceData | null;
   presenceLabel?: string | null;
+  presenceObservedAt?: number | null;
   chatUrl?: string | null;
 };
 
@@ -553,6 +554,7 @@ const App: React.FC = () => {
                 r.presence_label;
               const matchSecondsRaw = Number(r.match_seconds);
               const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
+              const presenceFetchedAt = hasPresence ? Date.now() : null;
               const presence = hasPresence
                 ? {
                     in_match: !!r.in_match,
@@ -560,6 +562,7 @@ const App: React.FC = () => {
                     hero_name: r.hero_name ?? null,
                     match_time: r.match_time ?? null,
                     match_seconds: matchSeconds,
+                    fetched_at: presenceFetchedAt,
                   }
                 : null;
               const derivedStatus = presence
@@ -598,6 +601,7 @@ const App: React.FC = () => {
                   (r.account_name ? accountSteamMap.get(r.account_name) : undefined),
                 presence,
                 presenceLabel: r.presence_label ?? null,
+                presenceObservedAt: presenceFetchedAt,
               };
             })
           );
@@ -675,6 +679,7 @@ const App: React.FC = () => {
 
   const parseDateTime = (value?: string | number | null) => {
     if (value === null || value === undefined) return null;
+    const reference = Number.isFinite(now) ? (now as number) : Date.now();
     if (typeof value === "number") {
       if (!Number.isFinite(value)) return null;
       const ms = value < 1e12 ? value * 1000 : value;
@@ -690,9 +695,21 @@ const App: React.FC = () => {
     }
     let normalized = raw.includes(" ") ? raw.replace(" ", "T") : raw;
     normalized = normalized.replace(/\.(\d{3})\d+/, ".$1");
-    const parsed = new Date(normalized);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return parsed.getTime();
+    const hasTimezone = /[zZ]|[+\-]\d{2}:?\d{2}$/.test(normalized);
+    const parsedLocal = new Date(normalized);
+    const localMs = Number.isNaN(parsedLocal.getTime()) ? null : parsedLocal.getTime();
+    if (hasTimezone) return localMs;
+    const parsedMoscow = new Date(`${normalized}+03:00`);
+    const moscowMs = Number.isNaN(parsedMoscow.getTime()) ? null : parsedMoscow.getTime();
+    if (localMs === null && moscowMs === null) return null;
+    if (localMs === null) return moscowMs;
+    if (moscowMs === null) return localMs;
+    const threshold = 5 * 60 * 1000;
+    const localSkew = localMs - reference;
+    const moscowSkew = moscowMs - reference;
+    if (localSkew > threshold && moscowSkew <= threshold) return moscowMs;
+    if (moscowSkew > threshold && localSkew <= threshold) return localMs;
+    return Math.abs(moscowSkew) < Math.abs(localSkew) ? moscowMs : localMs;
   };
 
   const formatDuration = (
@@ -732,14 +749,24 @@ const App: React.FC = () => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const getMatchTimeDisplay = (presence?: PresenceData | null) => {
+  const getLiveMatchSeconds = (
+    presence?: PresenceData | null,
+    observedAt?: number | null,
+    nowMs?: number
+  ) => {
+    const base = presence?.match_seconds;
+    if (!Number.isFinite(base)) return null;
+    if (!observedAt) return Math.floor(base || 0);
+    const currentMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
+    const delta = Math.max(0, Math.floor((currentMs - observedAt) / 1000));
+    return Math.floor((base || 0) + delta);
+  };
+
+  const getMatchTimeDisplay = (presence?: PresenceData | null, observedAt?: number | null, nowMs?: number) => {
     if (!presence) return null;
-    const rawSeconds = presence.match_seconds;
-    if (Number.isFinite(rawSeconds)) return formatMatchTime(rawSeconds);
-    const raw = presence.match_time;
-    if (raw === null || raw === undefined) return null;
-    const cleaned = String(raw).trim();
-    return cleaned ? cleaned : null;
+    const liveSeconds = getLiveMatchSeconds(presence, observedAt, nowMs);
+    if (liveSeconds != null) return formatMatchTime(liveSeconds);
+    return null;
   };
 
   const formatStartTime = (value?: string | number | null) => {
@@ -1442,7 +1469,8 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1836,7 +1864,8 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeDisplay(presence) ?? "-";
+                            const observedAt = r.presenceObservedAt ?? presence?.fetched_at ?? null;
+                            const timer = getMatchTimeDisplay(presence, observedAt, now) ?? "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
@@ -1923,4 +1952,5 @@ type PresenceData = {
   hero_name?: string | null;
   match_time?: string | null;
   match_seconds?: number | null;
+  fetched_at?: number | null;
 };
