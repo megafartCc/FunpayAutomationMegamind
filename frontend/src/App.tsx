@@ -278,7 +278,8 @@ const overviewCards = [
   { key: "past24", title: "Past 24 hours", delta: "+2%", deltaTone: "positive", Icon: CardBarsIcon },
 ];
 
-const INVENTORY_GRID = "72px 260px 220px 210px 210px 90px 110px";
+const INVENTORY_GRID =
+  "minmax(72px,0.6fr) minmax(180px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) minmax(190px,1.1fr) minmax(80px,0.6fr) minmax(110px,0.6fr)";
 
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
@@ -890,7 +891,7 @@ const App: React.FC = () => {
                               e.preventDefault();
                               sendChatMessage();
                             }}
-                            className="grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
+                            className="mt-auto grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm"
                           >
                             <textarea
                               value={chatInput}
@@ -1009,12 +1010,14 @@ const App: React.FC = () => {
                           <span className="text-right">State</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
-                          {accountsTable.map((acc) => {
+                          {accountsTable.map((acc, idx) => {
                             return (
-                              <div
-                                key={acc.id}
+                              <motion.div
+                                key={acc.id ?? idx}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
                                 className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                                style={{ gridTemplateColumns: INVENTORY_GRID }}
+                                style={{ gridTemplateColumns: INVENTORY_GRID, minWidth: "100%" }}
                               >
                                 <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "")}>{acc.id ?? ""}</span>
                                 <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
@@ -1029,7 +1032,7 @@ const App: React.FC = () => {
                                 <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
                                   Available
                                 </span>
-                              </div>
+                              </motion.div>
                             );
                           })}
                           {accountsTable.length === 0 && (
@@ -1054,11 +1057,13 @@ const App: React.FC = () => {
                           <span className="text-right">Presence</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
-                          {rentalsTable.map((r) => {
+                          {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
                             return (
-                              <div
-                                key={r.id}
+                              <motion.div
+                                key={r.id ?? idx}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
                                 className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
                               >
                                 <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
@@ -1072,7 +1077,7 @@ const App: React.FC = () => {
                                 </span>
                                 <span className="truncate text-neutral-700">{r.hero || ""}</span>
                                 <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{pill.label}</span>
-                              </div>
+                              </motion.div>
                             );
                           })}
                           {rentalsTable.length === 0 && (
