@@ -527,27 +527,23 @@ const App: React.FC = () => {
 
   const ToggleRow: React.FC<{
     label: string;
-    description?: string;
     enabled: boolean;
     onChange: (next: boolean) => void;
-  }> = ({ label, description, enabled, onChange }) => (
+  }> = ({ label, enabled, onChange }) => (
     <button
       type="button"
       onClick={() => onChange(!enabled)}
-      className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-left transition hover:border-neutral-300"
+      className="flex h-16 w-full items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
     >
-      <div className="space-y-1">
-        <div className="text-sm font-semibold text-neutral-900">{label}</div>
-        {description && <div className="text-xs text-neutral-500">{description}</div>}
-      </div>
+      <div className="text-sm font-semibold text-neutral-900">{label}</div>
       <div
-        className={`relative flex h-7 w-12 items-center rounded-full ${
-          enabled ? "bg-emerald-500" : "bg-neutral-300"
-        } transition`}
+        className={`relative flex h-8 w-14 items-center rounded-full transition-all duration-300 ease-out ${
+          enabled ? "bg-emerald-500/90 shadow-[0_10px_25px_-12px_rgba(16,185,129,0.9)]" : "bg-neutral-300"
+        }`}
       >
         <span
-          className={`absolute left-1 h-5 w-5 rounded-full bg-white shadow transition ${
-            enabled ? "translate-x-5" : "translate-x-0"
+          className={`absolute left-1 h-6 w-6 rounded-full bg-white shadow transform transition-all duration-300 ease-out ${
+            enabled ? "translate-x-6" : "translate-x-0"
           }`}
         />
       </div>
@@ -925,28 +921,15 @@ const App: React.FC = () => {
                       key="settings"
                       initial={{ opacity: 0, y: 12 }}
                       animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
-                      className="mt-8 grid gap-6 lg:grid-cols-2"
+                      className="mt-8 grid gap-6 lg:grid-cols-[420px_auto] items-start"
                     >
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="mb-4">
+                        <div className="mb-3">
                           <h3 className="text-lg font-semibold text-neutral-900">Funpay Profile Settings</h3>
-                          <p className="text-sm text-neutral-500">
-                            Toggles inspired by FunPay Cardinal. Values are saved locally.
-                          </p>
                         </div>
                         <div className="space-y-3">
-                          <ToggleRow
-                            label="Auto Raise"
-                            description="Automatically bump lots on FunPay when possible."
-                            enabled={autoRaise}
-                            onChange={setAutoRaise}
-                          />
-                          <ToggleRow
-                            label="Auto Online"
-                            description="Keep profile presence online. (UI only for now)"
-                            enabled={autoOnline}
-                            onChange={setAutoOnline}
-                          />
+                          <ToggleRow label="Auto Raise" enabled={autoRaise} onChange={setAutoRaise} />
+                          <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
