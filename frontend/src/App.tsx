@@ -33,7 +33,7 @@ type AccountRow = {
     id?: string | number;
     accountName?: string;
     buyer?: string;
-    durationSec?: number;
+    durationSec?: number | null;
     startedAt?: string;
     status?: string;
     hero?: string;
@@ -289,6 +289,8 @@ const overviewCards = [
 
 const INVENTORY_GRID =
   "minmax(72px,0.6fr) minmax(180px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) minmax(190px,1.1fr) minmax(80px,0.6fr) minmax(110px,0.6fr)";
+const RENTALS_GRID =
+  "minmax(64px,0.6fr) minmax(180px,1.4fr) minmax(160px,1.1fr) minmax(140px,1fr) minmax(120px,0.8fr) minmax(110px,0.8fr) minmax(140px,1fr) minmax(110px,0.7fr)";
 
 const App: React.FC = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("adminToken") || "");
@@ -316,7 +318,6 @@ const App: React.FC = () => {
   );
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [presenceCache, setPresenceCache] = useState<Record<string, PresenceData>>({});
-  const [presenceURL, setPresenceURL] = useState<string>(() => PRESENCE_BASE);
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -358,7 +359,6 @@ const App: React.FC = () => {
     if (!ids.length) return;
     const controller = new AbortController();
     const base = PRESENCE_BASE;
-    setPresenceURL(base);
     Promise.all(
       ids.map(async (id) => {
         try {
@@ -480,14 +480,18 @@ const App: React.FC = () => {
                 r.in_match !== undefined ||
                 r.in_game !== undefined ||
                 r.match_time ||
+                r.match_seconds !== undefined ||
                 r.hero_name ||
                 r.presence_label;
+              const matchSecondsRaw = Number(r.match_seconds);
+              const matchSeconds = Number.isFinite(matchSecondsRaw) ? matchSecondsRaw : null;
               const presence = hasPresence
                 ? {
                     in_match: !!r.in_match,
                     in_game: !!r.in_game,
                     hero_name: r.hero_name ?? null,
                     match_time: r.match_time ?? null,
+                    match_seconds: matchSeconds,
                   }
                 : null;
               const derivedStatus = presence
@@ -497,12 +501,22 @@ const App: React.FC = () => {
                     ? "In game"
                     : "Offline"
                 : r.status ?? r.presence ?? "";
+              const durationSec = (() => {
+                const explicit = Number(r.duration_sec ?? r.duration_seconds ?? r.seconds);
+                if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+                const hoursRaw = Number(r.rental_duration);
+                const minutesRaw = Number(r.rental_duration_minutes ?? r.rental_minutes);
+                const hours = Number.isFinite(hoursRaw) ? hoursRaw : 0;
+                const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 0;
+                if (hours || minutes) return hours * 3600 + minutes * 60;
+                return null;
+              })();
               return {
                 id: r.id ?? idx,
                 accountName: r.account_name ?? r.login ?? `Rental ${idx + 1}`,
                 buyer: r.buyer ?? r.rented_by ?? "",
-                durationSec: r.duration ?? r.duration_sec ?? r.seconds ?? null,
-                startedAt: r.started_at ?? r.start_time ?? r.created_at,
+                durationSec,
+                startedAt: r.started_at ?? r.start_time ?? r.created_at ?? r.rental_start ?? r.rental_start_time,
                 status: derivedStatus,
                 hero: r.hero ?? r.character ?? "",
                 steamId:
@@ -578,10 +592,19 @@ const App: React.FC = () => {
     return () => clearInterval(id);
   }, [token]);
 
+  const parseDateTime = (value?: string) => {
+    if (!value) return null;
+    const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
+    const parsed = new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.getTime();
+  };
+
   const formatDuration = (seconds: number | null | undefined, startedAt?: string) => {
     let remaining = seconds ?? 0;
     if (startedAt && seconds != null) {
-      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      const startedAtMs = parseDateTime(startedAt);
+      const elapsed = startedAtMs ? Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)) : 0;
       remaining = Math.max(0, seconds - elapsed);
     }
     const h = Math.floor(remaining / 3600)
@@ -594,6 +617,25 @@ const App: React.FC = () => {
       .toString()
       .padStart(2, "0");
     return `${h}:${m}:${s}`;
+  };
+
+  const formatMatchTime = (matchTime?: string | null, matchSeconds?: number | null) => {
+    if (matchTime) return matchTime;
+    if (!Number.isFinite(matchSeconds)) return "";
+    const total = Math.max(0, Math.floor(matchSeconds || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  };
+
+  const formatStartTime = (value?: string) => {
+    const ts = parseDateTime(value);
+    if (!ts) return "";
+    return new Date(ts).toLocaleTimeString();
   };
 
   const statusPill = (status?: string | boolean) => {
@@ -1164,58 +1206,46 @@ const App: React.FC = () => {
                         <div className="text-sm text-neutral-500">Updated live every minute</div>
                       </div>
                       <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
+                        <div
+                          className="grid gap-2 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: RENTALS_GRID }}
+                        >
                           <span>ID</span>
                           <span>Account</span>
                           <span>Buyer</span>
                           <span>Started</span>
+                          <span>Time Left</span>
                           <span>Match Time</span>
                           <span>Hero</span>
-                          <span className="text-right">Presence</span>
+                          <span>Status</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
                             const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
-                            const timer = presence?.match_time || "";
+                            const timer = formatMatchTime(presence?.match_time, presence?.match_seconds) || "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
                                 : r.presenceLabel || pill.label;
+                            const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
                             return (
                               <motion.div
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid grid-cols-8 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
                                 <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="truncate text-neutral-800">{r.accountName || ""}</span>
                                 <span className="truncate text-neutral-700">{r.buyer || ""}</span>
-                                <span className="truncate text-neutral-600">
-                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : ""}
-                                </span>
-                                <span className="truncate font-mono text-neutral-900">
-                                  {timer || "—"}
-                                </span>
+                                <span className="truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
+                                <span className="truncate font-mono text-neutral-900">{timeLeft}</span>
+                                <span className="truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <span className={`truncate text-neutral-700`}>
-                                  {presenceLabel}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (r.steamId) {
-                                      window.open(`${presenceURL}/${r.steamId}`, "_blank", "noopener");
-                                    }
-                                  }}
-                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className} ${
-                                    r.steamId ? "hover:underline" : ""
-                                  }`}
-                                >
-                                  {presenceLabel}
-                                </button>
+                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
                               </motion.div>
                             );
                           })}
@@ -1380,55 +1410,46 @@ const App: React.FC = () => {
                           <h3 className="text-lg font-semibold text-neutral-900">Active rentals</h3>
                           <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
                         </div>
-                        <div className="grid grid-cols-8 gap-2 text-xs font-semibold text-neutral-500">
+                        <div
+                          className="grid gap-2 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: RENTALS_GRID }}
+                        >
                           <span>ID</span>
                           <span>Account</span>
                           <span>Buyer</span>
                           <span>Started</span>
+                          <span>Time Left</span>
                           <span>Match Time</span>
                           <span>Hero</span>
                           <span>Status</span>
-                          <span className="text-right">Presence</span>
                         </div>
                         <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const pill = statusPill(r.status);
                             const presence = r.presence ?? (r.steamId ? presenceCache[r.steamId] : null);
-                            const timer = presence?.match_time || "";
+                            const timer = formatMatchTime(presence?.match_time, presence?.match_seconds) || "-";
                             const presenceLabel = presence?.in_match
                               ? "In match"
                               : presence?.in_game
                                 ? "In game"
                                 : r.presenceLabel || pill.label;
+                            const timeLeft = r.durationSec != null && r.startedAt ? formatDuration(r.durationSec, r.startedAt) : "-";
                             return (
                               <motion.div
                                 key={r.id ?? idx}
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0, transition: { duration: 0.25, delay: idx * 0.03, ease: EASE } }}
-                                className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
                                 <span className="truncate font-semibold text-neutral-900">{r.id ?? ""}</span>
                                 <span className="truncate text-neutral-800">{r.accountName || ""}</span>
                                 <span className="truncate text-neutral-700">{r.buyer || ""}</span>
-                                <span className="truncate text-neutral-600">
-                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : ""}
-                                </span>
-                                <span className="truncate font-mono text-neutral-900">
-                                  {timer || "—"}
-                                </span>
+                                <span className="truncate text-neutral-600">{formatStartTime(r.startedAt) || "-"}</span>
+                                <span className="truncate font-mono text-neutral-900">{timeLeft}</span>
+                                <span className="truncate font-mono text-neutral-900">{timer}</span>
                                 <span className="truncate text-neutral-700">{presence?.hero_name || r.hero || ""}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (r.steamId) window.open(`${presenceURL}/${r.steamId}`, "_blank", "noopener");
-                                  }}
-                                  className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className} ${
-                                    r.steamId ? "hover:underline cursor-pointer" : "opacity-60 cursor-not-allowed"
-                                  }`}
-                                  title={r.steamId ? `${presenceURL}/${r.steamId}` : "No SteamID found for this rental"}
-                                >
-                                  {presenceLabel}
-                                </button>
+                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{presenceLabel}</span>
                               </motion.div>
                             );
                           })}
@@ -1458,4 +1479,5 @@ type PresenceData = {
   in_match?: boolean;
   hero_name?: string | null;
   match_time?: string | null;
+  match_seconds?: number | null;
 };
