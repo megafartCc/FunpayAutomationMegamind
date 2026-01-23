@@ -255,6 +255,11 @@ const App: React.FC = () => {
   });
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
   const [rentalsTable, setRentalsTable] = useState<RentalRow[]>([]);
+  const [chats, setChats] = useState<ChatItem[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [selectedChat, setSelectedChat] = useState<string | number | null>(null);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatListLoading, setChatListLoading] = useState(false);
   const [, setTick] = useState(0);
   const { toast, showToast } = useToast();
 
@@ -296,9 +301,9 @@ const App: React.FC = () => {
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      showToast("Регистрация выполнена, вы вошли.");
+      showToast("??????????? ?????????, ?? ?????.");
     } catch (error) {
-      showToast((error as Error).message || "Не удалось зарегистрироваться", "error");
+      showToast((error as Error).message || "?? ??????? ??????????????????", "error");
     }
   };
 
@@ -311,9 +316,9 @@ const App: React.FC = () => {
       sessionStorage.setItem("adminToken", data.token);
       sessionStorage.setItem("adminUser", data.username);
       setToken(data.token);
-      showToast("Вход выполнен.");
+      showToast("???? ????????.");
     } catch (error) {
-      showToast((error as Error).message || "Не удалось войти", "error");
+      showToast((error as Error).message || "?? ??????? ?????", "error");
     }
   };
 
@@ -398,6 +403,18 @@ const App: React.FC = () => {
     }
   }, [token, apiFetch]);
 
+  // load chat list when on chats tab
+  useEffect(() => {
+    if (!token || activeNav !== "chats") return;
+    loadChats();
+  }, [token, activeNav]);
+
+  // load chat history when selection changes
+  useEffect(() => {
+    if (!token || activeNav !== "chats") return;
+    loadChatHistory(selectedChat);
+  }, [token, activeNav, selectedChat]);
+
   // tick for live timers
   useEffect(() => {
     if (!token) return;
@@ -429,6 +446,45 @@ const App: React.FC = () => {
     if (lower.includes("game")) return { className: "bg-amber-50 text-amber-600", label: "In game" };
     if (lower.includes("off") || lower === "") return { className: "bg-rose-50 text-rose-600", label: "Offline" };
     return { className: "bg-neutral-100 text-neutral-600", label: status || "Unknown" };
+  };
+
+  const loadChats = async () => {
+    if (!token) return;
+    setChatListLoading(true);
+    try {
+      const data = await apiFetch<{ items: any[] }>("/api/chats?fast=1").catch(() => ({ items: [] }));
+      const mapped: ChatItem[] = (data.items || []).map((c, idx) => ({
+        id: c.id ?? idx,
+        name: c.name || c.chat_name || `Chat ${idx + 1}`,
+        last: c.last_message_text || c.preview || "",
+        time: c.last_message_time || c.time || "",
+        unread: !!c.unread,
+      }));
+      setChats(mapped);
+      if (!selectedChat && mapped.length) {
+        setSelectedChat(mapped[0].id);
+      }
+    } finally {
+      setChatListLoading(false);
+    }
+  };
+
+  const loadChatHistory = async (chatId: string | number | null) => {
+    if (!token || !chatId) return;
+    setChatLoading(true);
+    try {
+      const data = await apiFetch<{ items: any[] }>(`/api/chats/${chatId}/history?limit=80`).catch(() => ({ items: [] }));
+      const mapped: ChatMessage[] = (data.items || []).map((m, idx) => ({
+        id: m.id ?? idx,
+        author: m.author || m.user || (m.by_bot ? "Bot" : "User"),
+        text: m.text || m.body || "",
+        sentAt: m.sent_time || m.sent_at || m.time || "",
+        byBot: !!m.by_bot,
+      }));
+      setChatMessages(mapped);
+    } finally {
+      setChatLoading(false);
+    }
   };
 
   return (
@@ -497,7 +553,6 @@ const App: React.FC = () => {
               </aside>
               <main className="relative flex-1 bg-white">
                 <div className="absolute left-0 top-0 h-full w-px bg-neutral-200" />
-                <div className="absolute left-0 right-0 top-[78px] h-px bg-neutral-200" />
                 <motion.div
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } }}
@@ -554,115 +609,225 @@ const App: React.FC = () => {
                             </div>
                             <div className="mt-4 text-sm text-neutral-500">{card.title}</div>
                           <div className="mt-2 text-2xl font-semibold text-neutral-900">
-                            {value === null ? "—" : value.toLocaleString()}
+                            {value === null ? "�" : value.toLocaleString()}
                           </div>
                           </motion.div>
                         );
                       })}
                     </div>
                   </div>
-                  <div className="mt-8 grid gap-6 lg:grid-cols-2">
-                    <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
-                      </div>
-                      <div
-                        className="grid gap-3 px-1 text-xs font-semibold text-neutral-500"
-                        style={{ gridTemplateColumns: "70px 280px 200px 160px 170px 90px 110px" }}
-                      >
-                        <span>ID</span>
-                        <span>Name</span>
-                        <span>Login</span>
-                        <span>Password</span>
-                        <span>Steam ID</span>
-                        <span>MMR</span>
-                        <span className="text-right">State</span>
-                      </div>
-                      <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
-                        {accountsTable.map((acc) => {
-                          return (
-                            <div
-                              key={acc.id}
-                              className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                              style={{ gridTemplateColumns: "70px 280px 200px 160px 170px 90px 110px" }}
-                            >
-                              <span className="truncate font-semibold text-neutral-900" title={String(acc.id ?? "—")}>
-                                {acc.id ?? "—"}
-                              </span>
-                              <span className="truncate font-semibold text-neutral-900" title={acc.name || "Account"}>
-                                {acc.name || "Account"}
-                              </span>
-                              <span className="truncate text-neutral-700" title={acc.login || "—"}>
-                                {acc.login || "—"}
-                              </span>
-                              <span className="truncate text-neutral-700" title={acc.password || "—"}>
-                                {acc.password || "—"}
-                              </span>
-                              <span className="font-mono text-neutral-800" title={acc.steamId || "—"}>
-                                {acc.steamId || "—"}
-                              </span>
-                              <span className="truncate text-neutral-700" title={acc.mmr ?? "—"}>
-                                {acc.mmr ?? "—"}
-                              </span>
-                              <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-                                Available
-                              </span>
+                  {activeNav === "chats" ? (
+                    <motion.div
+                      key="chats"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 grid gap-6 lg:grid-cols-5"
+                    >
+                      <div className="lg:col-span-2 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <h3 className="text-lg font-semibold text-neutral-900">Chats</h3>
+                          <button
+                            onClick={() => {
+                              setSelectedChat(null);
+                              loadChats();
+                            }}
+                            className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+                        <div className="mb-3 flex items-center gap-3">
+                          <input
+                            type="search"
+                            placeholder="Search chats"
+                            className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                            onChange={(e) => {
+                              const q = e.target.value.toLowerCase();
+                              setChats((prev: any[]) =>
+                                prev.map((c) => ({
+                                  ...c,
+                                  _hidden:
+                                    !c.name.toLowerCase().includes(q) &&
+                                    !(c.last || "").toLowerCase().includes(q),
+                                }))
+                              );
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: "620px" }}>
+                          {chatListLoading && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-3 py-6 text-center text-sm text-neutral-500">
+                              Loading chats...
                             </div>
-                          );
-                        })}
-                        {accountsTable.length === 0 && (
-                          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                            No accounts loaded yet.
+                          )}
+                          {!chatListLoading &&
+                            chats
+                              .filter((c: any) => !c._hidden)
+                              .map((chat) => (
+                                <button
+                                  key={chat.id}
+                                  onClick={() => setSelectedChat(chat.id)}
+                                  className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-3 text-left text-sm transition ${
+                                    selectedChat === chat.id
+                                      ? "border-neutral-300 bg-neutral-50"
+                                      : "border-neutral-100 bg-white hover:border-neutral-200"
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="truncate font-semibold text-neutral-900">{chat.name}</span>
+                                      {chat.unread && (
+                                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">
+                                          new
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="truncate text-xs text-neutral-500">{chat.last || "No messages yet"}</p>
+                                  </div>
+                                  <span className="shrink-0 text-[11px] text-neutral-400">{chat.time || ""}</span>
+                                </button>
+                              ))}
+                          {!chatListLoading && chats.filter((c: any) => !c._hidden).length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-3 py-6 text-center text-sm text-neutral-500">
+                              No chats found.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="lg:col-span-3 min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-3 flex items-center justify-between">
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">Conversation</h3>
+                            <p className="text-sm text-neutral-500">
+                              {selectedChat ? `Chat ID: ${selectedChat}` : "Select a chat to view messages."}
+                            </p>
                           </div>
-                        )}
+                        </div>
+                        <div className="flex h-[520px] flex-col gap-3 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
+                          <div className="flex-1 space-y-3 overflow-y-auto pr-2">
+                            {chatLoading && (
+                              <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
+                                Loading messages...
+                              </div>
+                            )}
+                            {!chatLoading && chatMessages.length === 0 && (
+                              <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-sm text-neutral-500">
+                                No messages.
+                              </div>
+                            )}
+                            {!chatLoading &&
+                              chatMessages.map((m) => (
+                                <div
+                                  key={m.id}
+                                  className={`max-w-[86%] rounded-2xl px-4 py-3 shadow-sm ${
+                                    m.byBot ? "ml-auto bg-neutral-900 text-white" : "bg-white text-neutral-900"
+                                  }`}
+                                >
+                                  <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+                                    <span className={m.byBot ? "text-neutral-200" : "text-neutral-500"}>{m.author || "User"}</span>
+                                    <span className={m.byBot ? "text-neutral-300" : "text-neutral-400"}>{m.sentAt || ""}</span>
+                                  </div>
+                                  <div className="text-sm leading-relaxed">{m.text || "(empty)"}</div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <div className="mt-8 grid gap-6 lg:grid-cols-2">
+                      <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
+                        </div>
+                        <div
+                          className="grid gap-3 px-1 text-xs font-semibold text-neutral-500"
+                          style={{ gridTemplateColumns: "70px 360px 220px 200px 230px 80px 110px" }}
+                        >
+                          <span>ID</span>
+                          <span>Name</span>
+                          <span>Login</span>
+                          <span>Password</span>
+                          <span>Steam ID</span>
+                          <span>MMR</span>
+                          <span className="text-right">State</span>
+                        </div>
+                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                          {accountsTable.map((acc) => {
+                            return (
+                              <div
+                                key={acc.id}
+                                className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                style={{ gridTemplateColumns: "70px 360px 220px 200px 230px 80px 110px" }}
+                              >
+                                <span className="min-w-0 font-semibold text-neutral-900" title={String(acc.id ?? "�")}>{acc.id ?? "�"}</span>
+                                <span className="min-w-0 break-words whitespace-normal font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
+                                  {acc.name || "Account"}
+                                </span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.login || "�"}>{acc.login || "�"}</span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.password || "�"}>{acc.password || "�"}</span>
+                                <span className="min-w-0 max-w-[210px] truncate font-mono text-[13px] leading-tight text-neutral-800" title={acc.steamId || "�"}>
+                                  {acc.steamId || "�"}
+                                </span>
+                                <span className="min-w-0 truncate text-neutral-700" title={acc.mmr ?? "�"}>{acc.mmr ?? "�"}</span>
+                                <span className="justify-self-end rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
+                                  Available
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {accountsTable.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No accounts loaded yet.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-lg font-semibold text-neutral-900">Active rentals</h3>
+                          <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
+                        </div>
+                        <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
+                          <span>ID</span>
+                          <span>Account</span>
+                          <span>Buyer</span>
+                          <span>Started</span>
+                          <span>Remaining</span>
+                          <span>Hero</span>
+                          <span className="text-right">Presence</span>
+                        </div>
+                        <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
+                          {rentalsTable.map((r) => {
+                            const pill = statusPill(r.status);
+                            return (
+                              <div
+                                key={r.id}
+                                className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                              >
+                                <span className="truncate font-semibold text-neutral-900">{r.id ?? "�"}</span>
+                                <span className="truncate text-neutral-800">{r.accountName || "�"}</span>
+                                <span className="truncate text-neutral-700">{r.buyer || "�"}</span>
+                                <span className="truncate text-neutral-600">
+                                  {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : "�"}
+                                </span>
+                                <span className="truncate font-mono text-neutral-900">
+                                  {formatDuration(r.durationSec ?? null, r.startedAt)}
+                                </span>
+                                <span className="truncate text-neutral-700">{r.hero || "�"}</span>
+                                <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>{pill.label}</span>
+                              </div>
+                            );
+                          })}
+                          {rentalsTable.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                              No active rentals yet.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div className="min-h-[520px] rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-neutral-900">Active rentals</h3>
-                        <button className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">Status</button>
-                      </div>
-                      <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-neutral-500">
-                        <span>ID</span>
-                        <span>Account</span>
-                        <span>Buyer</span>
-                        <span>Started</span>
-                        <span>Remaining</span>
-                        <span>Hero</span>
-                        <span className="text-right">Presence</span>
-                      </div>
-                      <div className="mt-3 space-y-3 overflow-y-auto pr-1" style={{ maxHeight: "640px" }}>
-                        {rentalsTable.map((r) => {
-                          const pill = statusPill(r.status);
-                          return (
-                            <div
-                              key={r.id}
-                              className="grid grid-cols-7 items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                            >
-                              <span className="truncate font-semibold text-neutral-900">{r.id ?? "—"}</span>
-                              <span className="truncate text-neutral-800">{r.accountName || "—"}</span>
-                              <span className="truncate text-neutral-700">{r.buyer || "—"}</span>
-                              <span className="truncate text-neutral-600">
-                                {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : "—"}
-                              </span>
-                              <span className="truncate font-mono text-neutral-900">
-                                {formatDuration(r.durationSec ?? null, r.startedAt)}
-                              </span>
-                              <span className="truncate text-neutral-700">{r.hero || "—"}</span>
-                              <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-semibold ${pill.className}`}>
-                                {pill.label}
-                              </span>
-                            </div>
-                          );
-                        })}
-                        {rentalsTable.length === 0 && (
-                          <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                            No active rentals yet.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </motion.div>
               </main>
             </div>
