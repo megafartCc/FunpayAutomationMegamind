@@ -10,10 +10,6 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [mafileJson, setMafileJson] = useState("");
-  const [mmr, setMmr] = useState("");
-  const [durationHours, setDurationHours] = useState("1");
-  const [durationMinutes, setDurationMinutes] = useState("0");
-  const [owner, setOwner] = useState("");
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -26,39 +22,16 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
       return;
     }
 
-    const hours = Number(durationHours || 0);
-    const minutes = Number(durationMinutes || 0);
-    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-      onToast("Duration must be a number.", true);
-      return;
-    }
-    if (hours < 0 || minutes < 0 || minutes > 59) {
-      onToast("Minutes must be between 0 and 59.", true);
-      return;
-    }
-    if (hours === 0 && minutes === 0) {
-      onToast("Duration must be greater than 0.", true);
-      return;
-    }
-
-    const mmrValue = mmr.trim() === "" ? 0 : Number(mmr);
-    if (!Number.isFinite(mmrValue) || mmrValue < 0) {
-      onToast("MMR must be a number 0 or higher.", true);
-      return;
-    }
-
     const payload: Record<string, unknown> = {
       account_name: accountName.trim(),
       login: login.trim(),
       password: password.trim(),
       mafile_json: mafileJson.trim(),
-      mmr: Math.floor(mmrValue),
-      rental_duration: Math.floor(hours),
-      rental_minutes: Math.floor(minutes),
+      // defaults to satisfy backend without exposing in UI
+      rental_duration: 1,
+      rental_minutes: 0,
+      mmr: 0,
     };
-    if (owner.trim()) {
-      payload.owner = owner.trim();
-    }
 
     try {
       await onSubmit(payload);
@@ -67,74 +40,45 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
       setLogin("");
       setPassword("");
       setMafileJson("");
-      setMmr("");
-      setDurationHours("1");
-      setDurationMinutes("0");
-      setOwner("");
     } catch (error) {
       onToast((error as Error).message || "Failed to create account.", true);
     }
   };
 
   return (
-    <form className="panel space-y-4" onSubmit={handleSubmit}>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <div>
-          <label className="field-label">Account name</label>
+    <form className="space-y-5" onSubmit={handleSubmit}>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Account name</label>
           <input
-            className="input"
+            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-900 shadow-sm outline-none focus:border-neutral-400"
             value={accountName}
             onChange={(event) => setAccountName(event.target.value)}
             required
           />
         </div>
-        <div>
-          <label className="field-label">Login</label>
-          <input className="input" value={login} onChange={(event) => setLogin(event.target.value)} required />
-        </div>
-        <div>
-          <label className="field-label">Password</label>
-          <input className="input" value={password} onChange={(event) => setPassword(event.target.value)} required />
-        </div>
-        <div>
-          <label className="field-label">MMR</label>
+        <div className="space-y-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Login</label>
           <input
-            className="input"
-            type="number"
-            min={0}
-            value={mmr}
-            onChange={(event) => setMmr(event.target.value)}
+            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-900 shadow-sm outline-none focus:border-neutral-400"
+            value={login}
+            onChange={(event) => setLogin(event.target.value)}
+            required
           />
         </div>
-        <div>
-          <label className="field-label">Duration (hours)</label>
+        <div className="space-y-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Password</label>
           <input
-            className="input"
-            type="number"
-            min={0}
-            value={durationHours}
-            onChange={(event) => setDurationHours(event.target.value)}
+            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-900 shadow-sm outline-none focus:border-neutral-400"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
           />
         </div>
-        <div>
-          <label className="field-label">Duration (minutes)</label>
-          <input
-            className="input"
-            type="number"
-            min={0}
-            max={59}
-            value={durationMinutes}
-            onChange={(event) => setDurationMinutes(event.target.value)}
-          />
-        </div>
-        <div>
-          <label className="field-label">Owner (optional)</label>
-          <input className="input" value={owner} onChange={(event) => setOwner(event.target.value)} />
-        </div>
-        <div className="md:col-span-2 xl:col-span-3">
-          <label className="field-label">maFile JSON</label>
+        <div className="space-y-2 md:col-span-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">maFile JSON</label>
           <textarea
-            className="textarea"
+            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-900 shadow-sm outline-none focus:border-neutral-400"
             rows={4}
             value={mafileJson}
             onChange={(event) => setMafileJson(event.target.value)}
@@ -144,7 +88,10 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <button className="btn" type="submit">
+        <button
+          className="rounded-lg bg-neutral-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-neutral-800"
+          type="submit"
+        >
           Create account
         </button>
       </div>
