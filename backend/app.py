@@ -1420,6 +1420,8 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
         name = ta.get("name")
         if not name:
             continue
+        if name == "":
+            continue
         form_data[name] = payload.comment or ""
 
     for sel in form.find_all("select"):
@@ -1458,8 +1460,10 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
             value = inp.get("value")
             if payload.role == "buyer" and ("покуп" in label_text or value in ("buyer", "1")):
                 form_data[inp.get("name")] = value
+                break
             if payload.role == "seller" and ("продав" in label_text or value in ("seller", "2")):
                 form_data[inp.get("name")] = value
+                break
 
     post_resp = session.post(
         action,
