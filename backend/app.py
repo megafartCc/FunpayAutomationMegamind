@@ -1341,9 +1341,99 @@ def keys_health(request: Request) -> dict:
 
 @app.post("/api/support/tickets", dependencies=[Depends(require_admin)])
 def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dict:
-    # Design-only stub: keep UI flow but disable external FunPay submission.
+    # Submit a support ticket to support.funpay.com using the user's golden_key.
     user = getattr(request.state, "user", None) or {}
     key_id = payload.key_id if payload.key_id is not None else _resolve_key_id(request)
+    if key_id is None:
+        raise HTTPException(status_code=400, detail="Select a workspace first")
+
+    key_entry = db.get_user_key(user.get("id"), key_id)
+    token = (key_entry or {}).get("golden_key")
+    if not token:
+        raise HTTPException(status_code=400, detail="Workspace has no golden key")
+
+    proxy_url = key_entry.get("proxy_url")
+    proxy_username = key_entry.get("proxy_username")
+    proxy_password = key_entry.get("proxy_password")
+    proxy = None
+    if proxy_url:
+        try:
+            proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
+        except Exception as exc:
+            logger.warning("Proxy invalid for support ticket user=%s key=%s: %s", user.get("id"), key_id, exc)
+            proxy = None
+
+    session = requests.Session()
+    if proxy:
+        session.proxies.update(proxy)
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        }
+    )
+    session.cookies.set("golden_key", token, domain=".funpay.com")
+    session.cookies.set("golden_key", token, domain="support.funpay.com")
+
+    try:
+        form_resp = session.get(f"{FUNPAY_SUPPORT_BASE}/new/1", timeout=20, allow_redirects=True)
+        form_resp.raise_for_status()
+    except Exception as exc:
+        logger.error("Support form fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to load FunPay support form")
+
+    soup = BeautifulSoup(form_resp.text, "html.parser")
+    form = soup.find("form")
+    if not form:
+        raise HTTPException(status_code=502, detail="Support form not found")
+
+    action = urljoin(form_resp.url, form.get("action") or "")
+    data = {inp.get("name"): inp.get("value") or "" for inp in form.find_all("input") if inp.get("name")}
+
+    # Map topic to issue codes by role
+    buyer_map = {
+        "problem_order": "101",
+        "problem_payment": "101",
+        "problem_account": "102",
+        "problem_chat": "102",
+        "other": "101",
+    }
+    seller_map = {
+        "problem_order": "201",
+        "problem_payment": "201",
+        "problem_account": "202",
+        "problem_chat": "202",
+        "other": "201",
+    }
+    is_buyer = str(payload.role).lower() == "buyer"
+    topic_code = buyer_map.get(payload.topic, "101") if is_buyer else seller_map.get(payload.topic, "201")
+
+    data["ticket[comment][body_html]"] = payload.comment or ""
+    if payload.order_id:
+        data["ticket[fields][2]"] = payload.order_id
+    data["ticket[fields][3]"] = "1" if is_buyer else "2"
+    if is_buyer:
+        data["ticket[fields][4]"] = topic_code
+        data["ticket[fields][5]"] = ""
+    else:
+        data["ticket[fields][4]"] = ""
+        data["ticket[fields][5]"] = topic_code
+
+    try:
+        post_resp = session.post(action, data=data, timeout=20, allow_redirects=False)
+    except Exception as exc:
+        logger.error("Support form submit failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to submit support ticket")
+
+    ok = post_resp.status_code < 400
+    ticket_url = None
+    try:
+        payload_json = post_resp.json()
+        ticket_url = payload_json.get("action", {}).get("url")
+    except Exception:
+        pass
+    if not ticket_url:
+        ticket_url = post_resp.headers.get("Location")
 
     with _support_lock:
         ticket_id = len(_support_tickets) + 1
@@ -1357,16 +1447,15 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
                 "order_id": payload.order_id,
                 "comment": payload.comment,
                 "created_at": datetime.utcnow().isoformat(),
-                "status": "disabled",
-                "note": "FunPay support submission disabled (design-only stub).",
+                "status": "ok" if ok else f"fail:{post_resp.status_code}",
+                "ticket_url": ticket_url,
             }
         )
 
-    return {
-        "id": ticket_id,
-        "status": "disabled",
-        "message": "FunPay support submission is disabled; UI only.",
-    }
+    if not ok:
+        raise HTTPException(status_code=post_resp.status_code, detail="Support form submission failed")
+
+    return {"id": ticket_id, "status": "sent", "url": ticket_url}
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])

@@ -633,6 +633,7 @@ const App: React.FC = () => {
   const [ticketRole, setTicketRole] = useState<"buyer" | "seller">("seller");
   const [ticketOrderId, setTicketOrderId] = useState("");
   const [ticketComment, setTicketComment] = useState("");
+  const [ticketSubmitting, setTicketSubmitting] = useState(false);
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
@@ -4005,7 +4006,7 @@ const App: React.FC = () => {
                         <div className="mb-4">
                           <h3 className="text-lg font-semibold text-neutral-900">FunPay Support Ticket (manual)</h3>
                           <p className="text-sm text-neutral-500">
-                            Визуальный макет формы. Отправка на FunPay сейчас отключена (design only).
+                            Отправляет заявку от имени выбранного workspace на support.funpay.com.
                           </p>
                         </div>
                         <div className="space-y-3">
@@ -4061,16 +4062,37 @@ const App: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-3">
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 if (!ticketComment.trim() || !ticketTopic) {
                                   showToast("Заполните тему и комментарий.", "error");
                                   return;
                                 }
-                                showToast("Отправка отключена: форма только для дизайна.", "info");
+                                if (ticketSubmitting) return;
+                                setTicketSubmitting(true);
+                                try {
+                                  await apiFetch("/api/support/tickets", {
+                                    method: "POST",
+                                    headers: buildKeyHeader(),
+                                    body: JSON.stringify({
+                                      topic: ticketTopic,
+                                      role: ticketRole,
+                                      order_id: ticketOrderId.trim() || null,
+                                      comment: ticketComment.trim(),
+                                    }),
+                                  });
+                                  showToast("Заявка отправлена в поддержку.");
+                                  setTicketComment("");
+                                  setTicketOrderId("");
+                                } catch (error) {
+                                  showToast((error as Error).message || "Не удалось отправить заявку.", "error");
+                                } finally {
+                                  setTicketSubmitting(false);
+                                }
                               }}
-                              className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800"
+                              disabled={ticketSubmitting}
+                              className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                             >
-                              Отправить
+                              {ticketSubmitting ? "Отправка..." : "Отправить"}
                             </button>
                             <span className="text-xs text-neutral-500">Используется выбранное workspace.</span>
                           </div>
