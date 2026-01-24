@@ -1457,6 +1457,78 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
 
     return {"id": ticket_id, "status": "sent", "url": ticket_url}
 
+@app.get("/api/support/tickets/logs", dependencies=[Depends(require_admin)])
+def support_ticket_logs(request: Request, limit: int = 200) -> dict:
+    with _support_lock:
+        items = list(_support_tickets)
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"items": items[: max(1, min(int(limit or 200), 500))]}
+
+
+def _compose_ticket_comment(order_id: str, buyer: str | None, lot_number: int | None, topic: str, role: str, base_comment: str | None) -> str:
+    """
+    Use Groq AI if configured to generate a polite ticket body; fallback to static text.
+    """
+    api_key = os.getenv("GROQ_API_KEY")
+    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    fallback = base_comment or (
+        f"Здравствуйте! Заказ {order_id or 'N/A'} выполнен, данные переданы. "
+        "Покупатель пока не подтвердил выполнение. Просьба подтвердить заказ. Спасибо!"
+    )
+    if not api_key:
+        return fallback
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "Ты вежливый саппорт FunPay. Пиши кратко и по делу."},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Сформулируй текст для тикета FunPay: заказ выполнен, покупатель не подтвердил.\n"
+                            f"Order: {order_id or 'N/A'}; Buyer: {buyer or 'unknown'}; Lot: {lot_number or 'n/a'}; "
+                            f"Topic: {topic}; Role: {role}. "
+                            "Попроси подтвердить заказ."
+                        ),
+                    },
+                ],
+                "max_tokens": 180,
+                "temperature": 0.3,
+            },
+            timeout=12,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        return content.strip() if content else fallback
+    except Exception as exc:
+        logger.warning(f"GROQ compose failed, fallback used: {exc}")
+        return fallback
+
+
+class ComposeTicketRequest(BaseModel):
+    order_id: str | None = None
+    buyer: str | None = None
+    lot_number: int | None = None
+    topic: str = "problem_order"
+    role: str = "seller"
+    comment: str | None = None
+
+@app.post("/api/support/tickets/compose", dependencies=[Depends(require_admin)])
+def compose_support_ticket(payload: ComposeTicketRequest) -> dict:
+    text = _compose_ticket_comment(
+        payload.order_id or "",
+        payload.buyer,
+        payload.lot_number,
+        payload.topic,
+        payload.role,
+        payload.comment,
+    )
+    return {"text": text}
+
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
 def create_key(payload: KeyCreate, request: Request) -> dict:
@@ -1872,6 +1944,13 @@ def blacklist_list(request: Request, query: str = "") -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
     items = db.list_blacklist(uid, query=query or None, key_id=key_id)
+    return {"items": items}
+
+@app.get("/api/blacklist/logs", dependencies=[Depends(require_admin)])
+def blacklist_logs(request: Request, limit: int = 100) -> dict:
+    uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
+    items = db.list_blacklist_logs(uid, key_id=key_id, limit=max(1, min(int(limit or 100), 500)))
     return {"items": items}
 
 @app.get("/api/blacklist/logs", dependencies=[Depends(require_admin)])
