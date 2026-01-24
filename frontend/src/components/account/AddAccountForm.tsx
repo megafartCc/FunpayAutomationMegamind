@@ -94,7 +94,7 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast, keys
               <option value="">Select workspace</option>
               {keys.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label || `Key ${item.id}`}
+                  {item.label || `Workspace ${item.id}`}
                   {item.is_default ? " (Default)" : ""}
                 </option>
               ))}

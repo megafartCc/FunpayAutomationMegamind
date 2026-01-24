@@ -122,6 +122,7 @@ class FunpayBot:
         self._last_refresh_ts = 0.0
         self._token_lock = threading.Lock()
         self._refresh_requested = threading.Event()
+        self._stop_requested = threading.Event()
         self._expire_delay_since: Dict[int, datetime] = {}
         self._expire_delay_next_check: Dict[int, datetime] = {}
         self._expire_delay_notified: set[int] = set()
@@ -362,8 +363,22 @@ class FunpayBot:
             self._token = token
         self._refresh_requested.set()
 
+    def request_stop(self) -> None:
+        self._stop_requested.set()
+        runner = self._runner
+        for method_name in ("stop", "close", "shutdown"):
+            handler = getattr(runner, method_name, None)
+            if callable(handler):
+                try:
+                    handler()
+                except Exception:
+                    pass
+                break
+
     def start(self) -> None:
         logger.info(f"Starting FunPay bot (user={self._user_id} key={self._key_id})...")
+        if self._stop_requested.is_set():
+            return
         if not self._token:
             logger.error("FunPay golden key is missing. FunPay automation stopped.")
             return
@@ -379,6 +394,9 @@ class FunpayBot:
             raise RuntimeError("Runner not initialized")
 
         for event in self._runner.listen(requests_delay=RUNNER_REQUEST_DELAY_SECONDS):
+            if self._stop_requested.is_set():
+                logger.info(f"Stopping FunPay bot (user={self._user_id} key={self._key_id})...")
+                break
             try:
                 self._tick_refresh_if_needed()
 

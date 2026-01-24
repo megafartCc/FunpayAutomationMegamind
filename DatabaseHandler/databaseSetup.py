@@ -1006,6 +1006,10 @@ class MySQLDB:
                 mafile_json = self._normalize_mafile(mafile_json)
             enc_password = self._encrypt_value(password)
             enc_mafile = self._encrypt_value(mafile_json)
+            if key_id is None and user_id is not None:
+                default_key = self.get_default_key(user_id)
+                if default_key and default_key.get("id"):
+                    key_id = int(default_key["id"])
 
             cursor = self._cursor()
             cursor.execute(
@@ -1470,7 +1474,14 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             effective_user_id = user_id if user_id is not None else 0
-            effective_key_id = 0 if key_id is None else int(key_id)
+            if key_id is None:
+                if effective_user_id:
+                    default_key = self.get_default_key(effective_user_id)
+                    effective_key_id = int(default_key["id"]) if default_key and default_key.get("id") else 0
+                else:
+                    effective_key_id = 0
+            else:
+                effective_key_id = int(key_id)
             if user_id is None:
                 cursor.execute(
                     "SELECT ID FROM accounts WHERE ID = ?",
@@ -3929,30 +3940,39 @@ class MySQLDB:
     def _key_filter(self, key_id: int | None, column: str = "key_id") -> tuple[str, list]:
         if key_id is None:
             return "", []
-        return f" AND ({column} = ? OR {column} IS NULL OR {column} = 0)", [key_id]
+        return f" AND {column} = ?", [key_id]
 
     # ---- User keys (multi FunPay tokens) ----
 
     def ensure_user_keys_for_user(self, user_id: int, golden_key: str | None = None) -> None:
         cursor = self._cursor()
+        should_normalize = False
         try:
             cursor.execute("SELECT COUNT(*) FROM user_keys WHERE user_id = ?", (user_id,))
             exists = cursor.fetchone()[0] > 0
-            if exists:
-                return
-            if not golden_key:
-                cursor.execute("SELECT golden_key FROM users WHERE id = ?", (user_id,))
-                row = cursor.fetchone()
-                golden_key = row[0] if row else ""
-            cursor.execute(
-                "INSERT INTO user_keys (user_id, label, golden_key, is_default) VALUES (?, ?, ?, 1)",
-                (user_id, "Default", golden_key or ""),
-            )
-            self.conn.commit()
+            if not exists:
+                if not golden_key:
+                    cursor.execute("SELECT golden_key FROM users WHERE id = ?", (user_id,))
+                    row = cursor.fetchone()
+                    golden_key = row[0] if row else ""
+                cursor.execute(
+                    "INSERT INTO user_keys (user_id, label, golden_key, is_default) VALUES (?, ?, ?, 1)",
+                    (user_id, "Default", golden_key or ""),
+                )
+                self.conn.commit()
+            should_normalize = True
         except Exception as exc:
             logger.error(f"Error ensuring default key for user {user_id}: {exc}")
         finally:
             cursor.close()
+        if not should_normalize:
+            return
+        try:
+            default_key = self.get_default_key(user_id)
+            if default_key and default_key.get("id"):
+                self.normalize_legacy_key_data(user_id, int(default_key["id"]))
+        except Exception:
+            pass
 
     def list_user_keys(self, user_id: int) -> list:
         cursor = self._cursor()
@@ -4319,17 +4339,43 @@ class MySQLDB:
     def delete_user_key(self, user_id: int, key_id: int) -> bool:
         cursor = self._cursor()
         try:
-            cursor.execute("SELECT is_default FROM user_keys WHERE user_id = ? AND id = ?", (user_id, key_id))
+            cursor.execute(
+                "SELECT id, golden_key, is_default FROM user_keys WHERE user_id = ? AND id = ?",
+                (user_id, key_id),
+            )
             row = cursor.fetchone()
             if not row:
                 return False
-            is_default = bool(row[0])
+            is_default = bool(row[2])
+
+            cursor.execute("DELETE FROM lots WHERE user_id = ? AND key_id = ?", (user_id, key_id))
+            cursor.execute("DELETE FROM accounts WHERE user_id = ? AND key_id = ?", (user_id, key_id))
+            cursor.execute("DELETE FROM order_history WHERE user_id = ? AND key_id = ?", (user_id, key_id))
+            cursor.execute("DELETE FROM blacklist WHERE user_id = ? AND key_id = ?", (user_id, key_id))
+            cursor.execute("DELETE FROM admin_calls WHERE user_id = ? AND key_id = ?", (user_id, key_id))
+            cursor.execute(
+                "DELETE FROM funpay_balance_snapshots WHERE user_id = ? AND key_id = ?",
+                (user_id, key_id),
+            )
+
             cursor.execute("DELETE FROM user_keys WHERE user_id = ? AND id = ?", (user_id, key_id))
             if is_default:
                 cursor.execute(
-                    "UPDATE user_keys SET is_default = 1 WHERE user_id = ? ORDER BY id ASC LIMIT 1",
+                    "SELECT id, golden_key FROM user_keys WHERE user_id = ? ORDER BY id ASC LIMIT 1",
                     (user_id,),
                 )
+                fallback = cursor.fetchone()
+                if fallback:
+                    cursor.execute(
+                        "UPDATE user_keys SET is_default = 1 WHERE user_id = ? AND id = ?",
+                        (user_id, fallback[0]),
+                    )
+                    cursor.execute(
+                        "UPDATE users SET golden_key = ? WHERE id = ?",
+                        (fallback[1], user_id),
+                    )
+                else:
+                    cursor.execute("UPDATE users SET golden_key = '' WHERE id = ?", (user_id,))
             self.conn.commit()
             return True
         except Exception as exc:
@@ -4356,6 +4402,28 @@ class MySQLDB:
             if row:
                 return {"id": row[0], "label": row[1], "golden_key": row[2]}
             return None
+        finally:
+            cursor.close()
+
+    def normalize_legacy_key_data(self, user_id: int, default_key_id: int) -> None:
+        cursor = self._cursor()
+        try:
+            tables = [
+                "accounts",
+                "lots",
+                "blacklist",
+                "order_history",
+                "admin_calls",
+                "funpay_balance_snapshots",
+            ]
+            for table in tables:
+                cursor.execute(
+                    f"UPDATE {table} SET key_id = ? WHERE user_id = ? AND (key_id IS NULL OR key_id = 0)",
+                    (default_key_id, user_id),
+                )
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error normalizing legacy keys for user {user_id}: {exc}")
         finally:
             cursor.close()
 

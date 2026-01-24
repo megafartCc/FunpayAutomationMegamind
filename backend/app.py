@@ -262,6 +262,37 @@ PRESENCE_OFFLINE_GRACE = 45.0
 BALANCE_REFRESH_SECONDS = 15 * 60
 BALANCE_SERIES_DAYS = 30
 STATS_SERIES_DAYS = 370
+_normalized_users: set[int] = set()
+
+
+def _ensure_user_key_normalized(user_id: int | None) -> None:
+    if user_id is None:
+        return
+    if user_id in _normalized_users:
+        return
+    try:
+        default_key = db.get_default_key(user_id)
+        if default_key and default_key.get("id"):
+            db.normalize_legacy_key_data(user_id, int(default_key["id"]))
+    except Exception as exc:
+        logger.error(f"Failed to normalize legacy keys for user {user_id}: {exc}")
+    finally:
+        _normalized_users.add(user_id)
+
+
+def _start_bot_for_user(user: dict | None) -> None:
+    if not user:
+        return
+    user_id = user.get("id")
+    if user_id is None:
+        return
+    default_key = db.get_default_key(user_id)
+    if default_key and default_key.get("golden_key"):
+        bot_manager.start_for_user_key(user_id, default_key["id"], default_key["golden_key"])
+        return
+    token = user.get("golden_key")
+    if token:
+        bot_manager.start_for_user_key(user_id, None, token)
 
 
 class BotManager:
@@ -299,8 +330,8 @@ class BotManager:
                 self._global_tokens[golden_key] = (user_id, key_id)
                 return
             token_key = (user_id, golden_key)
-            canonical = self._token_index.get(token_key)
-            if canonical is not None:
+            if token_key in self._token_index:
+                canonical = self._token_index.get(token_key)
                 canonical_entry = self._bots.get((user_id, canonical))
                 if canonical_entry:
                     self._bots[(user_id, key_id)] = canonical_entry
@@ -334,6 +365,7 @@ class BotManager:
                 return
             bot = entry.get("bot")
             token = entry.get("key")
+            shared = False
             if token:
                 token_key = (user_id, token)
                 if self._token_index.get(token_key) == key_id:
@@ -344,10 +376,17 @@ class BotManager:
                         if other.get("bot") is bot:
                             self._token_index[token_key] = kid
                             self._global_tokens[token] = (user_id, kid)
-                            return
-                    self._token_index.pop(token_key, None)
-                    if self._global_tokens.get(token) == (user_id, key_id):
-                        self._global_tokens.pop(token, None)
+                            shared = True
+                            break
+                    if not shared:
+                        self._token_index.pop(token_key, None)
+                        if self._global_tokens.get(token) == (user_id, key_id):
+                            self._global_tokens.pop(token, None)
+            if not shared and bot is not None:
+                try:
+                    bot.request_stop()
+                except Exception:
+                    pass
 
     def send_message(self, user_id: int, owner: str, message: str, key_id: int | None = None) -> bool:
         if not owner or not message:
@@ -786,6 +825,7 @@ def require_admin(request: Request, response: Response) -> None:
                     "username": session.get("username"),
                     "golden_key": session.get("golden_key"),
                 }
+                _ensure_user_key_normalized(session.get("user_id"))
                 return
 
     auth_header = request.headers.get("authorization", "")
@@ -795,6 +835,7 @@ def require_admin(request: Request, response: Response) -> None:
             user = db.get_user_by_token(token)
             if user:
                 request.state.user = user
+                _ensure_user_key_normalized(user.get("id"))
                 return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -838,13 +879,15 @@ def _resolve_key_id(request: Request) -> int | None:
     header = request.headers.get("x-key-id") or request.headers.get("x-fp-key-id")
     if header:
         try:
-            return int(header)
+            value = int(header)
+            return value if value > 0 else None
         except Exception:
             return None
     param = request.query_params.get("key_id")
     if param:
         try:
-            return int(param)
+            value = int(param)
+            return value if value > 0 else None
         except Exception:
             return None
     return None
@@ -991,7 +1034,7 @@ def auth_register(payload: AuthRegister, request: Request, response: Response) -
         raise HTTPException(status_code=400, detail="User already exists or invalid data")
     user = db.get_user_by_username(payload.username)
     if user:
-        bot_manager.start_for_user_key(user["id"], None, user["golden_key"])
+        _start_bot_for_user(user)
         now = datetime.utcnow()
         expires_at = now + timedelta(days=SESSION_TTL_DAYS)
         session_id = db.create_session(user["id"], expires_at, now)
@@ -1009,7 +1052,7 @@ def auth_login(payload: AuthLogin, request: Request, response: Response) -> dict
     expires_at = now + timedelta(days=SESSION_TTL_DAYS)
     session_id = db.create_session(user["id"], expires_at, now)
     _set_session_cookie(response, request, session_id)
-    bot_manager.start_for_user_key(user["id"], None, user["golden_key"])
+    _start_bot_for_user(user)
     return {"username": user["username"]}
 
 
@@ -1040,7 +1083,7 @@ def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
     ok = db.update_golden_key(user["id"], payload.golden_key)
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update golden key")
-    bot_manager.start_for_user_key(user["id"], None, payload.golden_key)
+    _start_bot_for_user(user)
     return {"success": True}
 
 

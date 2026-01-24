@@ -688,6 +688,20 @@ const App: React.FC = () => {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const clearedAdminCallsRef = useRef<Record<string, number>>({});
 
+  const clearAppCaches = useCallback(() => {
+    memoryCache.clear();
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX)) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // ignore cache cleanup errors
+    }
+  }, []);
+
   const parseAdminCallTimestamp = (value?: string | null) => {
     if (!value) return null;
     const raw = String(value).trim();
@@ -732,7 +746,7 @@ const App: React.FC = () => {
     const map = new Map<number, string>();
     userKeys.forEach((item) => {
       if (typeof item.id === "number") {
-        map.set(item.id, item.label || `Key ${item.id}`);
+        map.set(item.id, item.label || `Workspace ${item.id}`);
       }
     });
     return map;
@@ -749,8 +763,8 @@ const App: React.FC = () => {
         return defaultKeyLabel;
       }
       const numeric = Number(keyId);
-      if (!Number.isFinite(numeric)) return defaultKeyLabel;
-      return keyLabelMap.get(numeric) || `Key ${numeric}`;
+      if (!Number.isFinite(numeric) || numeric === 0) return defaultKeyLabel;
+      return keyLabelMap.get(numeric) || `Workspace ${numeric}`;
     },
     [defaultKeyLabel, keyLabelMap]
   );
@@ -1197,7 +1211,7 @@ const App: React.FC = () => {
 
   const handleCreateKey = async () => {
     if (keyActionBusy) return;
-    const label = newKeyLabel.trim() || "Key";
+    const label = newKeyLabel.trim() || "Workspace";
     const goldenKey = newKeyValue.trim();
     if (!goldenKey) {
       showToast("Golden key is required.", "error");
@@ -1289,14 +1303,20 @@ const App: React.FC = () => {
 
   const handleDeleteKey = async (keyId: number) => {
     if (keyActionBusy) return;
-    if (!window.confirm("Delete this workspace? Accounts and lots stay, but it can no longer sync with FunPay.")) {
+    if (
+      !window.confirm(
+        "Delete this workspace and all data linked to it (accounts, lots, history)? This cannot be undone."
+      )
+    ) {
       return;
     }
     setKeyActionBusy(true);
     try {
       await apiFetch(`/api/keys/${keyId}`, { method: "DELETE" });
       showToast("Workspace removed.");
+      clearAppCaches();
       await loadKeys();
+      revalidateActive();
     } catch (error) {
       showToast((error as Error).message || "Failed to delete workspace.", "error");
     } finally {
@@ -2659,7 +2679,7 @@ const App: React.FC = () => {
                           </option>
                           {userKeys.map((item) => (
                             <option key={item.id} value={item.id}>
-                              {item.label || `Key ${item.id}`}
+                              {item.label || `Workspace ${item.id}`}
                             </option>
                           ))}
                         </select>
@@ -3690,7 +3710,7 @@ const App: React.FC = () => {
                           <option value="all">All workspaces</option>
                           {userKeys.map((item) => (
                             <option key={item.id} value={item.id}>
-                              {item.label || `Key ${item.id}`}
+                              {item.label || `Workspace ${item.id}`}
                               {item.is_default ? " (Default)" : ""}
                             </option>
                           ))}
@@ -4932,7 +4952,7 @@ const App: React.FC = () => {
                                   <option value="">Select workspace</option>
                                   {userKeys.map((item) => (
                                     <option key={item.id} value={item.id}>
-                                      {item.label || `Key ${item.id}`}
+                                      {item.label || `Workspace ${item.id}`}
                                     </option>
                                   ))}
                                 </select>
@@ -5238,7 +5258,7 @@ const App: React.FC = () => {
                                   <option value="all">All workspaces</option>
                                   {userKeys.map((item) => (
                                     <option key={item.id} value={item.id}>
-                                      {item.label || `Key ${item.id}`}
+                                      {item.label || `Workspace ${item.id}`}
                                     </option>
                                   ))}
                                 </select>
