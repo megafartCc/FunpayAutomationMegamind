@@ -636,6 +636,8 @@ const App: React.FC = () => {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [autoRaise, setAutoRaise] = useState<boolean | null>(null);
   const [autoRaiseCategories, setAutoRaiseCategories] = useState<string>("");
+  const [categoryOptions, setCategoryOptions] = useState<{ id: number; name: string }[]>([]);
+  const [categorySearch, setCategorySearch] = useState("");
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -2489,6 +2491,12 @@ const App: React.FC = () => {
         setAutoTickets(!!res2.enabled);
       } catch {
         setAutoTickets(true);
+      }
+      try {
+        const resCats = await apiFetch<{ items: { id: number; name: string }[] }>("/api/funpay/categories");
+        setCategoryOptions(resCats.items || []);
+      } catch {
+        setCategoryOptions([]);
       }
     })();
   }, [token, apiFetch]);
@@ -4740,16 +4748,54 @@ const App: React.FC = () => {
                             onChange={(val) => handleToggleAutoRaise(val)}
                             disabled={autoRaise === null}
                           />
-                          <div className="space-y-1 text-xs text-neutral-600">
-                            <label className="font-semibold">Raise category IDs (comma separated)</label>
+                          <div className="space-y-2 text-xs text-neutral-700">
+                            <div className="font-semibold text-neutral-800">Raise categories</div>
                             <input
-                              value={autoRaiseCategories}
-                              onChange={(e) => setAutoRaiseCategories(e.target.value)}
+                              value={categorySearch}
+                              onChange={(e) => setCategorySearch(e.target.value)}
                               className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                              placeholder="e.g. 128,129,130"
+                              placeholder="Search categories..."
                             />
+                            <div className="max-h-48 overflow-y-auto rounded-lg border border-neutral-200 bg-white">
+                              {(categoryOptions || [])
+                                .filter((c) =>
+                                  !categorySearch.trim()
+                                    ? true
+                                    : c.name.toLowerCase().includes(categorySearch.toLowerCase()) ||
+                                      String(c.id).includes(categorySearch.trim())
+                                )
+                                .map((c) => {
+                                  const selectedIds = autoRaiseCategories
+                                    .split(",")
+                                    .map((s) => s.trim())
+                                    .filter(Boolean);
+                                  const isSelected = selectedIds.includes(String(c.id));
+                                  return (
+                                    <label
+                                      key={c.id}
+                                      className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={(e) => {
+                                          let next = new Set(selectedIds);
+                                          if (e.target.checked) next.add(String(c.id));
+                                          else next.delete(String(c.id));
+                                          setAutoRaiseCategories(Array.from(next).join(","));
+                                        }}
+                                      />
+                                      <span className="font-mono text-xs text-neutral-500">{c.id}</span>
+                                      <span className="truncate">{c.name}</span>
+                                    </label>
+                                  );
+                                })}
+                              {!categoryOptions.length && (
+                                <div className="px-3 py-2 text-neutral-500 text-sm">No categories loaded.</div>
+                              )}
+                            </div>
                             <p className="text-[11px] text-neutral-500">
-                              Leave empty to raise all categories for this workspace.
+                              Leave all unchecked to raise every category for this workspace.
                             </p>
                           </div>
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />

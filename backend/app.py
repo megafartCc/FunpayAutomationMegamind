@@ -1128,6 +1128,25 @@ def require_funpay_token(request: Request) -> tuple[int, str, int | None, Option
     return user_id, token, key_id, proxy
 
 
+@app.get("/api/funpay/categories", dependencies=[Depends(require_admin)])
+def funpay_categories(request: Request) -> dict:
+    user_id, token, key_id, proxy = require_funpay_token(request)
+    try:
+        acc = FPAccount(token, proxy=proxy).get()
+        cats_attr = getattr(acc, "categories", None)
+        categories = cats_attr() if callable(cats_attr) else cats_attr
+        if not categories and hasattr(acc, "get_sorted_categories"):
+            categories = list(acc.get_sorted_categories().values())
+        items = []
+        for c in categories or []:
+            cid = getattr(c, "id", None)
+            name = getattr(c, "name", None) or str(cid)
+            items.append({"id": cid, "name": name})
+        return {"items": items, "key_id": key_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 def require_funpay_account(request: Request):
     user = getattr(request.state, "user", None)
     _, token, _, proxy = require_funpay_token(request)
