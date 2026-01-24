@@ -227,10 +227,14 @@ class MySQLDB:
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS lots (
-                    lot_number INT PRIMARY KEY,
-                    account_id INT NOT NULL UNIQUE,
+                    lot_number INT NOT NULL,
+                    account_id INT NOT NULL,
                     lot_url TEXT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_id INT NOT NULL DEFAULT 0,
+                    key_id INT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (lot_number, user_id, key_id),
+                    UNIQUE KEY uniq_account_user (account_id, user_id, key_id),
                     FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
@@ -380,10 +384,14 @@ class MySQLDB:
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS lots (
-                    lot_number INTEGER PRIMARY KEY,
-                    account_id INTEGER NOT NULL UNIQUE,
+                    lot_number INTEGER NOT NULL,
+                    account_id INTEGER NOT NULL,
                     lot_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_id INTEGER NOT NULL DEFAULT 0,
+                    key_id INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (lot_number, user_id, key_id),
+                    UNIQUE(account_id, user_id, key_id),
                     FOREIGN KEY (account_id) REFERENCES accounts(ID) ON DELETE CASCADE
                 )
                 """
@@ -826,7 +834,7 @@ class MySQLDB:
 
     def _ensure_key_columns(self):
         self._add_column_if_missing("accounts", "key_id", "INT NULL")
-        self._add_column_if_missing("lots", "key_id", "INT NULL")
+        self._add_column_if_missing("lots", "key_id", "INT NOT NULL DEFAULT 0")
         self._add_column_if_missing("blacklist", "key_id", "INT NULL")
         self._add_column_if_missing("order_history", "key_id", "INT NULL")
         self._add_column_if_missing("admin_calls", "key_id", "INT NULL")
@@ -1322,13 +1330,14 @@ class MySQLDB:
                     (user_id,),
                 )
             else:
+                key_clause, key_params = self._key_filter(key_id, "key_id")
                 cursor.execute(
-                    """
+                    f"""
                     SELECT ID, account_name, path_to_maFile, login, password, rental_duration, rental_duration_minutes, mmr, owner, rental_start, user_id, mafile_json, account_frozen, rental_frozen, rental_frozen_at, key_id
                     FROM accounts
-                    WHERE user_id = ? AND (key_id = ? OR key_id IS NULL)
+                    WHERE user_id = ?{key_clause}
                     """,
-                    (user_id, key_id),
+                    (user_id, *key_params),
                 )
         rows = cursor.fetchall()
         cursor.close()
@@ -1379,15 +1388,16 @@ class MySQLDB:
                     (user_id,),
                 )
             else:
+                key_clause, key_params = self._key_filter(key_id, "l.key_id")
                 cursor.execute(
-                    """
+                    f"""
                     SELECT l.lot_number, l.account_id, l.lot_url, a.account_name, a.owner, l.key_id
                     FROM lots l
                     JOIN accounts a ON a.ID = l.account_id
-                    WHERE l.user_id = ? AND (l.key_id = ? OR l.key_id IS NULL)
+                    WHERE l.user_id = ?{key_clause}
                     ORDER BY l.lot_number
                     """,
-                    (user_id, key_id),
+                    (user_id, *key_params),
                 )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
@@ -1408,6 +1418,7 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             effective_user_id = user_id if user_id is not None else 0
+            effective_key_id = 0 if key_id is None else int(key_id)
             if user_id is None:
                 cursor.execute(
                     "SELECT ID FROM accounts WHERE ID = ?",
@@ -1423,7 +1434,7 @@ class MySQLDB:
             # Upsert mapping per user
             cursor.execute(
                 "REPLACE INTO lots (lot_number, account_id, lot_url, user_id, key_id) VALUES (?, ?, ?, ?, ?)",
-                (lot_number, account_id, lot_url, effective_user_id, key_id),
+                (lot_number, account_id, lot_url, effective_user_id, effective_key_id),
             )
             self.conn.commit()
             return True
@@ -3213,8 +3224,9 @@ class MySQLDB:
                         (user_id,),
                     )
                 else:
+                    key_clause, key_params = self._key_filter(key_id, "key_id")
                     cursor.execute(
-                        """
+                        f"""
                         SELECT 
                             ID,
                             account_name,
@@ -3232,11 +3244,10 @@ class MySQLDB:
                         FROM accounts 
                         WHERE owner IS NOT NULL 
                         AND owner != 'OTHER_ACCOUNT'
-                        AND user_id = ?
-                        AND (key_id = ? OR key_id IS NULL)
+                        AND user_id = ?{key_clause}
                         ORDER BY rental_start DESC
                         """,
-                        (user_id, key_id),
+                        (user_id, *key_params),
                     )
             rows = cursor.fetchall()
             active_users = [
@@ -3591,6 +3602,27 @@ class MySQLDB:
             if not has_user:
                 cursor.execute("ALTER TABLE lots ADD COLUMN user_id INT NOT NULL DEFAULT 0")
 
+            # Ensure key_id is present and normalized
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = 'lots' AND column_name = 'key_id'
+                """,
+                (MYSQLDATABASE,),
+            )
+            has_key = cursor.fetchone()[0] > 0
+            if not has_key:
+                cursor.execute("ALTER TABLE lots ADD COLUMN key_id INT NOT NULL DEFAULT 0")
+            try:
+                cursor.execute("UPDATE lots SET key_id = 0 WHERE key_id IS NULL")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE lots MODIFY COLUMN key_id INT NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+
             # Ensure primary key is (lot_number, user_id)
             cursor.execute(
                 """
@@ -3602,9 +3634,9 @@ class MySQLDB:
                 (MYSQLDATABASE,),
             )
             pk_cols = [row[0] for row in cursor.fetchall()]
-            if pk_cols != ["lot_number", "user_id"]:
+            if pk_cols != ["lot_number", "user_id", "key_id"]:
                 cursor.execute("ALTER TABLE lots DROP PRIMARY KEY")
-                cursor.execute("ALTER TABLE lots ADD PRIMARY KEY (lot_number, user_id)")
+                cursor.execute("ALTER TABLE lots ADD PRIMARY KEY (lot_number, user_id, key_id)")
 
             # Ensure uniqueness of (account_id, user_id)
             cursor.execute(
@@ -3621,7 +3653,7 @@ class MySQLDB:
                     cursor.execute("ALTER TABLE lots DROP INDEX account_id")
                 except Exception:
                     pass
-                cursor.execute("ALTER TABLE lots ADD UNIQUE KEY uniq_account_user (account_id, user_id)")
+                cursor.execute("ALTER TABLE lots ADD UNIQUE KEY uniq_account_user (account_id, user_id, key_id)")
         finally:
             cursor.close()
 
@@ -3837,7 +3869,7 @@ class MySQLDB:
     def _key_filter(self, key_id: int | None, column: str = "key_id") -> tuple[str, list]:
         if key_id is None:
             return "", []
-        return f" AND ({column} = ? OR {column} IS NULL)", [key_id]
+        return f" AND ({column} = ? OR {column} IS NULL OR {column} = 0)", [key_id]
 
     # ---- User keys (multi FunPay tokens) ----
 
@@ -4024,14 +4056,17 @@ class MySQLDB:
                 new_account_id = account_id_map.get(int(account_id or 0))
                 if not new_account_id:
                     continue
-                cursor.execute(
-                    """
-                    INSERT INTO lots (lot_number, account_id, lot_url, user_id, key_id)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (lot_number, new_account_id, lot_url, dest_user_id, dest_key_id),
-                )
-                counts["lots"] += 1
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO lots (lot_number, account_id, lot_url, user_id, key_id)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (lot_number, new_account_id, lot_url, dest_user_id, dest_key_id),
+                    )
+                    counts["lots"] += 1
+                except Exception:
+                    continue
 
             cursor.execute(
                 f"""
