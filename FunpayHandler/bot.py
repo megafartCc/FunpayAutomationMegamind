@@ -7,6 +7,7 @@ import threading
 import time
 import math
 import requests
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -133,6 +134,9 @@ class FunpayBot:
         self._expire_delay_notified: set[int] = set()
         self._expire_warning_sent: Dict[int, set[int]] = {}
         self._expire_warning_start: Dict[int, str] = {}
+        # Pending order confirmations; auto-ticket after deadline
+        self._confirm_tasks: Dict[str, dict] = {}
+        self._confirm_lock = threading.Lock()
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -161,6 +165,33 @@ class FunpayBot:
         finally:
             cursor.close()
             conn.close()
+
+    def _add_confirm_task(
+        self,
+        order_id: str,
+        buyer: str,
+        lot_number: int | None,
+        rental_minutes: int | None,
+    ) -> None:
+        if not order_id:
+            return
+        minutes = rental_minutes if rental_minutes and rental_minutes > 0 else 60
+        due = datetime.utcnow() + timedelta(minutes=minutes) + timedelta(hours=24)
+        payload = {
+            "buyer": buyer,
+            "lot_number": lot_number,
+            "due_at": due,
+            "rental_minutes": minutes,
+            "submitted": False,
+        }
+        with self._confirm_lock:
+            self._confirm_tasks[order_id] = payload
+
+    def _clear_confirm_task(self, order_id: str) -> None:
+        if not order_id:
+            return
+        with self._confirm_lock:
+            self._confirm_tasks.pop(order_id, None)
 
     def _build_replacement_message(self, account: dict, lot_number: int | None = None) -> str:
         subject = "\u043b\u043e\u0442" if lot_number is not None else "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
@@ -422,6 +453,10 @@ class FunpayBot:
         thread.start()
         logger.info("Rental expiration checker started.")
 
+        confirm_thread = threading.Thread(target=self._confirm_check_loop, daemon=True)
+        confirm_thread.start()
+        logger.info("Order confirmation watcher started.")
+
         if self._runner is None:
             raise RuntimeError("Runner not initialized")
 
@@ -531,6 +566,8 @@ class FunpayBot:
         if order_id is None:
             return
         self._processed_order_ids.add(str(order_id))
+        # also clear confirm task if any
+        self._clear_confirm_task(str(order_id))
 
     def _log_order_status(self, order: Any, action: str, source: str) -> None:
         order_id = getattr(order, "id", None)
@@ -559,6 +596,8 @@ class FunpayBot:
             user_id=self._user_id,
             key_id=self._key_id,
         )
+        if action in ("closed", "order_confirmed", "order_confirmed_by_admin"):
+            self._clear_confirm_task(order_id)
 
         send_message_to_admin(
             f"ORDER {action.upper()}\n\n"
@@ -696,6 +735,126 @@ class FunpayBot:
             return
 
         self._process_named_order(acc, chat_id, event, buyer, description, amount)
+
+    # --- Pending confirmation tracking -------------------------------------------------
+
+    def _confirm_check_loop(self) -> None:
+        while not self._stop_requested.is_set():
+            now = datetime.utcnow()
+            to_submit: list[tuple[str, dict]] = []
+            with self._confirm_lock:
+                for oid, data in list(self._confirm_tasks.items()):
+                    due_at: datetime = data.get("due_at") or now
+                    if data.get("submitted"):
+                        continue
+                    if now >= due_at:
+                        to_submit.append((oid, data))
+            for order_id, data in to_submit:
+                try:
+                    self._submit_missing_confirmation_ticket(order_id, data)
+                except Exception as exc:
+                    logger.error(f"Failed to auto-submit ticket for order {order_id}: {exc}")
+                finally:
+                    self._clear_confirm_task(order_id)
+            time.sleep(60)
+
+    def _generate_ticket_comment(self, order_id: str, buyer: str, lot_number: int | None) -> str:
+        api_key = os.getenv("GROQ_API_KEY")
+        model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+        prompt = (
+            "Сформулируй вежливое обращение в поддержку FunPay. "
+            "Сообщи, что заказ выполнен, покупатель получил данные, но не подтвердил заказ. "
+            "Попроси подтвердить выполнение. "
+            f"Заказ: {order_id}. Покупатель: {buyer}." + (f" Лот №{lot_number}." if lot_number else "")
+        )
+        fallback = (
+            f"Здравствуйте! Заказ {order_id} был выполнен, данные переданы, покупатель {buyer} "
+            f"пока не подтвердил выполнение. Пожалуйста, подтвердите заказ. Спасибо!"
+        )
+        if not api_key:
+            return fallback
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "Ты вежливый саппорт FunPay."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": 160,
+                    "temperature": 0.3,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content")
+            return content.strip() if content else fallback
+        except Exception as exc:
+            logger.warning(f"GROQ generation failed, using fallback: {exc}")
+            return fallback
+
+    def _submit_missing_confirmation_ticket(self, order_id: str, data: dict) -> None:
+        if not self._token:
+            return
+        comment = self._generate_ticket_comment(order_id, data.get("buyer") or "", data.get("lot_number"))
+        session = requests.Session()
+        if self._proxy:
+            session.proxies.update(self._proxy)
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            }
+        )
+        session.cookies.set("golden_key", self._token, domain=".funpay.com")
+        session.cookies.set("golden_key", self._token, domain="support.funpay.com")
+
+        form_resp = session.get("https://support.funpay.com/tickets/new/1", timeout=20, allow_redirects=True)
+        form_resp.raise_for_status()
+        soup = BeautifulSoup(form_resp.text, "html.parser")
+        form = soup.find("form")
+        if not form:
+            raise RuntimeError("Support form not found")
+        action = urljoin(form_resp.url, form.get("action") or "")
+        payload = {inp.get("name"): inp.get("value") or "" for inp in form.find_all("input") if inp.get("name")}
+        payload["ticket[comment][body_html]"] = comment
+        payload["ticket[fields][2]"] = order_id
+        # role seller -> value 2, topic 201 (buyer forgot to confirm)
+        payload["ticket[fields][3]"] = "2"
+        payload["ticket[fields][4]"] = ""  # buyer topics
+        payload["ticket[fields][5]"] = "201"
+
+        post_resp = session.post(action, data=payload, timeout=20, allow_redirects=False)
+        ok = post_resp.status_code < 400
+        ticket_url = None
+        try:
+            payload_json = post_resp.json()
+            ticket_url = payload_json.get("action", {}).get("url")
+        except Exception:
+            ticket_url = post_resp.headers.get("Location")
+
+        self._db.log_order_event(
+            order_id=order_id,
+            owner_id=data.get("buyer") or "",
+            action="ticket_auto",
+            account_name=None,
+            lot_number=data.get("lot_number"),
+            amount=None,
+            price=None,
+            user_id=self._user_id,
+            key_id=self._key_id,
+        )
+        send_message_to_admin(
+            "AUTO SUPPORT TICKET\n\n"
+            f"Order: {order_id}\n"
+            f"Buyer: {data.get('buyer')}\n"
+            f"Due passed: {data.get('due_at')}\n"
+            f"Status: {'ok' if ok else f'fail:{post_resp.status_code}'}\n"
+            f"URL: {ticket_url or 'n/a'}"
+        )
 
     def _process_lot_order(
         self,
@@ -954,6 +1113,7 @@ class FunpayBot:
         note: str | None = None,
     ) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
+        order_id = getattr(event.order, "id", None)
         self._db.set_account_owner(
             account["id"],
             event.order.buyer_username,
@@ -966,6 +1126,9 @@ class FunpayBot:
         duration_label = format_duration_minutes(unit_minutes * units)
         self._set_rental_duration_for_order(account["id"], units, unit_minutes)
         display_name = self._display_account_name(account.get("account_name"))
+        total_minutes = unit_minutes * units
+        if order_id:
+            self._add_confirm_task(str(order_id), event.order.buyer_username, lot_number, total_minutes)
 
         send_message_to_admin(
             "NEW ACCOUNT ISSUED\n\n"
