@@ -56,10 +56,10 @@ from FunpayHandler.bot import FunpayBot
 PROXY_TEST_URL = "https://api.ipify.org"
 FUNPAY_SUPPORT_BASE = "https://support.funpay.com/tickets"
 FUNPAY_SUPPORT_TOPIC_IDS = {
-    "problem_order": 1,
-    "problem_payment": 2,
-    "problem_account": 3,
-    "other": 4,
+    "problem_order": 1,   # Проблема с заказом
+    "problem_payment": 2, # Проблема с платежом
+    "problem_account": 3, # Проблема с аккаунтом FunPay
+    "other": 4,           # Другое (fallback)
 }
 
 # In-memory workspace health
@@ -1371,16 +1371,19 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
     # set cookies on both domains
     session.cookies.set("golden_key", token, domain=".funpay.com")
     session.cookies.set("golden_key", token, domain="support.funpay.com")
-    resp = None
-    form = None
-    form_url = None
-    topic_id = FUNPAY_SUPPORT_TOPIC_IDS.get(payload.topic) or FUNPAY_SUPPORT_TOPIC_IDS.get("other")
-    candidate_urls = [f"{FUNPAY_SUPPORT_BASE}/new"]
+    topic_id = FUNPAY_SUPPORT_TOPIC_IDS.get(payload.topic, FUNPAY_SUPPORT_TOPIC_IDS.get("other"))
+
+    # Build target URLs by topic id
+    candidate_urls = []
     if topic_id:
-        candidate_urls.insert(0, f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}")
-    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new?locale=ru")
+        candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}")
+    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new")
     if topic_id:
         candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}?locale=ru")
+    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new?locale=ru")
+
+    resp = form = None
+    form_url = None
     for candidate_url in candidate_urls:
         try:
             resp = session.get(candidate_url, timeout=20)
@@ -1397,81 +1400,73 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
             break
     if not form:
         raise HTTPException(status_code=502, detail="Support form not found on support.funpay.com")
+
     action = form.get("action") or form_url
     action = urljoin(form_url, action)
     form_data = {}
-    # preload existing hidden values
+
     for inp in form.find_all("input"):
         name = inp.get("name")
         if not name:
             continue
-        if inp.get("type") in ("checkbox", "radio"):
+        itype = (inp.get("type") or "").lower()
+        if itype in ("checkbox", "radio"):
             if inp.has_attr("checked"):
                 form_data[name] = inp.get("value", "on")
             continue
         form_data[name] = inp.get("value", "")
-    # textarea
+
     for ta in form.find_all("textarea"):
         name = ta.get("name")
         if not name:
             continue
         form_data[name] = payload.comment or ""
-    # select/topic mapping
-    topic_text = {
-        "problem_order": "Проблема с заказом",
-        "problem_payment": "Проблема с платежом",
-        "problem_account": "Проблема с аккаунтом FunPay",
-        "other": "Другое",
-    }.get(payload.topic, payload.topic)
+
     for sel in form.find_all("select"):
         name = sel.get("name")
         if not name:
             continue
-        selected_value = None
+        selected = None
         for opt in sel.find_all("option"):
-            text = (opt.text or "").strip()
-            if topic_text and topic_text.lower() in text.lower():
-                selected_value = opt.get("value")
+            if opt.has_attr("selected"):
+                selected = opt.get("value")
                 break
-        if not selected_value:
-            selected_value = sel.find("option").get("value") if sel.find("option") else ""
-        form_data[name] = selected_value
-    # order id
+        if selected is None and sel.find("option"):
+            selected = sel.find("option").get("value")
+        form_data[name] = selected or ""
+
     if payload.order_id:
         for inp in form.find_all("input"):
-            placeholder = (inp.get("placeholder") or "").lower()
             name = inp.get("name") or ""
+            placeholder = (inp.get("placeholder") or "").lower()
             label_text = ""
             label = inp.find_previous("label")
             if label:
                 label_text = (label.text or "").lower()
-            if "?????" in placeholder or "order" in name.lower() or "?????" in label_text:
+            if "order" in name.lower() or "заказ" in placeholder or "заказ" in label_text:
                 form_data[name] = payload.order_id
                 break
-    # role radio
-    role_value = None
-    for inp in form.find_all("input"):
-        if inp.get("type") != "radio":
-            continue
-        label_text = ""
-        label = inp.find_next_sibling("label")
-        if label:
-            label_text = (label.text or "").lower()
-        value = inp.get("value")
-        if payload.role == "buyer" and ("?????" in label_text or value == "buyer"):
-            role_value = value
-        if payload.role == "seller" and ("??????" in label_text or value == "seller"):
-            role_value = value
-    if role_value:
-        # find radio name
+
+    if payload.role in ("buyer", "seller"):
         for inp in form.find_all("input"):
-            if inp.get("type") == "radio" and inp.get("value") == role_value:
-                form_data[inp.get("name")] = role_value
-                break
-    try:
-        post_resp = session.post(action, data=form_data, timeout=20, headers={"Referer": form_url})
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to submit support form: {exc}")
+            if (inp.get("type") or "").lower() != "radio":
+                continue
+            label_text = ""
+            label = inp.find_next_sibling("label")
+            if label:
+                label_text = (label.text or "").lower()
+            value = inp.get("value")
+            if payload.role == "buyer" and ("покуп" in label_text or value in ("buyer", "1")):
+                form_data[inp.get("name")] = value
+            if payload.role == "seller" and ("продав" in label_text or value in ("seller", "2")):
+                form_data[inp.get("name")] = value
+
+    post_resp = session.post(
+        action,
+        data=form_data,
+        timeout=20,
+        headers={"Referer": form_url, "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest"},
+    )
     status_ok = post_resp.status_code < 400
     with _support_lock:
         ticket_id = len(_support_tickets) + 1
@@ -3112,3 +3107,6 @@ def spa_fallback(path: str) -> FileResponse:
         return FileResponse(index_path)
     return _frontend_build_missing_response()
 
+t e s t 
+ 
+ 
