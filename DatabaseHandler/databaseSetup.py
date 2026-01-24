@@ -3028,6 +3028,33 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def get_blacklist_compensation_total(
+        self, owner_id: str, user_id: int | None = None, key_id: int | None = None
+    ) -> int:
+        """
+        Sum of 'blacklist_comp' amounts for a buyer within a workspace.
+        """
+        if not owner_id:
+            return 0
+        try:
+            cursor = self._cursor()
+            key_clause, key_params = self._key_filter(key_id, "key_id")
+            cursor.execute(
+                f"""
+                SELECT COALESCE(SUM(amount), 0)
+                FROM order_history
+                WHERE owner = ? AND user_id = ? AND action = 'blacklist_comp'{key_clause}
+                """,
+                (str(owner_id), int(user_id or 0), *key_params),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception as exc:
+            logger.error(f"Error summing blacklist compensation for {owner_id}: {exc}")
+            return 0
+        finally:
+            cursor.close()
+
     def remove_from_blacklist(
         self,
         owner: str,

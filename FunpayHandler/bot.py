@@ -600,25 +600,49 @@ class FunpayBot:
             return
 
         if self._db.is_blacklisted(buyer, self._user_id, key_id=self._key_id):
-            # If buyer pays for 5 units of the current lot in one order, consider it a compensation and auto-unblacklist.
+            # If buyer pays enough units while blacklisted, auto-unblacklist after reaching the compensation threshold.
             description = str(getattr(order, "description", "") or "")
             lot_number = parse_lot_number(description)
             amount = int(getattr(order, "amount", 1) or 1)
-            if lot_number is not None and amount >= 5:
+            COMP_THRESHOLD = 5
+            # Log this payment toward compensation
+            self._db.log_order_event(
+                order_id=order_id,
+                owner_id=buyer,
+                action="blacklist_comp",
+                account_name=description,
+                lot_number=lot_number,
+                amount=amount,
+                price=getattr(order, "price", None),
+                user_id=self._user_id,
+                key_id=self._key_id,
+            )
+            paid_total = self._db.get_blacklist_compensation_total(buyer, self._user_id, key_id=self._key_id)
+            if paid_total >= COMP_THRESHOLD:
                 self._db.remove_from_blacklist(buyer, self._user_id, key_id=self._key_id)
                 acc.send_message(
                     chat_id,
-                    "Оплата компенсации получена (5 штук лота). Доступ разблокирован."
+                    f"Оплата компенсации получена ({paid_total} шт). Доступ разблокирован."
                 )
                 send_message_to_admin(
                     "BLACKLIST AUTO-REMOVED\n\n"
-                    f"Buyer: {buyer}\nOrder: {order_id}\nLot: {lot_number}\nAmount: {amount}"
+                    f"Buyer: {buyer}\nOrder: {order_id}\nLot: {lot_number}\nAmount: {amount}\n"
+                    f"Total paid: {paid_total}/{COMP_THRESHOLD}"
                 )
                 self._mark_order_processed(event)
                 return
+
+            remaining = max(COMP_THRESHOLD - paid_total, 0)
+            lot_link = None
+            if lot_number is not None:
+                mapping = self._db.get_lot_mapping(lot_number, self._user_id, key_id=self._key_id)
+                lot_link = (mapping or {}).get("lot_url")
             acc.send_message(
                 chat_id,
-                "Вы в черном списке. Чтобы разблокировать доступ к командам, оплатите компенсацию: купите 5 штук этого лота (эквивалентно 5 часам аренды)."
+                "Вы в черном списке. Чтобы разблокировать команды, оплатите компенсацию: "
+                f"нужно 5 шт этого лота. Сейчас оплачено: {paid_total}. "
+                f"Осталось: {remaining} шт."
+                + (f"\nОплатите по ссылке: {lot_link}" if lot_link else "")
             )
             send_message_to_admin(
                 "BLACKLISTED ORDER\n\n"
