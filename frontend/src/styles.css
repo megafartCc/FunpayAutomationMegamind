@@ -8,10 +8,19 @@
   body {
     @apply font-sans;
   }
-  .dark body {
-    background:
-      radial-gradient(1400px 900px at 15% -10%, #1e293b 0%, #0b1220 55%, #05070d 100%);
-    color: #e2e8f0;
+  /* Invert everything in dark mode: black -> white, white -> black */
+  .dark {
+    color-scheme: dark;
+    filter: invert(1) hue-rotate(180deg);
+    background-color: #000;
+  }
+  /* Re-invert media/icons so they stay natural */
+  .dark img,
+  .dark video,
+  .dark svg,
+  .dark canvas,
+  .dark iframe {
+    filter: invert(1) hue-rotate(180deg);
   }
 }
 
@@ -63,72 +72,5 @@ input[type="password"]::-ms-clear {
 }
 
 @layer utilities {
-  .dark .bg-white {
-    background-color: #0f172a;
-  }
-  .dark .bg-neutral-50 {
-    background-color: #0b1220;
-  }
-  .dark .bg-neutral-100 {
-    background-color: #111827;
-  }
-  .dark .bg-neutral-900,
-  .dark .bg-neutral-800,
-  .dark .bg-neutral-700 {
-    background-color: #0f172a;
-  }
-  .dark .bg-black {
-    background-color: #0a0f1b;
-  }
-  .dark .text-neutral-900 {
-    color: #f8fafc;
-  }
-  .dark .text-neutral-800 {
-    color: #e2e8f0;
-  }
-  .dark .text-neutral-700 {
-    color: #cbd5f5;
-  }
-  .dark .text-neutral-600 {
-    color: #94a3b8;
-  }
-  .dark .text-neutral-500 {
-    color: #94a3b8;
-  }
-  .dark .text-neutral-400 {
-    color: #64748b;
-  }
-  .dark .text-black {
-    color: #f8fafc;
-  }
-  .dark .text-slate-900 {
-    color: #e2e8f0;
-  }
-  .dark .text-slate-800 {
-    color: #cbd5f5;
-  }
-  .dark .border-neutral-200 {
-    border-color: #1e293b;
-  }
-  .dark .border-neutral-100 {
-    border-color: #162033;
-  }
-  .dark .border-neutral-300 {
-    border-color: #243149;
-  }
-  .dark {
-    background-color: #05070d;
-    color: #e2e8f0;
-  }
-  .dark body {
-    background:
-      radial-gradient(1400px 900px at 15% -10%, #0a0f1b 0%, #05070d 55%, #03040a 100%);
-    color: #e2e8f0;
-  }
-  .dark .shadow-neutral-200\/70 {
-    box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.9);
-  }
-  .dark .shadow-neutral-200 {
-    box-shadow: 0 12px 28px -24px rgba(15, 23, 42, 0.85);
-  }
+  /* No extra dark overrides needed; inversion handles palette flip */
 }
