@@ -5414,9 +5414,17 @@ const App: React.FC = () => {
                                 style={{ gridTemplateColumns: INVENTORY_GRID, minWidth: "100%" }}
                               >
                                 <span className="min-w-0 font-semibold text-neutral-900" title={String(rowId)}>{rowId}</span>
-                                <span className="min-w-0 truncate font-semibold leading-tight text-neutral-900" title={acc.name || "Account"}>
-                                  {acc.name || "Account"}
-                                </span>
+                                <div className="min-w-0">
+                                  <div
+                                    className="truncate font-semibold leading-tight text-neutral-900"
+                                    title={acc.name || "Account"}
+                                  >
+                                    {acc.name || "Account"}
+                                  </div>
+                                  <span className="mt-1 inline-flex w-fit rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
+                                    {resolveKeyLabel(acc.keyId)}
+                                  </span>
+                                </div>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>{acc.login || ""}</span>
                                 <span className="min-w-0 truncate text-neutral-700" title={acc.password || ""}>{acc.password || ""}</span>
                                 <span className="min-w-0 truncate font-mono text-xs leading-tight text-neutral-800 tabular-nums" title={acc.steamId || ""}>
