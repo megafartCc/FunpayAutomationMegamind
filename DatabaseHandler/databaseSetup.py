@@ -1088,6 +1088,7 @@ class MySQLDB:
         user_id: int | None = None,
         start_rental: bool = True,
         key_id: int | None = None,
+        order_id: str | None = None,
     ) -> bool:
         """
         Set the owner of an account and optionally record the rental start time with a +3 hours offset.
@@ -1101,46 +1102,48 @@ class MySQLDB:
                 rental_start = (datetime.utcnow() + timedelta(hours=3)).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
+            order_clause = ", rental_order_id = ?" if order_id is not None else ""
+            order_params: tuple = (order_id,) if order_id is not None else ()
             # Update owner and set rental start time
             if user_id in (None, 0):
                 if start_rental:
                     cursor.execute(
                         f"""
                         UPDATE accounts 
-                        SET owner = ?, rental_start = ?
+                        SET owner = ?, rental_start = ?{order_clause}
                         WHERE ID = ? AND owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL){key_clause}
                         """,
-                        (owner_id, rental_start, account_id, *key_params),
+                        (owner_id, rental_start, *order_params, account_id, *key_params),
                     )
                 else:
                     cursor.execute(
                         f"""
                         UPDATE accounts 
-                        SET owner = ?
+                        SET owner = ?{order_clause}
                         WHERE ID = ? AND owner IS NULL AND (account_frozen = 0 OR account_frozen IS NULL){key_clause}
                         """,
-                        (owner_id, account_id, *key_params),
+                        (owner_id, *order_params, account_id, *key_params),
                     )
             else:
                 if start_rental:
                     cursor.execute(
                         f"""
                         UPDATE accounts 
-                        SET owner = ?, rental_start = ?
+                        SET owner = ?, rental_start = ?{order_clause}
                         WHERE ID = ? AND owner IS NULL AND user_id = ?
                           AND (account_frozen = 0 OR account_frozen IS NULL){key_clause}
                         """,
-                        (owner_id, rental_start, account_id, user_id, *key_params),
+                        (owner_id, rental_start, *order_params, account_id, user_id, *key_params),
                     )
                 else:
                     cursor.execute(
                         f"""
                         UPDATE accounts 
-                        SET owner = ?
+                        SET owner = ?{order_clause}
                         WHERE ID = ? AND owner IS NULL AND user_id = ?
                           AND (account_frozen = 0 OR account_frozen IS NULL){key_clause}
                         """,
-                        (owner_id, account_id, user_id, *key_params),
+                        (owner_id, *order_params, account_id, user_id, *key_params),
                     )
             if cursor.rowcount == 0:
                 return False
