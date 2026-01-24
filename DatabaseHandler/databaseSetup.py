@@ -515,6 +515,7 @@ class MySQLDB:
         self._ensure_blacklist_logs_table()
         self._ensure_admin_calls_table()
         self._ensure_chat_columns()
+        self._ensure_support_tickets_table()
         self._ensure_feedback_rewards_revoked_column()
         self._ensure_funpay_balance_table()
         self._ensure_order_history_columns()
@@ -3153,6 +3154,74 @@ class MySQLDB:
             except Exception:
                 pass
 
+    def insert_support_ticket(
+        self,
+        user_id: int | None,
+        key_id: int | None,
+        topic: str,
+        role: str,
+        order_id: str | None,
+        comment: str | None,
+        ticket_url: str | None,
+        status: str,
+        source: str | None = None,
+    ) -> int | None:
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                INSERT INTO support_tickets (user_id, key_id, topic, role, order_id, comment, ticket_url, status, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (int(user_id or 0), key_id, topic, role, order_id, comment, ticket_url, status, source),
+            )
+            ticket_id = cursor.lastrowid
+            self.conn.commit()
+            return ticket_id
+        except Exception as exc:
+            logger.error(f"Error inserting support ticket: {exc}")
+            return None
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def list_support_tickets(self, user_id: int | None = None, key_id: int | None = None, limit: int = 200) -> list[dict]:
+        try:
+            cursor = self._cursor()
+            key_clause, key_params = self._key_filter(key_id, "key_id")
+            cursor.execute(
+                f"""
+                SELECT id, topic, role, order_id, comment, ticket_url, status, source, created_at
+                FROM support_tickets
+                WHERE user_id = ?{key_clause}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (int(user_id or 0), *key_params, int(limit)),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "topic": row[1],
+                    "role": row[2],
+                    "order_id": row[3],
+                    "comment": row[4],
+                    "ticket_url": row[5],
+                    "status": row[6],
+                    "source": row[7],
+                    "created_at": row[8],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error listing support tickets: {exc}")
+            return []
+        finally:
+            cursor.close()
+
     def log_blacklist_event(
         self,
         owner: str,
@@ -3187,6 +3256,53 @@ class MySQLDB:
         # user_id already added in _ensure_user_owner_columns for some deployments; keep idempotent
         self._add_column_if_missing("chat_messages", "user_id", "INT NOT NULL DEFAULT 0")
         self._add_column_if_missing("chat_messages", "key_id", "INT NULL")
+
+    def _ensure_support_tickets_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS support_tickets (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        user_id INT NOT NULL DEFAULT 0,
+                        key_id INT NULL,
+                        topic VARCHAR(64) NOT NULL,
+                        role VARCHAR(16) NOT NULL,
+                        order_id VARCHAR(64) NULL,
+                        comment TEXT NULL,
+                        ticket_url TEXT NULL,
+                        status VARCHAR(32) NOT NULL DEFAULT 'sent',
+                        source VARCHAR(32) NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_support_user (user_id, key_id),
+                        INDEX idx_support_order (order_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS support_tickets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL DEFAULT 0,
+                        key_id INTEGER NULL,
+                        topic TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        order_id TEXT NULL,
+                        comment TEXT NULL,
+                        ticket_url TEXT NULL,
+                        status TEXT NOT NULL DEFAULT 'sent',
+                        source TEXT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
 
     def list_blacklist_logs(
         self, user_id: int | None = None, key_id: int | None = None, limit: int = 100

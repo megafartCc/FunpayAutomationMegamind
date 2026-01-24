@@ -1452,6 +1452,17 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
                 "source": "manual",
             }
         )
+    db.insert_support_ticket(
+        user.get("id"),
+        key_id,
+        payload.topic,
+        payload.role,
+        payload.order_id,
+        payload.comment,
+        ticket_url,
+        "ok" if ok else f"fail:{post_resp.status_code}",
+        source="manual",
+    )
 
     if not ok:
         raise HTTPException(status_code=post_resp.status_code, detail="Support form submission failed")
@@ -1462,6 +1473,11 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
 def support_ticket_logs(request: Request, limit: int = 200) -> dict:
     with _support_lock:
         items = list(_support_tickets)
+    uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
+    db_items = db.list_support_tickets(uid, key_id=key_id, limit=max(1, min(int(limit or 200), 500)))
+    if db_items:
+        items = db_items
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"items": items[: max(1, min(int(limit or 200), 500))]}
 

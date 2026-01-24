@@ -836,6 +836,17 @@ class FunpayBot:
         except Exception:
             ticket_url = post_resp.headers.get("Location")
 
+        self._db.insert_support_ticket(
+            self._user_id,
+            self._key_id,
+            "problem_order",
+            "seller",
+            order_id,
+            comment,
+            ticket_url,
+            "ok" if ok else f"fail:{post_resp.status_code}",
+            source="auto",
+        )
         self._db.log_order_event(
             order_id=order_id,
             owner_id=data.get("buyer") or "",
