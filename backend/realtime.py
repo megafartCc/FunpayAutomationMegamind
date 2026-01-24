@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Dict, Optional, Set
 
 from fastapi import WebSocket
+from fastapi.encoders import jsonable_encoder
 
 from backend.logger import logger
 
@@ -99,10 +100,11 @@ class ConnectionManager:
     async def _send_to_targets(self, targets: list[ConnectionState], event: Dict[str, Any]) -> None:
         if not targets:
             return
+        payload = jsonable_encoder(event)
         dead: list[WebSocket] = []
         for state in targets:
             try:
-                await state.websocket.send_json(event)
+                await state.websocket.send_json(payload)
             except Exception:
                 dead.append(state.websocket)
         for websocket in dead:

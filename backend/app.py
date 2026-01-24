@@ -1459,6 +1459,10 @@ def _etag_response(request: Request, payload: Any) -> Response:
     return JSONResponse(content=encoded_payload, headers=headers)
 
 
+def _ws_payload(payload: Any) -> Any:
+    return jsonable_encoder(payload)
+
+
 def _is_admin_call_message(text: str | None) -> bool:
     if not text:
         return False
@@ -2343,7 +2347,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await realtime_manager.connect(websocket, int(user_id), key_id)
 
     try:
-        await websocket.send_json({"type": "hello", "user_id": int(user_id), "key_id": key_id})
+        await websocket.send_json(_ws_payload({"type": "hello", "user_id": int(user_id), "key_id": key_id}))
 
         items: list[dict] = []
         if token:
@@ -2366,7 +2370,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     ),
                 )
             items = _attach_admin_call_counts(items, int(user_id), key_id)
-        await websocket.send_json({"type": "chats:list", "items": items})
+        await websocket.send_json(_ws_payload({"type": "chats:list", "items": items}))
 
         while True:
             try:
@@ -2381,7 +2385,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             msg_type = data.get("type")
 
             if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
+                await websocket.send_json(_ws_payload({"type": "pong"}))
                 continue
 
             if msg_type == "subscribe":
@@ -2389,7 +2393,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 try:
                     chat_id = int(chat_id_raw)
                 except Exception:
-                    await websocket.send_json({"type": "error", "message": "Invalid chat id"})
+                    await websocket.send_json(_ws_payload({"type": "error", "message": "Invalid chat id"}))
                     continue
                 await realtime_manager.subscribe(websocket, chat_id)
                 history_items: list[dict] = []
@@ -2419,7 +2423,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         )
                 history_items = _annotate_admin_calls(history_items[-CHAT_HISTORY_MAX:])
                 await websocket.send_json(
-                    {"type": "chat:history", "chat_id": chat_id, "items": history_items}
+                    _ws_payload({"type": "chat:history", "chat_id": chat_id, "items": history_items})
                 )
                 continue
 
@@ -2436,15 +2440,15 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 chat_id_raw = data.get("chat_id")
                 text = (data.get("text") or "").strip()
                 if not text:
-                    await websocket.send_json({"type": "send:error", "message": "Message text is required"})
+                    await websocket.send_json(_ws_payload({"type": "send:error", "message": "Message text is required"}))
                     continue
                 if not token:
-                    await websocket.send_json({"type": "send:error", "message": "FunPay token not configured"})
+                    await websocket.send_json(_ws_payload({"type": "send:error", "message": "FunPay token not configured"}))
                     continue
                 try:
                     chat_id = int(chat_id_raw)
                 except Exception:
-                    await websocket.send_json({"type": "send:error", "message": "Invalid chat id"})
+                    await websocket.send_json(_ws_payload({"type": "send:error", "message": "Invalid chat id"}))
                     continue
                 try:
                     account = FPAccount(token).get()
@@ -2468,10 +2472,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     }
                     publish_chat_message(int(user_id), key_id, chat_id, item)
                     await websocket.send_json(
-                        {"type": "send:ok", "chat_id": chat_id, "message_id": message.id}
+                        _ws_payload({"type": "send:ok", "chat_id": chat_id, "message_id": message.id})
                     )
                 except Exception as exc:
-                    await websocket.send_json({"type": "send:error", "message": str(exc)})
+                    await websocket.send_json(_ws_payload({"type": "send:error", "message": str(exc)}))
                 continue
 
     finally:
