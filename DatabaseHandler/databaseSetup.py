@@ -99,13 +99,13 @@ class MySQLDB:
                 )
                 exists = cursor.fetchone()[0] > 0
                 if not exists:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
                     self.conn.commit()
             else:
                 cursor.execute(f"PRAGMA table_info({table})")
                 cols = {row[1] for row in cursor.fetchall()}
                 if column not in cols:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
                     self.conn.commit()
         except Exception as exc:
             logger.error(f"Error adding column {column} to {table}: {exc}")
