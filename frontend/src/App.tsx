@@ -647,6 +647,7 @@ const App: React.FC = () => {
   const [ticketHistory, setTicketHistory] = useState<any[]>([]);
   const [ticketHistoryLoading, setTicketHistoryLoading] = useState(false);
   const [ticketAIDrafting, setTicketAIDrafting] = useState(false);
+  const [ticketAIAnalysis, setTicketAIAnalysis] = useState<any | null>(null);
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
@@ -4186,6 +4187,7 @@ const App: React.FC = () => {
                                     }),
                                   });
                                   setTicketComment(res?.text || ticketComment);
+                                  setTicketAIAnalysis(res?.analysis || null);
                                   showToast("AI-сообщение обновлено.");
                                 } catch (error) {
                                   showToast((error as Error).message || "Не удалось сгенерировать текст.", "error");
@@ -4211,6 +4213,29 @@ const App: React.FC = () => {
                               >
                                 {lastTicketUrl}
                               </a>
+                            </div>
+                          )}
+                          {ticketAIAnalysis && (
+                            <div className="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
+                              <div className="mb-1 text-[11px] font-semibold uppercase text-neutral-500">AI Анализ</div>
+                              <div className="space-y-1">
+                                {ticketAIAnalysis.order_id && (
+                                  <div><span className="font-semibold">Order:</span> {ticketAIAnalysis.order_id}</div>
+                                )}
+                                {ticketAIAnalysis.buyer && (
+                                  <div><span className="font-semibold">Buyer:</span> {ticketAIAnalysis.buyer}</div>
+                                )}
+                                {ticketAIAnalysis.lot_number !== undefined && ticketAIAnalysis.lot_number !== null && (
+                                  <div><span className="font-semibold">Lot:</span> {ticketAIAnalysis.lot_number}</div>
+                                )}
+                                <div><span className="font-semibold">Topic:</span> {ticketAIAnalysis.topic}</div>
+                                <div><span className="font-semibold">Role:</span> {ticketAIAnalysis.role}</div>
+                                {ticketAIAnalysis.base_comment && (
+                                  <div className="text-neutral-600">
+                                    <span className="font-semibold">Base comment:</span> {ticketAIAnalysis.base_comment}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
