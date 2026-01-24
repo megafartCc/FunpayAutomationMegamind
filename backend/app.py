@@ -53,6 +53,7 @@ from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
 from FunpayHandler.bot import FunpayBot
 
+PROXY_TEST_URL = "https://api.ipify.org"
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
@@ -183,6 +184,17 @@ def build_proxy_config(
     safe_uri = f"{scheme}://{host}:{port}"
     logger.info(f"Proxy configured: {safe_uri}")
     return {"http": proxy_uri, "https": proxy_uri}
+
+
+def log_proxy_exit_ip(proxy: dict | None) -> None:
+    if not proxy:
+        return
+    try:
+        resp = requests.get(PROXY_TEST_URL, timeout=6, proxies=proxy)
+        exit_ip = resp.text.strip()
+        logger.info(f"Proxy exit IP via {PROXY_TEST_URL}: {exit_ip}")
+    except Exception as exc:
+        logger.warning(f"Proxy exit IP check failed: {exc}")
 
 def _format_epoch_time(raw_value: str) -> str | None:
     if not raw_value or not raw_value.isdigit():
@@ -379,6 +391,7 @@ class BotManager:
         self._token_index: dict[tuple[int, str], tuple[int | None]] = {}
         self._global_tokens: dict[str, tuple[int, int | None]] = {}
         self._lock = Lock()
+        self._proxy_checked: set[str] = set()
 
     def start_for_user_key(
         self,
@@ -405,6 +418,10 @@ class BotManager:
         except Exception as exc:
             logger.error(f"Invalid proxy for user {user_id} key {key_id}: {exc}")
             return
+        proxy_key = f"{proxy_url}|{proxy_username}"
+        if proxy_key not in self._proxy_checked:
+            self._proxy_checked.add(proxy_key)
+            Thread(target=log_proxy_exit_ip, args=(proxy,), daemon=True).start()
         with self._lock:
             global_owner = self._global_tokens.get(golden_key)
             if global_owner and global_owner[0] != user_id:
