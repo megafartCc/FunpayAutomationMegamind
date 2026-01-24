@@ -54,6 +54,7 @@ import requests
 from FunpayHandler.bot import FunpayBot
 
 PROXY_TEST_URL = "https://api.ipify.org"
+FUNPAY_SUPPORT_NEW_TICKET_URL = "https://support.funpay.com/tickets/new"
 
 # In-memory workspace health
 _workspace_health: dict[tuple[int, int | None], dict] = {}
@@ -1198,6 +1199,7 @@ class SupportTicketCreate(BaseModel):
     role: str
     order_id: Optional[str] = None
     comment: str
+    key_id: Optional[int] = None
 
 
 class GoldenKeyUpdate(BaseModel):
@@ -1334,9 +1336,106 @@ def keys_health(request: Request) -> dict:
 @app.post("/api/support/tickets", dependencies=[Depends(require_admin)])
 def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dict:
     user = getattr(request.state, "user", None) or {}
-    key_id = _resolve_key_id(request)
+    key_id = payload.key_id if payload.key_id is not None else _resolve_key_id(request)
     if key_id is None:
         raise HTTPException(status_code=400, detail="Select a workspace first")
+    # fetch golden key for workspace
+    key_entry = db.get_user_key(user.get("id"), key_id)
+    token = (key_entry or {}).get("golden_key")
+    if not token:
+        raise HTTPException(status_code=400, detail="Workspace has no golden key")
+    session = requests.Session()
+    # set cookies on both domains
+    session.cookies.set("golden_key", token, domain=".funpay.com")
+    session.cookies.set("golden_key", token, domain="support.funpay.com")
+    try:
+        resp = session.get(FUNPAY_SUPPORT_NEW_TICKET_URL, timeout=15)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to load support form: {exc}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="Failed to load support form")
+    soup = BeautifulSoup(resp.text, "html.parser")
+    form = soup.find("form")
+    if not form:
+        raise HTTPException(status_code=502, detail="Support form not found")
+    action = form.get("action") or FUNPAY_SUPPORT_NEW_TICKET_URL
+    if action.startswith("/"):
+        action = f"https://support.funpay.com{action}"
+    form_data = {}
+    # preload existing hidden values
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        if inp.get("type") in ("checkbox", "radio"):
+            if inp.has_attr("checked"):
+                form_data[name] = inp.get("value", "on")
+            continue
+        form_data[name] = inp.get("value", "")
+    # textarea
+    for ta in form.find_all("textarea"):
+        name = ta.get("name")
+        if not name:
+            continue
+        form_data[name] = payload.comment
+    # select/topic mapping
+    topic_text = {
+        "problem_order": "Проблема с заказом",
+        "problem_payment": "Проблема с платежом",
+        "problem_account": "Проблема с аккаунтом",
+        "problem_chat": "Пожаловаться на нарушение правил в чате",
+        "other": "Прочее",
+    }.get(payload.topic, payload.topic)
+    for sel in form.find_all("select"):
+        name = sel.get("name")
+        if not name:
+            continue
+        selected_value = None
+        for opt in sel.find_all("option"):
+            text = (opt.text or "").strip()
+            if topic_text and topic_text.lower() in text.lower():
+                selected_value = opt.get("value")
+                break
+        if not selected_value:
+            selected_value = sel.find("option").get("value") if sel.find("option") else ""
+        form_data[name] = selected_value
+    # order id
+    if payload.order_id:
+        for inp in form.find_all("input"):
+            placeholder = (inp.get("placeholder") or "").lower()
+            name = inp.get("name") or ""
+            if "заказ" in placeholder or "order" in name.lower():
+                form_data[name] = payload.order_id
+                break
+    # role radio
+    role_value = None
+    for inp in form.find_all("input"):
+        if inp.get("type") != "radio":
+            continue
+        label_text = ""
+        label = inp.find_next_sibling("label")
+        if label:
+            label_text = (label.text or "").lower()
+        value = inp.get("value")
+        if payload.role == "buyer" and ("покуп" in label_text or value == "buyer"):
+            role_value = value
+        if payload.role == "seller" and ("продав" in label_text or value == "seller"):
+            role_value = value
+    if role_value:
+        for k in list(form_data.keys()):
+            # ensure same radio name overwritten
+            pass
+        # find radio name
+        for inp in form.find_all("input"):
+            if inp.get("type") == "radio":
+                if inp.get("value") == role_value:
+                    form_data[inp.get("name")] = role_value
+                    break
+    try:
+        post_resp = session.post(action, data=form_data, timeout=15)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to submit support form: {exc}")
+    status_ok = post_resp.status_code < 400
     with _support_lock:
         ticket_id = len(_support_tickets) + 1
         _support_tickets.append(
@@ -1349,9 +1448,12 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
                 "order_id": payload.order_id,
                 "comment": payload.comment,
                 "created_at": datetime.utcnow().isoformat(),
+                "status": "ok" if status_ok else f"fail:{post_resp.status_code}",
             }
         )
-    return {"id": ticket_id, "status": "queued", "note": "Stub: ticket recorded locally (not yet sent to FunPay)"}
+    if not status_ok:
+        raise HTTPException(status_code=post_resp.status_code, detail="Support form submission failed")
+    return {"id": ticket_id, "status": "sent"}
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
