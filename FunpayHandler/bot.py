@@ -226,7 +226,11 @@ class FunpayBot:
                 continue
             min_wait = 7200
             try:
-                categories = getattr(self._acc, "categories", lambda: [])()
+                cats_attr = getattr(self._acc, "categories", None)
+                if callable(cats_attr):
+                    categories = cats_attr() or []
+                else:
+                    categories = cats_attr or []
                 if not categories and hasattr(self._acc, "get_sorted_categories"):
                     categories = list(self._acc.get_sorted_categories().values())
                 if not categories:
