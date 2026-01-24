@@ -653,6 +653,8 @@ const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
+  const activeKeyRef = useRef<KeyScope>(activeKeyId);
+  activeKeyRef.current = activeKeyId;
   const activeKeyScope = useMemo(
     () => (activeKeyId === "all" ? "all" : String(activeKeyId)),
     [activeKeyId]
@@ -662,7 +664,10 @@ const App: React.FC = () => {
     [token, profileName, activeKeyScope]
   );
   const lastSessionRef = useRef<string>("");
+  const sessionKeyRef = useRef<string>(sessionKey);
+  sessionKeyRef.current = sessionKey;
   const presenceWarmupRef = useRef<number>(0);
+  const overviewRequestRef = useRef<number>(0);
   const scopedKey = useCallback(
     (key: string) => `${key}:u:${sessionKey || "anon"}`,
     [sessionKey]
@@ -708,6 +713,7 @@ const App: React.FC = () => {
           setToken("");
           setProfileName("");
         },
+        getKeyId: () => activeKeyRef.current,
       }),
     []
   );
@@ -914,27 +920,29 @@ const App: React.FC = () => {
       onLoading?: (loading: boolean) => void;
       map?: (payload: any) => T;
     }) => {
+      const guardKey = sessionKey;
+      const isActive = () => sessionKeyRef.current === guardKey;
       const cached = readCache<T>(key, ttl);
-      if (cached?.data) {
+      if (cached?.data && isActive()) {
         onData(cached.data);
       }
-      if (onLoading) {
+      if (onLoading && isActive()) {
         onLoading(!cached?.data);
       }
       const shouldRevalidate = revalidate || !cached || cached.isStale;
       if (!shouldRevalidate) {
-        if (onLoading) onLoading(false);
+        if (onLoading && isActive()) onLoading(false);
         return;
       }
       if (typeof navigator !== "undefined" && "onLine" in navigator && !navigator.onLine) {
-        if (onLoading) onLoading(false);
+        if (onLoading && isActive()) onLoading(false);
         return;
       }
       if (revalidate) {
         const last = revalidateGuards.get(key) || 0;
         const nowTs = Date.now();
         if (nowTs - last < REVALIDATE_THROTTLE_MS) {
-          if (onLoading) onLoading(false);
+          if (onLoading && isActive()) onLoading(false);
           return;
         }
         revalidateGuards.set(key, nowTs);
@@ -942,7 +950,7 @@ const App: React.FC = () => {
       const inflight = inflightRequests.get(key);
       if (inflight) {
         await inflight.catch(() => null);
-        if (onLoading) onLoading(false);
+        if (onLoading && isActive()) onLoading(false);
         return;
       }
       const request = (async () => {
@@ -966,17 +974,17 @@ const App: React.FC = () => {
       inflightRequests.set(key, request);
       try {
         const next = await request;
-        if (next?.data) {
+        if (next?.data && isActive()) {
           onData(next.data);
         }
       } catch {
         // keep cached data
       } finally {
         inflightRequests.delete(key);
-        if (onLoading) onLoading(false);
+        if (onLoading && isActive()) onLoading(false);
       }
     },
-    [apiFetchWithMeta]
+    [apiFetchWithMeta, sessionKey]
   );
 
   const selectedAccount = useMemo(() => {
@@ -1310,6 +1318,8 @@ const App: React.FC = () => {
   );
 
   const loadOverview = useCallback(async () => {
+    const requestId = ++overviewRequestRef.current;
+    const guardKey = sessionKey;
     try {
       const [stats, activeRentals, accounts] = await Promise.all([
         apiFetch<Record<string, number>>("/api/stats").catch(() => null),
@@ -1318,6 +1328,9 @@ const App: React.FC = () => {
           "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
         ).catch(() => ({ items: [] })),
       ]);
+      if (overviewRequestRef.current !== requestId || sessionKeyRef.current !== guardKey) {
+        return;
+      }
 
       const totalAccounts =
         stats?.accounts_total ??
@@ -1465,7 +1478,7 @@ const App: React.FC = () => {
     } catch {
       // ignore overview load errors
     }
-  }, [apiFetch]);
+  }, [apiFetch, sessionKey]);
 
   const loadNotifications = useCallback(async () => {
     try {

@@ -1,8 +1,9 @@
 export type ApiClientOptions = {
   onUnauthorized: () => void;
+  getKeyId?: () => string | number | null | undefined;
 };
 
-export const createApiClient = ({ onUnauthorized }: ApiClientOptions) => {
+export const createApiClient = ({ onUnauthorized, getKeyId }: ApiClientOptions) => {
   const apiFetchWithMeta = async <T>(
     path: string,
     options: RequestInit = {}
@@ -17,9 +18,19 @@ export const createApiClient = ({ onUnauthorized }: ApiClientOptions) => {
         return normalized === "x-key-id" || normalized === "x-fp-key-id";
       });
       if (!hasKeyHeader && typeof window !== "undefined") {
-        const keyId = window.localStorage.getItem("fpa_active_key_id");
+        let keyId: string | number | null | undefined;
+        if (getKeyId) {
+          try {
+            keyId = getKeyId();
+          } catch {
+            keyId = undefined;
+          }
+        }
+        if (keyId === undefined || keyId === null || keyId === "") {
+          keyId = window.localStorage.getItem("fpa_active_key_id");
+        }
         if (keyId && keyId !== "all") {
-          headers["x-key-id"] = keyId;
+          headers["x-key-id"] = String(keyId);
         }
       }
     } catch {
