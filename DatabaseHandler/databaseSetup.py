@@ -4427,6 +4427,41 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def normalize_orphan_keys(self, user_id: int) -> None:
+        cursor = self._cursor()
+        try:
+            default = self.get_default_key(user_id)
+            if not default or not default.get("id"):
+                return
+            default_id = int(default["id"])
+            tables = [
+                "accounts",
+                "lots",
+                "blacklist",
+                "order_history",
+                "admin_calls",
+                "funpay_balance_snapshots",
+            ]
+            for table in tables:
+                cursor.execute(
+                    f"""
+                    UPDATE {table}
+                    SET key_id = ?
+                    WHERE user_id = ?
+                      AND (
+                        key_id IS NULL
+                        OR key_id = 0
+                        OR key_id NOT IN (SELECT id FROM user_keys WHERE user_id = ?)
+                      )
+                    """,
+                    (default_id, user_id, user_id),
+                )
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error normalizing orphan keys for user {user_id}: {exc}")
+        finally:
+            cursor.close()
+
     def has_any_golden_key(self) -> bool:
         cursor = self._cursor()
         try:

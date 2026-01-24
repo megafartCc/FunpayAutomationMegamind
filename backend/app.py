@@ -274,6 +274,7 @@ def _ensure_user_key_normalized(user_id: int | None) -> None:
         default_key = db.get_default_key(user_id)
         if default_key and default_key.get("id"):
             db.normalize_legacy_key_data(user_id, int(default_key["id"]))
+            db.normalize_orphan_keys(user_id)
     except Exception as exc:
         logger.error(f"Failed to normalize legacy keys for user {user_id}: {exc}")
     finally:
