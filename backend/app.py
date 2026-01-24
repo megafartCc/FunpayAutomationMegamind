@@ -1546,8 +1546,9 @@ def _classify_dispute_texts(texts: list[str]) -> dict | None:
                     "role": "system",
                     "content": (
                         "Ты модератор FunPay. Определи, есть ли спор/претензия покупателя по заказу. "
-                        "Ответь строго одним словом: 'dispute' если есть жалоба/недовольство/возврат/бан/не работает, "
-                        "или 'clear' если такого нет. Запросы кодов Steam Guard не считать спором."
+                        "Верни JSON без лишнего текста: {\"label\": \"dispute|clear\", \"reason\": \"кратко почему\"}. "
+                        "dispute = жалоба/недовольство/возврат/бан/не работает. "
+                        "Запросы кодов Steam Guard не считать спором."
                     ),
                 },
                 {
@@ -1567,20 +1568,26 @@ def _classify_dispute_texts(texts: list[str]) -> dict | None:
         resp.raise_for_status()
         data = resp.json()
         content = (
-            data
-            .get("choices", [{}])[0]
+            data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
             .strip()
-            .lower()
         )
-        # also try to capture reasoning if model returned it
-        reasoning = content
-        if "dispute" in content:
-            return {"label": "dispute", "raw": content, "reason": reasoning}
-        if "clear" in content:
-            return {"label": "clear", "raw": content, "reason": reasoning}
-        return {"label": "unknown", "raw": content, "reason": reasoning}
+        parsed = None
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            pass
+        if isinstance(parsed, dict) and parsed.get("label"):
+            label = str(parsed.get("label", "")).lower()
+            reason = str(parsed.get("reason", "")).strip()
+            return {"label": label, "reason": reason or content, "raw": content}
+        lower = content.lower()
+        if "dispute" in lower:
+            return {"label": "dispute", "reason": content, "raw": content}
+        if "clear" in lower:
+            return {"label": "clear", "reason": content, "raw": content}
+        return {"label": "unknown", "reason": content, "raw": content}
     except Exception as exc:
         logger.warning(f"AI dispute classify failed: {exc}")
         return None

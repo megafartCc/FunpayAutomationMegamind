@@ -4388,13 +4388,13 @@ const App: React.FC = () => {
                                       AI: {ticketAIAnalysis.ai_dispute.label || "unknown"}
                                     </span>
                                     {ticketAIAnalysis.ai_dispute.reason && (
-                                      <div className="mt-1 text-[11px] text-neutral-600">
+                                      <div className="mt-1 text-[11px] text-neutral-600 whitespace-pre-line">
                                         {ticketAIAnalysis.ai_dispute.reason}
                                       </div>
                                     )}
                                   </div>
                                 )}
-                                {ticketAIAnalysis.base_comment && (
+                                {!ticketAIAnalysis.ai_dispute?.reason && ticketAIAnalysis.base_comment && (
                                   <div className="text-neutral-600">
                                     <span className="font-semibold">Base comment:</span> {ticketAIAnalysis.base_comment}
                                   </div>
