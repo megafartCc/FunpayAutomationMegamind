@@ -1133,15 +1133,41 @@ def funpay_categories(request: Request) -> dict:
     user_id, token, key_id, proxy = require_funpay_token(request)
     try:
         acc = FPAccount(token, proxy=proxy).get()
+        # Try library categories first (may be legacy IDs)
         cats_attr = getattr(acc, "categories", None)
-        categories = cats_attr() if callable(cats_attr) else cats_attr
+        categories = cats_attr() if callable(cats_attr) else cats_attr or []
         if not categories and hasattr(acc, "get_sorted_categories"):
             categories = list(acc.get_sorted_categories().values())
-        items = []
+        items: list[dict] = []
         for c in categories or []:
             cid = getattr(c, "id", None)
             name = getattr(c, "name", None) or str(cid)
-            items.append({"id": cid, "name": name})
+            if cid:
+                items.append({"id": cid, "name": name})
+
+        # Refresh live IDs from FunPay lots page to avoid legacy mapping issues
+        try:
+            with requests.Session() as s:
+                s.cookies.set("golden_key", token, domain="funpay.com")
+                if proxy:
+                    s.proxies.update(proxy)
+                r = s.get("https://funpay.com/lots/", timeout=10)
+                r.raise_for_status()
+                soup = BeautifulSoup(r.text, "html.parser")
+                links = soup.select("a[href^='/lots/']")
+                for a in links:
+                    href = a.get("href") or ""
+                    m = re.search(r"/lots/(\\d+)/", href)
+                    if not m:
+                        continue
+                    cid = int(m.group(1))
+                    name = (a.text or "").strip() or f"Category {cid}"
+                    if not any(it.get("id") == cid for it in items):
+                        items.append({"id": cid, "name": name})
+        except Exception as exc:
+            logger.warning(f"Failed to refresh live categories: {exc}")
+
+        items = sorted(items, key=lambda x: x.get("name") or "")
         return {"items": items, "key_id": key_id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
