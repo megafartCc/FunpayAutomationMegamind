@@ -1773,9 +1773,12 @@ def _presence_for_steamid_cached(
 
 
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
-async def accounts(request: Request, include_steamid: bool = False) -> dict:
+async def accounts(request: Request, include_steamid: bool = False, lite: bool = False) -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
+    if lite:
+        items = db.get_all_accounts_light(uid, key_id=key_id)
+        return {"items": items}
     items = db.get_all_accounts(uid, key_id=key_id)
     if not items:
         return {"items": items}

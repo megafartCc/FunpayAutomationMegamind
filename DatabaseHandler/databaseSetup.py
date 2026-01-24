@@ -1364,6 +1364,58 @@ class MySQLDB:
         ]
         return accounts
 
+    def get_all_accounts_light(self, user_id: int | None = None, key_id: int | None = None):
+        cursor = self._cursor()
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT ID, account_name, login, rental_duration, rental_duration_minutes, mmr, owner, rental_start,
+                       account_frozen, rental_frozen, rental_frozen_at, key_id
+                FROM accounts
+                """
+            )
+        else:
+            if key_id is None:
+                cursor.execute(
+                    """
+                    SELECT ID, account_name, login, rental_duration, rental_duration_minutes, mmr, owner, rental_start,
+                           account_frozen, rental_frozen, rental_frozen_at, key_id
+                    FROM accounts
+                    WHERE user_id = ?
+                    """,
+                    (user_id,),
+                )
+            else:
+                key_clause, key_params = self._key_filter(key_id, "key_id")
+                cursor.execute(
+                    f"""
+                    SELECT ID, account_name, login, rental_duration, rental_duration_minutes, mmr, owner, rental_start,
+                           account_frozen, rental_frozen, rental_frozen_at, key_id
+                    FROM accounts
+                    WHERE user_id = ?{key_clause}
+                    """,
+                    (user_id, *key_params),
+                )
+        rows = cursor.fetchall()
+        cursor.close()
+        return [
+            {
+                "id": row[0],
+                "account_name": row[1],
+                "login": row[2],
+                "rental_duration": row[3],
+                "rental_duration_minutes": row[4],
+                "mmr": row[5],
+                "owner": row[6],
+                "rental_start": row[7],
+                "account_frozen": row[8] if len(row) > 8 else 0,
+                "rental_frozen": row[9] if len(row) > 9 else 0,
+                "rental_frozen_at": row[10] if len(row) > 10 else None,
+                "key_id": row[11] if len(row) > 11 else None,
+            }
+            for row in rows
+        ]
+
     def list_lot_mappings(self, user_id: int | None = None, key_id: int | None = None) -> list:
         cursor = self._cursor()
         if user_id is None:

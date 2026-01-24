@@ -1332,7 +1332,7 @@ const App: React.FC = () => {
     []
   );
 
-  const loadOverview = useCallback(async () => {
+  const loadOverview = useCallback(async (mode: "fast" | "full" = "full") => {
     const requestId = ++overviewRequestRef.current;
     const guardKey = sessionKey;
     const cacheKey = scopedKey(OVERVIEW_CACHE_KEY);
@@ -1343,11 +1343,16 @@ const App: React.FC = () => {
       setRentalsTable(cached.data.rentals || []);
     }
     try {
+      const useLite = mode === "fast";
       const [stats, activeRentals, accounts] = await Promise.all([
         apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-        apiFetch<{ items: unknown[] }>("/api/rentals/active?fast=1&expand=presence,chat").catch(() => ({ items: [] })),
         apiFetch<{ items: unknown[] }>(
-          "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
+          useLite ? "/api/rentals/active?fast=1&expand=lite" : "/api/rentals/active?fast=1&expand=presence,chat"
+        ).catch(() => ({ items: [] })),
+        apiFetch<{ items: unknown[] }>(
+          useLite
+            ? "/api/accounts?fast=1&lite=1"
+            : "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
         ).catch(() => ({ items: [] })),
       ]);
       if (overviewRequestRef.current !== requestId || sessionKeyRef.current !== guardKey) {
@@ -1503,11 +1508,13 @@ const App: React.FC = () => {
       } else {
         setRentalsTable([]);
       }
-      writeCache(cacheKey, {
-        overview: nextOverview,
-        accounts: mappedAccounts,
-        rentals: mappedRentals,
-      });
+      if (!useLite) {
+        writeCache(cacheKey, {
+          overview: nextOverview,
+          accounts: mappedAccounts,
+          rentals: mappedRentals,
+        });
+      }
     } catch {
       // ignore overview load errors
     }
@@ -1705,10 +1712,15 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (token) {
-      loadOverview();
+      loadOverview("fast");
       loadNotifications();
       loadChats(false);
+      const handle = window.setTimeout(() => {
+        loadOverview();
+      }, 250);
+      return () => window.clearTimeout(handle);
     }
+    return undefined;
   }, [token, sessionKey, loadOverview, loadNotifications, loadChats]);
 
   useEffect(() => {
