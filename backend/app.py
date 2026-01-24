@@ -1272,8 +1272,23 @@ def funpay_categories(request: Request) -> dict:
         except Exception as exc:
             logger.warning(f"Library category fallback failed: {exc}")
 
+        # If we have detailed categories for a game, drop bare game-only entries (e.g., library returns "Dota 2" with id 41)
+        games_with_categories = {
+            (v.get("game") or "").strip()
+            for v in merged.values()
+            if v.get("category") and (v.get("game") or "").strip()
+        }
+        pruned = {
+            cid: v
+            for cid, v in merged.items()
+            if not (
+                (v.get("game") or "").strip() in games_with_categories
+                and (not v.get("category") or v.get("category") == v.get("name"))
+            )
+        }
+
         items = sorted(
-            merged.values(),
+            pruned.values(),
             key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
         )
         return {"items": items, "key_id": key_id}
