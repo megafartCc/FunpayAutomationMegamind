@@ -3078,17 +3078,24 @@ class MySQLDB:
             return []
         try:
             cursor = self._cursor()
-            cursor.execute(
-                """
-                SELECT role, message, created_at
-                FROM chat_messages
-                WHERE LOWER(owner) = LOWER(?) AND user_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (str(owner).strip(), int(user_id or 0), int(limit)),
-            )
-            rows = cursor.fetchall()
+            def fetch(for_user_id: int) -> list[tuple]:
+                cursor.execute(
+                    """
+                    SELECT role, message, created_at
+                    FROM chat_messages
+                    WHERE LOWER(owner) = LOWER(?) AND user_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (str(owner).strip(), for_user_id, int(limit)),
+                )
+                return cursor.fetchall()
+
+            rows = fetch(int(user_id or 0))
+            # Fallback to global user_id=0 if none found
+            if not rows and user_id not in (None, 0):
+                rows = fetch(0)
+
             return [
                 {
                     "role": row[0],

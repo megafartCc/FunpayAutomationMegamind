@@ -474,6 +474,7 @@ const navIdToPath: Record<string, string> = {
   overview: "/dashboard",
   rentals: "/rentals",
   orders: "/orders",
+  tickets: "/tickets",
   blacklist: "/blacklist",
   profile: "/profile",
   inventory: "/inventory",
@@ -4203,21 +4204,21 @@ const App: React.FC = () => {
                             <span className="text-xs text-neutral-500">Используется выбранное workspace.</span>
                           </div>
                           {lastTicketUrl && (
-                            <div className="text-xs text-neutral-600">
-                              Последняя заявка:{" "}
-                              <a
-                                className="text-blue-600 underline"
-                                href={lastTicketUrl.startsWith("http") ? lastTicketUrl : `https://support.funpay.com${lastTicketUrl}`}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {lastTicketUrl}
-                              </a>
-                            </div>
-                          )}
-                          {ticketAIAnalysis && (
-                            <div className="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
-                              <div className="mb-1 text-[11px] font-semibold uppercase text-neutral-500">AI Анализ</div>
+                              <div className="text-xs text-neutral-600">
+                                Последняя заявка:{" "}
+                                <a
+                                  className="text-blue-600 underline"
+                                  href={lastTicketUrl.startsWith("http") ? lastTicketUrl : `https://support.funpay.com${lastTicketUrl}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {lastTicketUrl}
+                                </a>
+                              </div>
+                            )}
+                            {ticketAIAnalysis && (
+                              <div className="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
+                                <div className="mb-1 text-[11px] font-semibold uppercase text-neutral-500">AI Анализ</div>
                               <div className="space-y-1">
                                 {ticketAIAnalysis.order_id && (
                                   <div><span className="font-semibold">Order:</span> {ticketAIAnalysis.order_id}</div>
