@@ -1207,6 +1207,7 @@ def _extract_categories_from_html(html: str) -> dict[int, dict]:
 def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
     """
     Pull the current category tree directly from FunPay HTML so IDs stay fresh.
+    Mirrors the console script logic (multiple entry pages, dedupe, full list).
     """
     urls = (
         "https://funpay.com/en/lots/",
@@ -1216,8 +1217,10 @@ def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
     )
     merged: dict[int, dict] = {}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
     }
+
     def fetch_through(session_proxy: dict | None, label: str) -> None:
         with requests.Session() as s:
             s.cookies.set("golden_key", token, domain="funpay.com")
@@ -1225,8 +1228,11 @@ def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
                 s.proxies.update(session_proxy)
             for url in urls:
                 try:
-                    resp = s.get(url, timeout=12, headers=headers, allow_redirects=True)
+                    resp = s.get(url, timeout=15, headers=headers, allow_redirects=True)
                     resp.raise_for_status()
+                    # Use server-declared encoding or fallback
+                    if not resp.encoding:
+                        resp.encoding = resp.apparent_encoding or "utf-8"
                 except Exception as exc:
                     logger.warning(f"Category fetch failed ({label}) for {url}: {exc}")
                     continue
@@ -1235,11 +1241,9 @@ def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
                     if cid not in merged:
                         merged[cid] = payload
 
-    # Try with proxy first (preferred)
+    # Do both proxy and direct to maximize coverage
     fetch_through(proxy, "proxy")
-    # If nothing was parsed, fall back to direct connection so we still return fresh lot IDs
-    if not merged and proxy:
-        fetch_through(None, "direct-fallback")
+    fetch_through(None if proxy else None, "direct")
 
     # Sort by game then category/name for stable UI
     return sorted(
