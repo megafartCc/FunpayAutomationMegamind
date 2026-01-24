@@ -1069,6 +1069,9 @@ class MySQLDB:
             return default
         return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
+    def set_setting_bool(self, key: str, value: bool) -> bool:
+        return self.set_setting(key, "1" if value else "0")
+
     def _ensure_feedback_rewards_revoked_column(self):
         cursor = self._cursor()
         try:

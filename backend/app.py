@@ -1668,6 +1668,24 @@ def set_auto_ticket_setting(payload: AutoTicketSetting, request: Request) -> dic
     return {"enabled": payload.enabled}
 
 
+@app.get("/api/settings/auto-raise", dependencies=[Depends(require_admin)])
+def get_auto_raise_setting(request: Request) -> dict:
+    enabled = db.get_setting_bool("auto_raise_enabled", True)
+    return {"enabled": enabled}
+
+
+class AutoRaiseSetting(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/settings/auto-raise", dependencies=[Depends(require_admin)])
+def set_auto_raise_setting(payload: AutoRaiseSetting, request: Request) -> dict:
+    ok = db.set_setting("auto_raise_enabled", "1" if payload.enabled else "0")
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update setting")
+    return {"enabled": payload.enabled}
+
+
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
 def create_key(payload: KeyCreate, request: Request) -> dict:
     user = getattr(request.state, "user", None) or {}

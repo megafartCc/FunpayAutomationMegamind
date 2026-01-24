@@ -634,7 +634,7 @@ const App: React.FC = () => {
   const [ordersHistory, setOrdersHistory] = useState<OrderHistoryItem[]>([]);
   const [ordersQuery, setOrdersQuery] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
-  const [autoRaise, setAutoRaise] = useState<boolean>(() => localStorage.getItem("autoRaise") === "1");
+  const [autoRaise, setAutoRaise] = useState<boolean | null>(null);
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -1255,6 +1255,21 @@ const App: React.FC = () => {
     } catch (error) {
       showToast((error as Error).message || "Failed to update auto-ticket setting.", "error");
       setAutoTickets(prev);
+    }
+  };
+
+  const handleToggleAutoRaise = async (enabled: boolean) => {
+    const prev = autoRaise;
+    setAutoRaise(enabled);
+    try {
+      await apiFetch("/api/settings/auto-raise", {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+      showToast(enabled ? "Auto-raise enabled." : "Auto-raise disabled.", "success");
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update auto-raise setting.", "error");
+      setAutoRaise(prev);
     }
   };
 
@@ -2447,12 +2462,26 @@ const App: React.FC = () => {
   ]);
 
   useEffect(() => {
-    localStorage.setItem("autoRaise", autoRaise ? "1" : "0");
-  }, [autoRaise]);
-
-  useEffect(() => {
     localStorage.setItem("autoOnline", autoOnline ? "1" : "0");
   }, [autoOnline]);
+
+  useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await apiFetch<{ enabled: boolean }>("/api/settings/auto-raise");
+        setAutoRaise(res.enabled);
+      } catch {
+        setAutoRaise(true);
+      }
+      try {
+        const res2 = await apiFetch<{ enabled: boolean }>("/api/settings/auto-ticket");
+        setAutoTickets(!!res2.enabled);
+      } catch {
+        setAutoTickets(true);
+      }
+    })();
+  }, [token, apiFetch]);
 
   useEffect(() => {
     if (!token) return;
@@ -4690,7 +4719,12 @@ const App: React.FC = () => {
                             onChange={(val) => handleToggleAutoTickets(val)}
                             disabled={autoTickets === null}
                           />
-                          <ToggleRow label="Auto Raise" enabled={autoRaise} onChange={setAutoRaise} />
+                          <ToggleRow
+                            label="Auto Raise"
+                            enabled={!!autoRaise}
+                            onChange={(val) => handleToggleAutoRaise(val)}
+                            disabled={autoRaise === null}
+                          />
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
                       </div>

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from FunPayAPI import Account, Runner, events, types
+from FunPayAPI.common import exceptions as fp_exceptions
 
 from backend.config import (
     AUTO_STEAM_DEAUTHORIZE_ON_EXPIRE,
@@ -138,6 +139,7 @@ class FunpayBot:
         self._confirm_tasks: Dict[str, dict] = {}
         self._confirm_lock = threading.Lock()
         self._auto_ticket_cache: tuple[bool, float] = (True, 0.0)
+        self._auto_raise_cache: tuple[bool, float] = (True, 0.0)
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -204,6 +206,47 @@ class FunpayBot:
         enabled = self._db.get_setting_bool("auto_ticket_enabled", True)
         self._auto_ticket_cache = (enabled, now)
         return enabled
+
+    def _auto_raise_enabled(self) -> bool:
+        now = time.time()
+        cached_val, ts = self._auto_raise_cache
+        if now - ts < 60:
+            return cached_val
+        enabled = self._db.get_setting_bool("auto_raise_enabled", True)
+        self._auto_raise_cache = (enabled, now)
+        return enabled
+
+    def _auto_raise_loop(self) -> None:
+        while not self._stop_requested.is_set():
+            if not self._auto_raise_enabled():
+                time.sleep(60)
+                continue
+            if not self._acc:
+                time.sleep(15)
+                continue
+            min_wait = 7200
+            try:
+                categories = getattr(self._acc, "categories", lambda: [])()
+                if not categories and hasattr(self._acc, "get_sorted_categories"):
+                    categories = list(self._acc.get_sorted_categories().values())
+                if not categories:
+                    time.sleep(300)
+                    continue
+                for cat in categories:
+                    try:
+                        self._acc.raise_lots(cat.id)
+                        min_wait = min(min_wait, 7200)
+                        logger.info(f"Raised lots for category {getattr(cat, 'name', cat.id)} (user={self._user_id} key={self._key_id})")
+                    except fp_exceptions.RaiseError as exc:
+                        wait = exc.wait_time or 7200
+                        min_wait = min(min_wait, wait + 5)
+                        logger.info(f"Raise deferred for category {getattr(exc.category, 'name', 'unknown')}: wait {wait}s")
+                    except Exception as exc:
+                        logger.warning(f"Raise failed for category {getattr(cat, 'name', cat.id)}: {exc}")
+                time.sleep(max(120, min_wait))
+            except Exception as exc:
+                logger.warning(f"Auto-raise loop error: {exc}")
+                time.sleep(300)
 
     def _build_replacement_message(self, account: dict, lot_number: int | None = None) -> str:
         subject = "\u043b\u043e\u0442" if lot_number is not None else "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
@@ -468,6 +511,10 @@ class FunpayBot:
         confirm_thread = threading.Thread(target=self._confirm_check_loop, daemon=True)
         confirm_thread.start()
         logger.info("Order confirmation watcher started.")
+
+        raise_thread = threading.Thread(target=self._auto_raise_loop, daemon=True)
+        raise_thread.start()
+        logger.info("Auto raise loop started.")
 
         if self._runner is None:
             raise RuntimeError("Runner not initialized")
