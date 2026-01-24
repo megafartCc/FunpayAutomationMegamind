@@ -710,26 +710,18 @@ const App: React.FC = () => {
   const groupedCategories = useMemo(() => {
     const term = categorySearch.trim().toLowerCase();
     const idTerm = categoryIdSearch.trim();
-    const groups: Record<string, CategoryOption[]> = {};
-    (categoryOptions || []).forEach((c) => {
-      const game = (c.game || "Other").trim() || "Other";
+    const filtered = (categoryOptions || []).filter((c) => {
       const haystack = `${c.name || ""} ${c.game || ""} ${c.category || ""}`.toLowerCase();
-      if (term && !haystack.includes(term)) return;
-      if (idTerm && !String(c.id).includes(idTerm)) return;
-      if (!groups[game]) groups[game] = [];
-      groups[game].push(c);
+      if (term && !haystack.includes(term)) return false;
+      if (idTerm && !String(c.id).includes(idTerm)) return false;
+      return true;
     });
-    const sorted: { game: string; items: CategoryOption[] }[] = Object.entries(groups)
-      .map(([game, items]) => ({
-        game,
-        items: items.sort(
-          (a, b) =>
-            (a.category || a.name || "").localeCompare(b.category || b.name || "") ||
-            a.id - b.id
-        ),
-      }))
-      .sort((a, b) => a.game.localeCompare(b.game));
-    return sorted;
+    return filtered.sort(
+      (a, b) =>
+        (a.game || "Other").localeCompare(b.game || "Other") ||
+        (a.category || a.name || "").localeCompare(b.category || b.name || "") ||
+        a.id - b.id
+    );
   }, [categoryOptions, categorySearch, categoryIdSearch]);
 
   const [tick, setTick] = useState(0);
@@ -4832,57 +4824,33 @@ const App: React.FC = () => {
                             </div>
                             <div className="max-h-72 overflow-y-auto rounded-lg border border-neutral-200 bg-white divide-y divide-neutral-100">
                               {groupedCategories.length ? (
-                                groupedCategories.map(({ game, items }) => {
-                                  const isOpen = expandedGames.has(game) || (!expandedGames.size && groupedCategories.length <= 5);
+                                groupedCategories.map((c) => {
                                   const selectedIds = autoRaiseCategories
                                     .split(",")
                                     .map((s) => s.trim())
                                     .filter(Boolean);
+                                  const isSelected = selectedIds.includes(String(c.id));
+                                  const label = c.category || c.name;
+                                  const gameLabel = c.game || "Other";
                                   return (
-                                    <div key={game}>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setExpandedGames((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(game)) next.delete(game);
-                                            else next.add(game);
-                                            return next;
-                                          })
-                                        }
-                                        className="flex w-full items-center justify-between bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-800 hover:bg-neutral-100"
-                                      >
-                                        <span className="truncate">{game}</span>
-                                        <span className="text-xs text-neutral-500">{items.length}</span>
-                                      </button>
-                                      {isOpen && (
-                                        <div className="space-y-1 py-2">
-                                          {items.map((c) => {
-                                            const isSelected = selectedIds.includes(String(c.id));
-                                            const label = c.category || c.name;
-                                            return (
-                                              <label
-                                                key={c.id}
-                                                className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
-                                              >
-                                                <input
-                                                  type="checkbox"
-                                                  checked={isSelected}
-                                                  onChange={(e) => {
-                                                    let next = new Set(selectedIds);
-                                                    if (e.target.checked) next.add(String(c.id));
-                                                    else next.delete(String(c.id));
-                                                    setAutoRaiseCategories(Array.from(next).join(","));
-                                                  }}
-                                                />
-                                                <span className="font-mono text-xs text-neutral-500">{c.id}</span>
-                                                <span className="truncate">{label}</span>
-                                              </label>
-                                            );
-                                          })}
-                                        </div>
-                                      )}
-                                    </div>
+                                    <label
+                                      key={c.id}
+                                      className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={(e) => {
+                                          let next = new Set(selectedIds);
+                                          if (e.target.checked) next.add(String(c.id));
+                                          else next.delete(String(c.id));
+                                          setAutoRaiseCategories(Array.from(next).join(","));
+                                        }}
+                                      />
+                                      <span className="font-mono text-xs text-neutral-500 w-14">{c.id}</span>
+                                      <span className="truncate w-40 text-neutral-500">{gameLabel}</span>
+                                      <span className="truncate">{label}</span>
+                                    </label>
                                   );
                                 })
                               ) : (
