@@ -579,11 +579,25 @@ class FunpayBot:
             return
 
         if self._db.is_blacklisted(buyer, self._user_id, key_id=self._key_id):
+            # If buyer pays for 5 units of the current lot in one order, consider it a compensation and auto-unblacklist.
+            description = str(getattr(order, "description", "") or "")
+            lot_number = parse_lot_number(description)
+            amount = int(getattr(order, "amount", 1) or 1)
+            if lot_number is not None and amount >= 5:
+                self._db.remove_from_blacklist(buyer, self._user_id, key_id=self._key_id)
+                acc.send_message(
+                    chat_id,
+                    "Оплата компенсации получена (5 штук лота). Доступ разблокирован."
+                )
+                send_message_to_admin(
+                    "BLACKLIST AUTO-REMOVED\n\n"
+                    f"Buyer: {buyer}\nOrder: {order_id}\nLot: {lot_number}\nAmount: {amount}"
+                )
+                self._mark_order_processed(event)
+                return
             acc.send_message(
                 chat_id,
-                "Вы находитесь в черном списке. Вы можете оплатить компенсацию за нарушения правил аренды "
-                "в размере 5 часов (или другую сумму, если лот стоит копейки), после чего доступ к командам "
-                "будет разблокирован."
+                "Вы в черном списке. Чтобы разблокировать доступ к командам, оплатите компенсацию: купите 5 штук этого лота (эквивалентно 5 часам аренды)."
             )
             send_message_to_admin(
                 "BLACKLISTED ORDER\n\n"
