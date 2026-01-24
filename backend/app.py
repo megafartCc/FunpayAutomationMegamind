@@ -1208,26 +1208,38 @@ def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
     """
     Pull the current category tree directly from FunPay HTML so IDs stay fresh.
     """
-    urls = ("https://funpay.com/lots/", "https://funpay.com/")
+    urls = (
+        "https://funpay.com/en/lots/",
+        "https://funpay.com/lots/",
+        "https://funpay.com/en/",
+        "https://funpay.com/",
+    )
     merged: dict[int, dict] = {}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
     }
-    with requests.Session() as s:
-        s.cookies.set("golden_key", token, domain="funpay.com")
-        if proxy:
-            s.proxies.update(proxy)
-        for url in urls:
-            try:
-                resp = s.get(url, timeout=12, headers=headers)
-                resp.raise_for_status()
-            except Exception as exc:
-                logger.warning(f"Category fetch failed for {url}: {exc}")
-                continue
-            extracted = _extract_categories_from_html(resp.text)
-            for cid, payload in extracted.items():
-                if cid not in merged:
-                    merged[cid] = payload
+    def fetch_through(session_proxy: dict | None, label: str) -> None:
+        with requests.Session() as s:
+            s.cookies.set("golden_key", token, domain="funpay.com")
+            if session_proxy:
+                s.proxies.update(session_proxy)
+            for url in urls:
+                try:
+                    resp = s.get(url, timeout=12, headers=headers, allow_redirects=True)
+                    resp.raise_for_status()
+                except Exception as exc:
+                    logger.warning(f"Category fetch failed ({label}) for {url}: {exc}")
+                    continue
+                extracted = _extract_categories_from_html(resp.text)
+                for cid, payload in extracted.items():
+                    if cid not in merged:
+                        merged[cid] = payload
+
+    # Try with proxy first (preferred)
+    fetch_through(proxy, "proxy")
+    # If nothing was parsed, fall back to direct connection so we still return fresh lot IDs
+    if not merged and proxy:
+        fetch_through(None, "direct-fallback")
 
     # Sort by game then category/name for stable UI
     return sorted(
