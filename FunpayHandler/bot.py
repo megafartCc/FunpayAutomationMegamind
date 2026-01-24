@@ -1234,6 +1234,11 @@ class FunpayBot:
                 "sent_time": sent_time,
             }
             publish_chat_message(self._user_id, self._key_id, chat_id, item)
+            try:
+                role = "bot" if event.message.by_bot else "user"
+                self._db.log_chat_message(owner, role, event.message.text or "", self._user_id, self._key_id)
+            except Exception as exc:
+                logger.warning(f"Failed to log chat message for {owner}: {exc}")
 
         if event.message.type in (
             types.MessageTypes.NEW_FEEDBACK,

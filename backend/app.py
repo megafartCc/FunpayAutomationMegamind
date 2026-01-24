@@ -3143,6 +3143,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "sent_time": sent_time,
                     }
                     publish_chat_message(int(user_id), key_id, chat_id, item)
+                    try:
+                        db.log_chat_message(
+                            chat_name or str(chat_id),
+                            "bot",
+                            message.text or "",
+                            int(user_id),
+                            key_id,
+                        )
+                    except Exception:
+                        pass
                     await websocket.send_json(
                         _ws_payload({"type": "send:ok", "chat_id": chat_id, "message_id": message.id})
                     )
@@ -3179,6 +3189,16 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
             "sent_time": sent_time,
         }
         chat_cache.append_message(user_id, key_id, chat_id, item)
+        try:
+            db.log_chat_message(
+                chat_name or str(chat_id),
+                "bot",
+                message.text or "",
+                int(user_id),
+                key_id,
+            )
+        except Exception:
+            pass
         return {"status": "ok", "message_id": message.id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

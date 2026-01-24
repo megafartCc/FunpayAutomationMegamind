@@ -514,6 +514,7 @@ class MySQLDB:
         self._ensure_blacklist_table()
         self._ensure_blacklist_logs_table()
         self._ensure_admin_calls_table()
+        self._ensure_chat_columns()
         self._ensure_feedback_rewards_revoked_column()
         self._ensure_funpay_balance_table()
         self._ensure_order_history_columns()
@@ -3081,7 +3082,7 @@ class MySQLDB:
             def fetch(for_user_id: int) -> list[tuple]:
                 cursor.execute(
                     """
-                    SELECT role, message, created_at
+                    SELECT role, message, created_at, key_id
                     FROM chat_messages
                     WHERE LOWER(owner) = LOWER(?) AND user_id = ?
                     ORDER BY id DESC
@@ -3099,7 +3100,7 @@ class MySQLDB:
             if not rows:
                 cursor.execute(
                     """
-                    SELECT role, message, created_at
+                    SELECT role, message, created_at, key_id
                     FROM chat_messages
                     WHERE LOWER(owner) = LOWER(?)
                     ORDER BY id DESC
@@ -3114,6 +3115,7 @@ class MySQLDB:
                     "role": row[0],
                     "message": row[1],
                     "created_at": row[2],
+                    "key_id": row[3] if len(row) > 3 else None,
                 }
                 for row in rows
             ]
@@ -3122,6 +3124,34 @@ class MySQLDB:
             return []
         finally:
             cursor.close()
+
+    def log_chat_message(
+        self,
+        owner: str,
+        role: str,
+        message: str,
+        user_id: int | None = None,
+        key_id: int | None = None,
+    ) -> None:
+        if not owner or not role or not message:
+            return
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                INSERT INTO chat_messages (owner, role, message, user_id, key_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(owner).strip().lower(), str(role), message, int(user_id or 0), key_id),
+            )
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error logging chat message for {owner}: {exc}")
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def log_blacklist_event(
         self,
@@ -3152,6 +3182,11 @@ class MySQLDB:
                 cursor.close()
             except Exception:
                 pass
+
+    def _ensure_chat_columns(self):
+        # user_id already added in _ensure_user_owner_columns for some deployments; keep idempotent
+        self._add_column_if_missing("chat_messages", "user_id", "INT NOT NULL DEFAULT 0")
+        self._add_column_if_missing("chat_messages", "key_id", "INT NULL")
 
     def list_blacklist_logs(
         self, user_id: int | None = None, key_id: int | None = None, limit: int = 100
