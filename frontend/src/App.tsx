@@ -5545,7 +5545,12 @@ const App: React.FC = () => {
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
                                 <span className="min-w-0 truncate font-semibold text-neutral-900">{rowId}</span>
-                                <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
+                                <div className="min-w-0">
+                                  <div className="truncate text-neutral-800">{r.accountName || ""}</div>
+                                  <span className="mt-1 inline-flex w-fit rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
+                                    {resolveKeyLabel(r.keyId)}
+                                  </span>
+                                </div>
                                 {r.buyer ? (
                                   r.chatUrl ? (
                                     <a
