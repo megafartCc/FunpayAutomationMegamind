@@ -1565,19 +1565,22 @@ def _classify_dispute_texts(texts: list[str]) -> dict | None:
             timeout=8,
         )
         resp.raise_for_status()
+        data = resp.json()
         content = (
-            resp.json()
+            data
             .get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
             .strip()
             .lower()
         )
+        # also try to capture reasoning if model returned it
+        reasoning = content
         if "dispute" in content:
-            return {"label": "dispute", "raw": content}
+            return {"label": "dispute", "raw": content, "reason": reasoning}
         if "clear" in content:
-            return {"label": "clear", "raw": content}
-        return {"label": "unknown", "raw": content}
+            return {"label": "clear", "raw": content, "reason": reasoning}
+        return {"label": "unknown", "raw": content, "reason": reasoning}
     except Exception as exc:
         logger.warning(f"AI dispute classify failed: {exc}")
         return None

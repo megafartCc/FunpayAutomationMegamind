@@ -4387,6 +4387,11 @@ const App: React.FC = () => {
                                     >
                                       AI: {ticketAIAnalysis.ai_dispute.label || "unknown"}
                                     </span>
+                                    {ticketAIAnalysis.ai_dispute.reason && (
+                                      <div className="mt-1 text-[11px] text-neutral-600">
+                                        {ticketAIAnalysis.ai_dispute.reason}
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                                 {ticketAIAnalysis.base_comment && (
