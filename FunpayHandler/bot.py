@@ -439,7 +439,13 @@ class FunpayBot:
         return self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id) or []
 
     def _get_available_lots(self) -> list[dict]:
-        return self._db.get_available_lot_accounts(self._user_id, key_id=None) or []
+        lots = self._db.get_available_lot_accounts(self._user_id, key_id=None) or []
+        filtered = []
+        for item in lots:
+            if item.get("lot_number") is None:
+                continue
+            filtered.append(item)
+        return filtered
 
     def _confirm_order(self, acc: Account, order_id: str | int | None) -> None:
         if not order_id:

@@ -275,6 +275,7 @@ def _ensure_user_key_normalized(user_id: int | None) -> None:
         if default_key and default_key.get("id"):
             db.normalize_legacy_key_data(user_id, int(default_key["id"]))
             db.normalize_orphan_keys(user_id)
+        db.purge_orphan_key_data(user_id)
     except Exception as exc:
         logger.error(f"Failed to normalize legacy keys for user {user_id}: {exc}")
     finally:
@@ -1098,7 +1099,7 @@ def list_keys(request: Request) -> dict:
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
 def create_key(payload: KeyCreate, request: Request) -> dict:
     user = getattr(request.state, "user", None) or {}
-    label = (payload.label or "").strip() or "Key"
+    label = (payload.label or "").strip() or "Workspace"
     golden_key = (payload.golden_key or "").strip()
     if not golden_key:
         raise HTTPException(status_code=400, detail="golden_key is required")
@@ -1106,16 +1107,7 @@ def create_key(payload: KeyCreate, request: Request) -> dict:
     if key_id is None:
         raise HTTPException(status_code=400, detail="Failed to create key")
     bot_manager.start_for_user_key(user.get("id"), key_id, golden_key)
-    clone_result = None
-    source = db.find_user_key_by_golden_key(golden_key, exclude_user_id=user.get("id"))
-    if source:
-        clone_result = db.clone_key_data(
-            source.get("user_id"),
-            source.get("key_id"),
-            user.get("id"),
-            key_id,
-        )
-    return {"id": key_id, "cloned": clone_result}
+    return {"id": key_id, "cloned": None}
 
 
 @app.patch("/api/keys/{key_id}", dependencies=[Depends(require_admin)])

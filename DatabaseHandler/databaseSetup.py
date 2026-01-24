@@ -1609,6 +1609,11 @@ class MySQLDB:
         cursor = self._cursor()
         key_clause_accounts, key_params_accounts = self._key_filter(key_id, "a.key_id")
         key_clause_lots, key_params_lots = self._key_filter(key_id, "l.key_id")
+        filter_existing = ""
+        filter_params: list = []
+        if user_id is not None:
+            filter_existing = " AND l.key_id IN (SELECT id FROM user_keys WHERE user_id = ?) "
+            filter_params.append(user_id)
         if user_id is None:
             cursor.execute(
                 f"""
@@ -1635,9 +1640,10 @@ class MySQLDB:
                 WHERE a.owner IS NULL AND a.user_id = ?
                     AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
                     {key_clause_accounts}{key_clause_lots}
+                    {filter_existing}
                 ORDER BY (l.lot_number IS NULL), l.lot_number
                 """,
-                (user_id, *key_params_accounts, *key_params_lots),
+                (user_id, *key_params_accounts, *key_params_lots, *filter_params),
             )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
@@ -1663,6 +1669,11 @@ class MySQLDB:
     def get_all_lot_accounts(self, user_id: int | None = None, key_id: int | None = None) -> list:
         cursor = self._cursor()
         key_clause, key_params = self._key_filter(key_id, "l.key_id")
+        filter_existing = ""
+        filter_params: list = []
+        if user_id is not None:
+            filter_existing = " AND l.key_id IN (SELECT id FROM user_keys WHERE user_id = ?) "
+            filter_params.append(user_id)
         if user_id is None:
             cursor.execute(
                 f"""
@@ -1680,10 +1691,10 @@ class MySQLDB:
                 SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url, a.account_frozen, a.rental_frozen, a.rental_frozen_at
                 FROM lots l
                 JOIN accounts a ON a.ID = l.account_id
-                WHERE l.user_id = ?{key_clause}
+                WHERE l.user_id = ?{key_clause}{filter_existing}
                 ORDER BY l.lot_number
                 """,
-                (user_id, *key_params),
+                (user_id, *key_params, *filter_params),
             )
         rows = cursor.fetchall()
         if self.db_type == "mysql":
@@ -4459,6 +4470,35 @@ class MySQLDB:
             self.conn.commit()
         except Exception as exc:
             logger.error(f"Error normalizing orphan keys for user {user_id}: {exc}")
+        finally:
+            cursor.close()
+
+    def purge_orphan_key_data(self, user_id: int) -> None:
+        """Remove data whose key_id does not belong to the user's existing workspaces."""
+        cursor = self._cursor()
+        try:
+            cursor.execute("SELECT id FROM user_keys WHERE user_id = ?", (user_id,))
+            valid_ids = [int(row[0]) for row in cursor.fetchall()]
+            placeholders = ",".join("?" for _ in valid_ids) if valid_ids else ""
+            tables = [
+                "lots",
+                "accounts",
+                "blacklist",
+                "order_history",
+                "admin_calls",
+                "funpay_balance_snapshots",
+            ]
+            for table in tables:
+                if valid_ids:
+                    cursor.execute(
+                        f"DELETE FROM {table} WHERE user_id = ? AND key_id IS NOT NULL AND key_id NOT IN ({placeholders})",
+                        (user_id, *valid_ids),
+                    )
+                else:
+                    cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error purging orphan key data for user {user_id}: {exc}")
         finally:
             cursor.close()
 
