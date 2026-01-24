@@ -7,20 +7,11 @@
 @layer base {
   body {
     @apply font-sans;
+    background-color: #0f111a;
+    color: #e5e7eb;
   }
-  /* Invert everything in dark mode: black -> white, white -> black */
-  .dark {
-    color-scheme: dark;
-    filter: invert(1) hue-rotate(180deg);
-    background-color: #000;
-  }
-  /* Re-invert media/icons so they stay natural */
-  .dark img,
-  .dark video,
-  .dark svg,
-  .dark canvas,
-  .dark iframe {
-    filter: invert(1) hue-rotate(180deg);
+  .dark body {
+    background-color: #0f111a;
   }
 }
 
@@ -72,5 +63,58 @@ input[type="password"]::-ms-clear {
 }
 
 @layer utilities {
-  /* No extra dark overrides needed; inversion handles palette flip */
+  /* Discord-like dark palette */
+  .dark {
+    color-scheme: dark;
+  }
+  .dark .bg-white {
+    background-color: #20232d;
+  }
+  .dark .bg-neutral-50 {
+    background-color: #181b24;
+  }
+  .dark .bg-neutral-100 {
+    background-color: #1c1f2a;
+  }
+  .dark .bg-neutral-200 {
+    background-color: #222736;
+  }
+  .dark .bg-neutral-900,
+  .dark .bg-black {
+    background-color: #0f111a;
+  }
+  .dark .text-neutral-900 {
+    color: #f3f4f6;
+  }
+  .dark .text-neutral-800 {
+    color: #e5e7eb;
+  }
+  .dark .text-neutral-700 {
+    color: #cbd5e1;
+  }
+  .dark .text-neutral-600,
+  .dark .text-neutral-500 {
+    color: #9ca3af;
+  }
+  .dark .text-neutral-400 {
+    color: #6b7280;
+  }
+  .dark .text-black {
+    color: #f9fafb;
+  }
+  .dark .border-neutral-100 {
+    border-color: #2a3040;
+  }
+  .dark .border-neutral-200 {
+    border-color: #32394c;
+  }
+  .dark .border-neutral-300 {
+    border-color: #3a4357;
+  }
+  .dark .shadow-neutral-200\/70 {
+    box-shadow: 0 18px 40px -30px rgba(0, 0, 0, 0.9);
+  }
+  .dark .shadow-neutral-200 {
+    box-shadow: 0 12px 28px -24px rgba(0, 0, 0, 0.85);
+  }
 }
