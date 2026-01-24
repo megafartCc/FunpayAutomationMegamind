@@ -26,13 +26,6 @@ def _get_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _get_list(name: str) -> list[str]:
-    value = os.getenv(name, "")
-    if not value:
-        return []
-    return [part.strip() for part in value.split(",") if part.strip()]
-
-
 HOURS_FOR_REVIEW = _get_int("HOURS_FOR_REVIEW", 1)
 AUTO_EXTEND_ENABLED = _get_bool("AUTO_EXTEND_ENABLED", True)
 MAX_EXTENSION_HOURS = _get_int("MAX_EXTENSION_HOURS", 24)
@@ -63,6 +56,3 @@ MYSQLDATABASE = os.getenv("MYSQLDATABASE", "").strip()
 DATABASE_PATH = None
 
 REQUIRE_PAID_ORDER = _get_bool("REQUIRE_PAID_ORDER", True)
-
-# Comma-separated list of allowed origins for the WebSocket endpoint (e.g. https://app.example.com)
-ALLOWED_WS_ORIGINS = [origin.lower() for origin in _get_list("ALLOWED_WS_ORIGINS")]

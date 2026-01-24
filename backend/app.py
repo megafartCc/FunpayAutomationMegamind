@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Thread
 from threading import Lock
 from typing import Any, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -32,7 +32,6 @@ from backend.config import (
     STEAM_PRESENCE_PASSWORD,
     STEAM_PRESENCE_REFRESH_TOKEN,
     STEAM_PRESENCE_SHARED_SECRET,
-    ALLOWED_WS_ORIGINS,
 )
 from DatabaseHandler.databaseSetup import MySQLDB
 from FunPayAPI import Account as FPAccount
@@ -732,22 +731,6 @@ def require_admin(request: Request, response: Response) -> None:
                 request.state.user = user
                 return
     raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-def _origin_allowed(websocket: WebSocket) -> bool:
-    origin = websocket.headers.get("origin", "")
-    origin_host = urlparse(origin).hostname.lower() if origin else None
-    allowed_hosts = set(ALLOWED_WS_ORIGINS or [])
-    url_host = websocket.url.hostname if websocket.url else None
-    if url_host:
-        allowed_hosts.add(str(url_host).lower())
-    allowed_hosts.update({"localhost", "127.0.0.1"})
-    if not allowed_hosts:
-        return True
-    if origin_host:
-        return origin_host in allowed_hosts
-    # If no Origin header, be conservative: only allow same host
-    return False
 
 
 def _get_session_from_websocket(websocket: WebSocket) -> dict | None:
@@ -2154,9 +2137,6 @@ async def stream_chat_history(
 async def websocket_endpoint(websocket: WebSocket) -> None:
     # Capture the main event loop for cross-thread websocket broadcasts
     set_event_loop(asyncio.get_running_loop())
-    if not _origin_allowed(websocket):
-        await websocket.close(code=4403)
-        return
     session = _get_session_from_websocket(websocket)
     if not session:
         await websocket.close(code=4401)
