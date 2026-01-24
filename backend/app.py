@@ -1128,46 +1128,142 @@ def require_funpay_token(request: Request) -> tuple[int, str, int | None, Option
     return user_id, token, key_id, proxy
 
 
+def _extract_categories_from_html(html: str) -> dict[int, dict]:
+    """
+    Parse FunPay landing pages and map lot category IDs to human labels that
+    include game + server context to avoid ambiguous names.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    items: dict[int, dict] = {}
+
+    for block in soup.select(".promo-game-item"):
+        game_el = block.select_one(".game-title a") or block.select_one(".game-title")
+        game_name = (game_el.text or "").strip() if game_el else ""
+        if not game_name:
+            game_name = "Unknown game"
+
+        server_labels: dict[str, str] = {}
+        for btn in block.select("button[data-id]"):
+            data_id = (btn.get("data-id") or "").strip()
+            if data_id:
+                server_labels[data_id] = (btn.text or "").strip()
+
+        for ul in block.select("ul.list-inline[data-id]"):
+            data_id = (ul.get("data-id") or "").strip()
+            server = server_labels.get(data_id, "")
+            game_label = f"{game_name} ({server})" if server else game_name
+            for a in ul.select("a[href*='/lots/']"):
+                href = a.get("href") or ""
+                m = re.search(r"/lots/(\d+)", href)
+                if not m:
+                    continue
+                cid = int(m.group(1))
+                cat_name = (a.text or "").strip() or f"Category {cid}"
+                label = f"{game_label} - {cat_name}"
+                if cid not in items:
+                    items[cid] = {
+                        "id": cid,
+                        "name": label,
+                        "game": game_label,
+                        "category": cat_name,
+                        "server": server or None,
+                    }
+
+    # Fallback: any stray /lots/ links not covered above
+    for a in soup.select("a[href*='/lots/']"):
+        href = a.get("href") or ""
+        m = re.search(r"/lots/(\d+)", href)
+        if not m:
+            continue
+        cid = int(m.group(1))
+        if cid in items:
+            continue
+        cat_name = (a.text or "").strip() or f"Category {cid}"
+        block = a.find_parent(class_="promo-game-item")
+        game_el = None
+        if block:
+            game_el = block.select_one(".game-title a") or block.select_one(".game-title")
+        game_name = (game_el.text or "").strip() if game_el else ""
+        ul_parent = a.find_parent("ul", attrs={"data-id": True})
+        server = None
+        if ul_parent and block:
+            data_id = (ul_parent.get("data-id") or "").strip()
+            btn = block.select_one(f"button[data-id='{data_id}']")
+            if btn:
+                server = (btn.text or "").strip() or None
+        game_label = f"{game_name} ({server})" if game_name and server else (game_name or "Unknown game")
+        label = f"{game_label} - {cat_name}"
+        items[cid] = {
+            "id": cid,
+            "name": label,
+            "game": game_label,
+            "category": cat_name,
+            "server": server,
+        }
+
+    return items
+
+
+def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
+    """
+    Pull the current category tree directly from FunPay HTML so IDs stay fresh.
+    """
+    urls = ("https://funpay.com/lots/", "https://funpay.com/")
+    merged: dict[int, dict] = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    }
+    with requests.Session() as s:
+        s.cookies.set("golden_key", token, domain="funpay.com")
+        if proxy:
+            s.proxies.update(proxy)
+        for url in urls:
+            try:
+                resp = s.get(url, timeout=12, headers=headers)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning(f"Category fetch failed for {url}: {exc}")
+                continue
+            extracted = _extract_categories_from_html(resp.text)
+            for cid, payload in extracted.items():
+                if cid not in merged:
+                    merged[cid] = payload
+
+    # Sort by game then category/name for stable UI
+    return sorted(
+        merged.values(),
+        key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
+    )
+
+
 @app.get("/api/funpay/categories", dependencies=[Depends(require_admin)])
 def funpay_categories(request: Request) -> dict:
     user_id, token, key_id, proxy = require_funpay_token(request)
     try:
-        acc = FPAccount(token, proxy=proxy).get()
-        # Try library categories first (may be legacy IDs)
-        cats_attr = getattr(acc, "categories", None)
-        categories = cats_attr() if callable(cats_attr) else cats_attr or []
-        if not categories and hasattr(acc, "get_sorted_categories"):
-            categories = list(acc.get_sorted_categories().values())
-        items: list[dict] = []
-        for c in categories or []:
-            cid = getattr(c, "id", None)
-            name = getattr(c, "name", None) or str(cid)
-            if cid:
-                items.append({"id": cid, "name": name})
+        live_items = _fetch_funpay_categories_live(token, proxy)
 
-        # Refresh live IDs from FunPay lots page to avoid legacy mapping issues
+        # Fallback/merge with library categories in case something is missing
+        merged: dict[int, dict] = {item["id"]: item for item in live_items if item.get("id")}
         try:
-            with requests.Session() as s:
-                s.cookies.set("golden_key", token, domain="funpay.com")
-                if proxy:
-                    s.proxies.update(proxy)
-                r = s.get("https://funpay.com/lots/", timeout=10)
-                r.raise_for_status()
-                soup = BeautifulSoup(r.text, "html.parser")
-                links = soup.select("a[href^='/lots/']")
-                for a in links:
-                    href = a.get("href") or ""
-                    m = re.search(r"/lots/(\\d+)/", href)
-                    if not m:
-                        continue
-                    cid = int(m.group(1))
-                    name = (a.text or "").strip() or f"Category {cid}"
-                    if not any(it.get("id") == cid for it in items):
-                        items.append({"id": cid, "name": name})
+            acc = FPAccount(token, proxy=proxy).get()
+            cats_attr = getattr(acc, "categories", None)
+            categories = cats_attr() if callable(cats_attr) else cats_attr or []
+            if not categories and hasattr(acc, "get_sorted_categories"):
+                categories = list(acc.get_sorted_categories().values())
+            for c in categories or []:
+                cid = getattr(c, "id", None)
+                name = getattr(c, "name", None) or str(cid)
+                if not cid:
+                    continue
+                if cid not in merged:
+                    merged[cid] = {"id": cid, "name": name, "game": None, "category": name, "server": None}
         except Exception as exc:
-            logger.warning(f"Failed to refresh live categories: {exc}")
+            logger.warning(f"Library category fallback failed: {exc}")
 
-        items = sorted(items, key=lambda x: x.get("name") or "")
+        items = sorted(
+            merged.values(),
+            key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
+        )
         return {"items": items, "key_id": key_id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

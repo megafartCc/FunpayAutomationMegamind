@@ -172,6 +172,14 @@ type BlacklistLog = {
   created_at?: string | null;
 };
 
+type CategoryOption = {
+  id: number;
+  name: string;
+  game?: string | null;
+  category?: string | null;
+  server?: string | null;
+};
+
 const extractSteamId = (a: any): string => {
   const direct =
     a?.steamId ??
@@ -636,7 +644,7 @@ const App: React.FC = () => {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [autoRaise, setAutoRaise] = useState<boolean | null>(null);
   const [autoRaiseCategories, setAutoRaiseCategories] = useState<string>("");
-  const [categoryOptions, setCategoryOptions] = useState<{ id: number; name: string }[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const [categorySearch, setCategorySearch] = useState("");
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [categoryMeta, setCategoryMeta] = useState<{ ts?: number; count?: number }>({});
@@ -2496,7 +2504,7 @@ const App: React.FC = () => {
         setAutoTickets(true);
       }
       try {
-        const resCats = await apiFetch<{ items: { id: number; name: string }[] }>("/api/funpay/categories");
+        const resCats = await apiFetch<{ items: CategoryOption[] }>("/api/funpay/categories");
         setCategoryOptions(resCats.items || []);
         setCategoryMeta({ ts: Date.now(), count: resCats.items?.length || 0 });
       } catch {
@@ -2511,7 +2519,7 @@ const App: React.FC = () => {
     if (!token) return;
     setCategoryLoading(true);
     try {
-        const resCats = await apiFetch<{ items: { id: number; name: string }[] }>("/api/funpay/categories");
+        const resCats = await apiFetch<{ items: CategoryOption[] }>("/api/funpay/categories");
         setCategoryOptions(resCats.items || []);
         setCategoryMeta({ ts: Date.now(), count: resCats.items?.length || 0 });
     } catch (error) {
@@ -4788,18 +4796,19 @@ const App: React.FC = () => {
                             />
                             <div className="max-h-48 overflow-y-auto rounded-lg border border-neutral-200 bg-white">
                               {(categoryOptions || [])
-                                .filter((c) =>
-                                  !categorySearch.trim()
-                                    ? true
-                                    : c.name.toLowerCase().includes(categorySearch.toLowerCase()) ||
-                                      String(c.id).includes(categorySearch.trim())
-                                )
+                                .filter((c) => {
+                                  const term = categorySearch.trim().toLowerCase();
+                                  if (!term) return true;
+                                  const haystack = `${c.name || ""} ${c.game || ""} ${c.category || ""}`.toLowerCase();
+                                  return haystack.includes(term) || String(c.id).includes(categorySearch.trim());
+                                })
                                 .map((c) => {
                                   const selectedIds = autoRaiseCategories
                                     .split(",")
                                     .map((s) => s.trim())
                                     .filter(Boolean);
                                   const isSelected = selectedIds.includes(String(c.id));
+                                  const label = c.game ? `${c.game} - ${c.category || c.name}` : c.name;
                                   return (
                                     <label
                                       key={c.id}
@@ -4816,7 +4825,7 @@ const App: React.FC = () => {
                                         }}
                                       />
                                       <span className="font-mono text-xs text-neutral-500">{c.id}</span>
-                                      <span className="truncate">{c.name}</span>
+                                      <span className="truncate">{label}</span>
                                     </label>
                                   );
                                 })}
