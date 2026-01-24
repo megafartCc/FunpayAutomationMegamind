@@ -2619,23 +2619,17 @@ const App: React.FC = () => {
     return `${minutes}:${String(secs).padStart(2, "0")}`;
   };
 
-  const getMatchSecondsFromPresence = (presence?: PresenceData | null, observedAt?: number | null) => {
+  // Use only NodeBridge-reported time, no client-side ticking
+  const getMatchSecondsFromPresence = (presence?: PresenceData | null) => {
     if (!presence || !presence.in_match) return null;
     const rawSeconds = Number(presence.match_seconds);
-    const baseSeconds = Number.isFinite(rawSeconds)
-      ? Math.max(0, Math.floor(rawSeconds))
-      : parseMatchTimeSeconds(presence.match_time ?? null);
-    if (baseSeconds === null) return null;
-    if (observedAt && Number.isFinite(observedAt)) {
-      const elapsed = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
-      return baseSeconds + elapsed;
-    }
-    return baseSeconds;
+    if (Number.isFinite(rawSeconds)) return Math.max(0, Math.floor(rawSeconds));
+    return parseMatchTimeSeconds(presence.match_time ?? null);
   };
 
-  const getMatchTimeLabel = (presence?: PresenceData | null, observedAt?: number | null) => {
+  const getMatchTimeLabel = (presence?: PresenceData | null) => {
     if (!presence || !presence.in_match) return "-";
-    const seconds = getMatchSecondsFromPresence(presence, observedAt);
+    const seconds = getMatchSecondsFromPresence(presence);
     if (seconds !== null) {
       const formatted = formatMatchTimeSeconds(seconds);
       if (formatted) return formatted;
@@ -3014,7 +3008,7 @@ const App: React.FC = () => {
                     frozen ? selectedRental.rentalFrozenAt ?? null : null
                   )
                 : "-";
-            const matchTime = getMatchTimeLabel(presence, selectedRental.presenceObservedAt ?? null);
+            const matchTime = getMatchTimeLabel(presence);
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
             return (
               <div className="space-y-4">
@@ -5072,10 +5066,10 @@ const App: React.FC = () => {
                               <span>Status</span>
                             </div>
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
-                          {rentalsTable.map((r, idx) => {
-                            const presence = r.presence ?? null;
-                            const timer = getMatchTimeLabel(presence, r.presenceObservedAt ?? null);
-                            const frozen = !!r.rentalFrozen;
+                            {rentalsTable.map((r, idx) => {
+                              const presence = r.presence ?? null;
+                              const timer = getMatchTimeLabel(presence);
+                              const frozen = !!r.rentalFrozen;
                             const presenceLabel = frozen
                               ? "Frozen"
                               : presence?.in_match
