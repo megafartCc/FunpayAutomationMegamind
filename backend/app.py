@@ -18,7 +18,7 @@ import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
@@ -1248,50 +1248,70 @@ def _fetch_funpay_categories_live(token: str, proxy: dict | None) -> list[dict]:
     )
 
 
+def _build_funpay_categories(token: str, proxy: dict | None) -> list[dict]:
+    """
+    Compose category list using live scrape (preferred) plus library fallback, with pruning of bare game-only rows.
+    """
+    live_items = _fetch_funpay_categories_live(token, proxy)
+
+    # Fallback/merge with library categories in case something is missing
+    merged: dict[int, dict] = {item["id"]: item for item in live_items if item.get("id")}
+    try:
+        acc = FPAccount(token, proxy=proxy).get()
+        cats_attr = getattr(acc, "categories", None)
+        categories = cats_attr() if callable(cats_attr) else cats_attr or []
+        if not categories and hasattr(acc, "get_sorted_categories"):
+            categories = list(acc.get_sorted_categories().values())
+        for c in categories or []:
+            cid = getattr(c, "id", None)
+            name = getattr(c, "name", None) or str(cid)
+            if not cid:
+                continue
+            if cid not in merged:
+                merged[cid] = {"id": cid, "name": name, "game": None, "category": name, "server": None}
+    except Exception as exc:
+        logger.warning(f"Library category fallback failed: {exc}")
+
+    # If we have detailed categories for a game, drop bare game-only entries (e.g., library returns "Dota 2" with id 41)
+    games_with_categories = {
+        (v.get("game") or "").strip()
+        for v in merged.values()
+        if v.get("category") and (v.get("game") or "").strip()
+    }
+    pruned = {
+        cid: v
+        for cid, v in merged.items()
+        if not (
+            (v.get("game") or "").strip() in games_with_categories
+            and (not v.get("category") or v.get("category") == v.get("name"))
+        )
+    }
+
+    items = sorted(
+        pruned.values(),
+        key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
+    )
+    return items
+
+
 @app.get("/api/funpay/categories", dependencies=[Depends(require_admin)])
 def funpay_categories(request: Request) -> dict:
     user_id, token, key_id, proxy = require_funpay_token(request)
     try:
-        live_items = _fetch_funpay_categories_live(token, proxy)
-
-        # Fallback/merge with library categories in case something is missing
-        merged: dict[int, dict] = {item["id"]: item for item in live_items if item.get("id")}
-        try:
-            acc = FPAccount(token, proxy=proxy).get()
-            cats_attr = getattr(acc, "categories", None)
-            categories = cats_attr() if callable(cats_attr) else cats_attr or []
-            if not categories and hasattr(acc, "get_sorted_categories"):
-                categories = list(acc.get_sorted_categories().values())
-            for c in categories or []:
-                cid = getattr(c, "id", None)
-                name = getattr(c, "name", None) or str(cid)
-                if not cid:
-                    continue
-                if cid not in merged:
-                    merged[cid] = {"id": cid, "name": name, "game": None, "category": name, "server": None}
-        except Exception as exc:
-            logger.warning(f"Library category fallback failed: {exc}")
-
-        # If we have detailed categories for a game, drop bare game-only entries (e.g., library returns "Dota 2" with id 41)
-        games_with_categories = {
-            (v.get("game") or "").strip()
-            for v in merged.values()
-            if v.get("category") and (v.get("game") or "").strip()
-        }
-        pruned = {
-            cid: v
-            for cid, v in merged.items()
-            if not (
-                (v.get("game") or "").strip() in games_with_categories
-                and (not v.get("category") or v.get("category") == v.get("name"))
-            )
-        }
-
-        items = sorted(
-            pruned.values(),
-            key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
-        )
+        items = _build_funpay_categories(token, proxy)
         return {"items": items, "key_id": key_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/funpay/categories.txt", dependencies=[Depends(require_admin)])
+def funpay_categories_txt(request: Request) -> Response:
+    _, token, _, proxy = require_funpay_token(request)
+    try:
+        items = _build_funpay_categories(token, proxy)
+        lines = [f"{item.get('id')}\t{item.get('game') or ''}\t{item.get('category') or item.get('name') or ''}" for item in items]
+        body = "\n".join(lines)
+        return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
