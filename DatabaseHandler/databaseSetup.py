@@ -839,6 +839,9 @@ class MySQLDB:
         self._add_column_if_missing("user_keys", "proxy_username", "TEXT")
         self._add_column_if_missing("user_keys", "proxy_password", "TEXT")
 
+    def _ensure_account_order_column(self):
+        self._add_column_if_missing("accounts", "rental_order_id", "TEXT")
+
     def _ensure_key_columns(self):
         self._add_column_if_missing("accounts", "key_id", "INT NULL")
         self._add_column_if_missing("lots", "key_id", "INT NOT NULL DEFAULT 0")
