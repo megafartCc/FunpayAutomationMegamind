@@ -3110,3 +3110,4 @@ def spa_fallback(path: str) -> FileResponse:
     if index_path.exists():
         return FileResponse(index_path)
     return _frontend_build_missing_response()
+
