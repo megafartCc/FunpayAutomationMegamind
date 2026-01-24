@@ -1015,7 +1015,16 @@ def create_key(payload: KeyCreate, request: Request) -> dict:
     if key_id is None:
         raise HTTPException(status_code=400, detail="Failed to create key")
     bot_manager.start_for_user_key(user.get("id"), key_id, golden_key)
-    return {"id": key_id}
+    clone_result = None
+    source = db.find_user_key_by_golden_key(golden_key, exclude_user_id=user.get("id"))
+    if source:
+        clone_result = db.clone_key_data(
+            source.get("user_id"),
+            source.get("key_id"),
+            user.get("id"),
+            key_id,
+        )
+    return {"id": key_id, "cloned": clone_result}
 
 
 @app.patch("/api/keys/{key_id}", dependencies=[Depends(require_admin)])

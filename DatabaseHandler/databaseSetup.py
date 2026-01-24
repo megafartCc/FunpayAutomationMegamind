@@ -507,6 +507,7 @@ class MySQLDB:
         self._migrate_lots_schema()
         self._ensure_user_keys_default()
         self._ensure_key_columns()
+        self._ensure_account_name_not_unique()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -826,6 +827,33 @@ class MySQLDB:
         self._add_column_if_missing("order_history", "key_id", "INT NULL")
         self._add_column_if_missing("admin_calls", "key_id", "INT NULL")
         self._add_column_if_missing("funpay_balance_snapshots", "key_id", "INT NULL")
+
+    def _ensure_account_name_not_unique(self):
+        if self.db_type != "mysql":
+            return
+        cursor = self._cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT INDEX_NAME, NON_UNIQUE
+                FROM information_schema.statistics
+                WHERE table_schema = %s AND table_name = 'accounts' AND column_name = 'account_name'
+                """,
+                (MYSQLDATABASE,),
+            )
+            for index_name, non_unique in cursor.fetchall():
+                if index_name == "PRIMARY":
+                    continue
+                if int(non_unique) == 0:
+                    try:
+                        cursor.execute(f"ALTER TABLE accounts DROP INDEX {index_name}")
+                    except Exception:
+                        pass
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error ensuring account_name is non-unique: {exc}")
+        finally:
+            cursor.close()
 
     def _ensure_blacklist_table(self):
         cursor = self._cursor()
@@ -3857,6 +3885,269 @@ class MySQLDB:
             if not row:
                 return None
             return {"id": row[0], "label": row[1], "golden_key": row[2], "is_default": bool(row[3])}
+        finally:
+            cursor.close()
+
+    def find_user_key_by_golden_key(self, golden_key: str, exclude_user_id: int | None = None):
+        golden_key = (golden_key or "").strip()
+        if not golden_key:
+            return None
+        cursor = self._cursor()
+        try:
+            if exclude_user_id:
+                cursor.execute(
+                    """
+                    SELECT user_id, id
+                    FROM user_keys
+                    WHERE golden_key = ? AND golden_key <> '' AND user_id <> ?
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (golden_key, exclude_user_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT user_id, id
+                    FROM user_keys
+                    WHERE golden_key = ? AND golden_key <> ''
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (golden_key,),
+                )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {"user_id": row[0], "key_id": row[1]}
+        finally:
+            cursor.close()
+
+    def clone_key_data(
+        self,
+        source_user_id: int,
+        source_key_id: int | None,
+        dest_user_id: int,
+        dest_key_id: int,
+    ) -> dict:
+        cursor = self._cursor()
+        counts = {
+            "accounts": 0,
+            "lots": 0,
+            "blacklist": 0,
+            "order_history": 0,
+            "admin_calls": 0,
+            "balance_snapshots": 0,
+        }
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM accounts WHERE user_id = ? AND key_id = ?",
+                (dest_user_id, dest_key_id),
+            )
+            if cursor.fetchone()[0] > 0:
+                return {"skipped": True, "reason": "destination already has accounts"}
+
+            key_clause, key_params = self._key_filter(source_key_id, "key_id")
+            cursor.execute(
+                f"""
+                SELECT ID, account_name, path_to_maFile, mafile_json, login, password,
+                       rental_duration, rental_duration_minutes, mmr, owner, rental_start,
+                       account_frozen, rental_frozen, rental_frozen_at
+                FROM accounts
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            account_rows = cursor.fetchall()
+            account_id_map: dict[int, int] = {}
+            for row in account_rows:
+                (
+                    account_id,
+                    account_name,
+                    path_to_mafile,
+                    mafile_json,
+                    login,
+                    password,
+                    rental_duration,
+                    rental_duration_minutes,
+                    mmr,
+                    owner,
+                    rental_start,
+                    account_frozen,
+                    rental_frozen,
+                    rental_frozen_at,
+                ) = row
+                cursor.execute(
+                    """
+                    INSERT INTO accounts (
+                        account_name, path_to_maFile, mafile_json, login, password,
+                        rental_duration, rental_duration_minutes, mmr, owner, rental_start,
+                        account_frozen, rental_frozen, rental_frozen_at, user_id, key_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        account_name,
+                        path_to_mafile,
+                        mafile_json,
+                        login,
+                        password,
+                        rental_duration,
+                        rental_duration_minutes,
+                        mmr,
+                        owner,
+                        rental_start,
+                        account_frozen,
+                        rental_frozen,
+                        rental_frozen_at,
+                        dest_user_id,
+                        dest_key_id,
+                    ),
+                )
+                new_id = cursor.lastrowid
+                account_id_map[int(account_id)] = int(new_id)
+                counts["accounts"] += 1
+
+            cursor.execute(
+                f"""
+                SELECT lot_number, account_id, lot_url
+                FROM lots
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            for lot_number, account_id, lot_url in cursor.fetchall():
+                new_account_id = account_id_map.get(int(account_id or 0))
+                if not new_account_id:
+                    continue
+                cursor.execute(
+                    """
+                    INSERT INTO lots (lot_number, account_id, lot_url, user_id, key_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (lot_number, new_account_id, lot_url, dest_user_id, dest_key_id),
+                )
+                counts["lots"] += 1
+
+            cursor.execute(
+                f"""
+                SELECT owner, reason, created_at
+                FROM blacklist
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            for owner, reason, created_at in cursor.fetchall():
+                cursor.execute(
+                    """
+                    INSERT INTO blacklist (owner, reason, user_id, key_id, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (owner, reason, dest_user_id, dest_key_id, created_at),
+                )
+                counts["blacklist"] += 1
+
+            cursor.execute(
+                f"""
+                SELECT order_id, owner, account_name, account_id, steam_id, rental_minutes,
+                       lot_number, amount, price, action, created_at
+                FROM order_history
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            for row in cursor.fetchall():
+                (
+                    order_id,
+                    owner,
+                    account_name,
+                    account_id,
+                    steam_id,
+                    rental_minutes,
+                    lot_number,
+                    amount,
+                    price,
+                    action,
+                    created_at,
+                ) = row
+                mapped_account_id = account_id_map.get(int(account_id)) if account_id is not None else None
+                cursor.execute(
+                    """
+                    INSERT INTO order_history (
+                        order_id, owner, account_name, account_id, steam_id, rental_minutes,
+                        lot_number, amount, price, action, user_id, key_id, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        order_id,
+                        owner,
+                        account_name,
+                        mapped_account_id,
+                        steam_id,
+                        rental_minutes,
+                        lot_number,
+                        amount,
+                        price,
+                        action,
+                        dest_user_id,
+                        dest_key_id,
+                        created_at,
+                    ),
+                )
+                counts["order_history"] += 1
+
+            cursor.execute(
+                f"""
+                SELECT chat_id, owner, count, last_called_at
+                FROM admin_calls
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            for chat_id, owner, count, last_called_at in cursor.fetchall():
+                cursor.execute(
+                    """
+                    INSERT INTO admin_calls (user_id, chat_id, owner, count, last_called_at, key_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (dest_user_id, chat_id, owner, count, last_called_at, dest_key_id),
+                )
+                counts["admin_calls"] += 1
+
+            cursor.execute(
+                f"""
+                SELECT total_rub, available_rub, total_usd, total_eur, created_at
+                FROM funpay_balance_snapshots
+                WHERE user_id = ?{key_clause}
+                """,
+                (source_user_id, *key_params),
+            )
+            for total_rub, available_rub, total_usd, total_eur, created_at in cursor.fetchall():
+                cursor.execute(
+                    """
+                    INSERT INTO funpay_balance_snapshots (
+                        user_id, total_rub, available_rub, total_usd, total_eur, created_at, key_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        dest_user_id,
+                        total_rub,
+                        available_rub,
+                        total_usd,
+                        total_eur,
+                        created_at,
+                        dest_key_id,
+                    ),
+                )
+                counts["balance_snapshots"] += 1
+
+            self.conn.commit()
+            return {"success": True, **counts}
+        except Exception as exc:
+            logger.error(f"Error cloning workspace data: {exc}")
+            return {"success": False, "error": str(exc)}
         finally:
             cursor.close()
 
