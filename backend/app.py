@@ -1341,137 +1341,10 @@ def keys_health(request: Request) -> dict:
 
 @app.post("/api/support/tickets", dependencies=[Depends(require_admin)])
 def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dict:
+    # Design-only stub: keep UI flow but disable external FunPay submission.
     user = getattr(request.state, "user", None) or {}
     key_id = payload.key_id if payload.key_id is not None else _resolve_key_id(request)
-    if key_id is None:
-        raise HTTPException(status_code=400, detail="Select a workspace first")
-    # fetch golden key for workspace
-    key_entry = db.get_user_key(user.get("id"), key_id)
-    token = (key_entry or {}).get("golden_key")
-    if not token:
-        raise HTTPException(status_code=400, detail="Workspace has no golden key")
-    proxy_url = key_entry.get("proxy_url")
-    proxy_username = key_entry.get("proxy_username")
-    proxy_password = key_entry.get("proxy_password")
-    if not proxy_url:
-        raise HTTPException(status_code=503, detail="Proxy is required for this workspace to send tickets")
-    try:
-        proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Invalid proxy: {exc}")
-    session = requests.Session()
-    session.proxies.update(proxy or {})
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-        }
-    )
-    # set cookies on both domains
-    session.cookies.set("golden_key", token, domain=".funpay.com")
-    session.cookies.set("golden_key", token, domain="support.funpay.com")
-    topic_id = FUNPAY_SUPPORT_TOPIC_IDS.get(payload.topic, FUNPAY_SUPPORT_TOPIC_IDS.get("other"))
 
-    # Build target URLs by topic id
-    candidate_urls = []
-    if topic_id:
-        candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}")
-    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new")
-    if topic_id:
-        candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}?locale=ru")
-    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new?locale=ru")
-
-    resp = form = None
-    form_url = None
-    for candidate_url in candidate_urls:
-        try:
-            resp = session.get(candidate_url, timeout=20)
-        except Exception as exc:
-            logger.warning("Support form GET failed for %s: %s", candidate_url, exc)
-            continue
-        if resp.status_code >= 400:
-            logger.warning("Support form GET returned %s for %s", resp.status_code, candidate_url)
-            continue
-        soup = BeautifulSoup(resp.text, "html.parser")
-        form = soup.find("form")
-        if form:
-            form_url = resp.url or candidate_url
-            break
-    if not form:
-        raise HTTPException(status_code=502, detail="Support form not found on support.funpay.com")
-
-    action = form.get("action") or form_url
-    action = urljoin(form_url, action)
-    form_data = {}
-
-    for inp in form.find_all("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        itype = (inp.get("type") or "").lower()
-        if itype in ("checkbox", "radio"):
-            if inp.has_attr("checked"):
-                form_data[name] = inp.get("value", "on")
-            continue
-        form_data[name] = inp.get("value", "")
-
-    for ta in form.find_all("textarea"):
-        name = ta.get("name")
-        if not name:
-            continue
-        if name == "":
-            continue
-        form_data[name] = payload.comment or ""
-
-    for sel in form.find_all("select"):
-        name = sel.get("name")
-        if not name:
-            continue
-        selected = None
-        for opt in sel.find_all("option"):
-            if opt.has_attr("selected"):
-                selected = opt.get("value")
-                break
-        if selected is None and sel.find("option"):
-            selected = sel.find("option").get("value")
-        form_data[name] = selected or ""
-
-    if payload.order_id:
-        for inp in form.find_all("input"):
-            name = inp.get("name") or ""
-            placeholder = (inp.get("placeholder") or "").lower()
-            label_text = ""
-            label = inp.find_previous("label")
-            if label:
-                label_text = (label.text or "").lower()
-            if "order" in name.lower() or "заказ" in placeholder or "заказ" in label_text:
-                form_data[name] = payload.order_id
-                break
-
-    if payload.role in ("buyer", "seller"):
-        for inp in form.find_all("input"):
-            if (inp.get("type") or "").lower() != "radio":
-                continue
-            label_text = ""
-            label = inp.find_next_sibling("label")
-            if label:
-                label_text = (label.text or "").lower()
-            value = inp.get("value")
-            if payload.role == "buyer" and ("покуп" in label_text or value in ("buyer", "1")):
-                form_data[inp.get("name")] = value
-                break
-            if payload.role == "seller" and ("продав" in label_text or value in ("seller", "2")):
-                form_data[inp.get("name")] = value
-                break
-
-    post_resp = session.post(
-        action,
-        data=form_data,
-        timeout=20,
-        headers={"Referer": form_url, "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest"},
-    )
-    status_ok = post_resp.status_code < 400
     with _support_lock:
         ticket_id = len(_support_tickets) + 1
         _support_tickets.append(
@@ -1484,12 +1357,16 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
                 "order_id": payload.order_id,
                 "comment": payload.comment,
                 "created_at": datetime.utcnow().isoformat(),
-                "status": "ok" if status_ok else f"fail:{post_resp.status_code}",
+                "status": "disabled",
+                "note": "FunPay support submission disabled (design-only stub).",
             }
         )
-    if not status_ok:
-        raise HTTPException(status_code=post_resp.status_code, detail="Support form submission failed")
-    return {"id": ticket_id, "status": "sent"}
+
+    return {
+        "id": ticket_id,
+        "status": "disabled",
+        "message": "FunPay support submission is disabled; UI only.",
+    }
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
