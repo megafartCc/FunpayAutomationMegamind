@@ -4822,41 +4822,94 @@ const App: React.FC = () => {
                                 placeholder="Search by ID..."
                               />
                             </div>
-                            <div className="max-h-72 overflow-y-auto rounded-lg border border-neutral-200 bg-white divide-y divide-neutral-100">
-                              {groupedCategories.length ? (
-                                groupedCategories.map((c) => {
-                                  const selectedIds = autoRaiseCategories
-                                    .split(",")
-                                    .map((s) => s.trim())
-                                    .filter(Boolean);
-                                  const isSelected = selectedIds.includes(String(c.id));
-                                  const label = c.category || c.name;
-                                  const gameLabel = c.game || "Other";
-                                  return (
-                                    <label
-                                      key={c.id}
-                                      className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
+                            {groupedCategories.length ? (
+                              <div className="rounded-lg border border-neutral-200 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+                                <div className="flex items-center justify-between px-3 py-2 text-[11px] text-neutral-600 border-b border-neutral-100">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-neutral-800">
+                                      {groupedCategories.length} categories
+                                    </span>
+                                    <span className="text-neutral-400">·</span>
+                                    <span>
+                                      Selected{" "}
+                                      {
+                                        autoRaiseCategories
+                                          .split(",")
+                                          .map((s) => s.trim())
+                                          .filter(Boolean).length
+                                      }
+                                    </span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const selected = new Set(
+                                          autoRaiseCategories
+                                            .split(",")
+                                            .map((s) => s.trim())
+                                            .filter(Boolean)
+                                        );
+                                        groupedCategories.forEach((c) => selected.add(String(c.id)));
+                                        setAutoRaiseCategories(Array.from(selected).join(","));
+                                      }}
+                                      className="rounded border border-neutral-200 px-2 py-1 text-[11px] font-semibold text-neutral-700 hover:bg-neutral-100"
                                     >
-                                      <input
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={(e) => {
-                                          let next = new Set(selectedIds);
-                                          if (e.target.checked) next.add(String(c.id));
-                                          else next.delete(String(c.id));
-                                          setAutoRaiseCategories(Array.from(next).join(","));
-                                        }}
-                                      />
-                                      <span className="font-mono text-xs text-neutral-500 w-14">{c.id}</span>
-                                      <span className="truncate w-40 text-neutral-500">{gameLabel}</span>
-                                      <span className="truncate">{label}</span>
-                                    </label>
-                                  );
-                                })
-                              ) : (
-                                <div className="px-3 py-2 text-neutral-500 text-sm">No categories loaded.</div>
-                              )}
-                            </div>
+                                      Select visible
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setAutoRaiseCategories("")}
+                                      className="rounded border border-neutral-200 px-2 py-1 text-[11px] font-semibold text-neutral-600 hover:bg-neutral-100"
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-[72px_180px_1fr] items-center bg-neutral-50 px-3 py-2 text-[11px] font-semibold text-neutral-600 uppercase tracking-[0.02em]">
+                                  <span>ID</span>
+                                  <span>Game</span>
+                                  <span>Category</span>
+                                </div>
+                                <div className="max-h-80 overflow-y-auto divide-y divide-neutral-100">
+                                  {groupedCategories.map((c) => {
+                                    const selectedIds = autoRaiseCategories
+                                      .split(",")
+                                      .map((s) => s.trim())
+                                      .filter(Boolean);
+                                    const isSelected = selectedIds.includes(String(c.id));
+                                    const label = c.category || c.name;
+                                    const gameLabel = c.game || "Other";
+                                    return (
+                                      <label
+                                        key={c.id}
+                                        className="grid grid-cols-[72px_180px_1fr] items-center gap-2 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={(e) => {
+                                              let next = new Set(selectedIds);
+                                              if (e.target.checked) next.add(String(c.id));
+                                              else next.delete(String(c.id));
+                                              setAutoRaiseCategories(Array.from(next).join(","));
+                                            }}
+                                          />
+                                          <span className="font-mono text-xs text-neutral-500">{c.id}</span>
+                                        </div>
+                                        <span className="truncate text-neutral-600">{gameLabel}</span>
+                                        <span className="truncate">{label}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-neutral-500 text-sm">
+                                No categories loaded.
+                              </div>
+                            )}
                             <p className="text-[11px] text-neutral-500">
                               Leave all unchecked to raise every category for this workspace.
                             </p>
