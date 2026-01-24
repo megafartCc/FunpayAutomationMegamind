@@ -512,6 +512,7 @@ class MySQLDB:
         self._ensure_feedback_rewards_table()
         self._ensure_feedback_rewards_user_column()
         self._ensure_blacklist_table()
+        self._ensure_blacklist_logs_table()
         self._ensure_admin_calls_table()
         self._ensure_feedback_rewards_revoked_column()
         self._ensure_funpay_balance_table()
@@ -905,6 +906,47 @@ class MySQLDB:
                         user_id INTEGER NOT NULL DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(owner, user_id)
+                    )
+                    """
+                )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+
+    def _ensure_blacklist_logs_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS blacklist_logs (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        owner VARCHAR(255) NOT NULL,
+                        action VARCHAR(32) NOT NULL,
+                        reason TEXT NULL,
+                        details TEXT NULL,
+                        user_id INT NOT NULL DEFAULT 0,
+                        key_id INT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_bl_logs_user (user_id, key_id),
+                        INDEX idx_bl_logs_owner (owner, user_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS blacklist_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        reason TEXT NULL,
+                        details TEXT NULL,
+                        user_id INTEGER NOT NULL DEFAULT 0,
+                        key_id INTEGER NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                     """
                 )
@@ -3025,6 +3067,69 @@ class MySQLDB:
         except Exception as exc:
             logger.error(f"Error updating blacklist entry {entry_id}: {exc}")
             return False
+        finally:
+            cursor.close()
+
+    def log_blacklist_event(
+        self,
+        owner: str,
+        action: str,
+        reason: str | None = None,
+        details: str | None = None,
+        user_id: int | None = None,
+        key_id: int | None = None,
+    ) -> None:
+        if not owner or not action:
+            return
+        try:
+            cursor = self._cursor()
+            key_value = int(key_id) if key_id is not None else None
+            cursor.execute(
+                """
+                INSERT INTO blacklist_logs (owner, action, reason, details, user_id, key_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (str(owner).strip().lower(), str(action), reason, details, int(user_id or 0), key_value),
+            )
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error logging blacklist event for {owner}: {exc}")
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def list_blacklist_logs(
+        self, user_id: int | None = None, key_id: int | None = None, limit: int = 100
+    ) -> list:
+        try:
+            cursor = self._cursor()
+            key_clause, key_params = self._key_filter(key_id, "key_id")
+            cursor.execute(
+                f"""
+                SELECT owner, action, reason, details, created_at
+                FROM blacklist_logs
+                WHERE user_id = ?{key_clause}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (int(user_id or 0), *key_params, int(limit)),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "owner": row[0],
+                    "action": row[1],
+                    "reason": row[2],
+                    "details": row[3],
+                    "created_at": row[4],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error listing blacklist logs: {exc}")
+            return []
         finally:
             cursor.close()
 

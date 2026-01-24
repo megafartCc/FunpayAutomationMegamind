@@ -617,9 +617,23 @@ class FunpayBot:
                 user_id=self._user_id,
                 key_id=self._key_id,
             )
+            self._db.log_blacklist_event(
+                buyer,
+                "compensation_payment",
+                details=f"order={order_id}; lot={lot_number}; amount={amount}",
+                user_id=self._user_id,
+                key_id=self._key_id,
+            )
             paid_total = self._db.get_blacklist_compensation_total(buyer, self._user_id, key_id=self._key_id)
             if paid_total >= COMP_THRESHOLD:
                 self._db.remove_from_blacklist(buyer, self._user_id, key_id=self._key_id)
+                self._db.log_blacklist_event(
+                    buyer,
+                    "auto_unblacklist",
+                    details=f"total={paid_total}/{COMP_THRESHOLD}; order={order_id}; lot={lot_number}; amount={amount}",
+                    user_id=self._user_id,
+                    key_id=self._key_id,
+                )
                 acc.send_message(
                     chat_id,
                     f"Оплата компенсации получена ({paid_total} шт). Доступ разблокирован."
@@ -643,6 +657,13 @@ class FunpayBot:
                 f"нужно 5 шт этого лота. Сейчас оплачено: {paid_total}. "
                 f"Осталось: {remaining} шт."
                 + (f"\nОплатите по ссылке: {lot_link}" if lot_link else "")
+            )
+            self._db.log_blacklist_event(
+                buyer,
+                "blocked_order",
+                details=f"order={order_id}; lot={lot_number}; amount={amount}; paid={paid_total}; remaining={remaining}",
+                user_id=self._user_id,
+                key_id=self._key_id,
             )
             send_message_to_admin(
                 "BLACKLISTED ORDER\n\n"

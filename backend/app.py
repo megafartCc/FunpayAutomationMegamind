@@ -1874,6 +1874,13 @@ def blacklist_list(request: Request, query: str = "") -> dict:
     items = db.list_blacklist(uid, query=query or None, key_id=key_id)
     return {"items": items}
 
+@app.get("/api/blacklist/logs", dependencies=[Depends(require_admin)])
+def blacklist_logs(request: Request, limit: int = 100) -> dict:
+    uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
+    items = db.list_blacklist_logs(uid, key_id=key_id, limit=max(1, min(int(limit or 100), 500)))
+    return {"items": items}
+
 
 @app.post("/api/blacklist", dependencies=[Depends(require_admin)])
 def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
@@ -1897,6 +1904,14 @@ def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
     success = db.add_blacklist_entry(owner, payload.reason, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="User already blacklisted")
+    db.log_blacklist_event(
+        owner,
+        "add",
+        reason=payload.reason,
+        details=order_id or None,
+        user_id=uid,
+        key_id=key_id,
+    )
     return {"success": True}
 
 
@@ -1910,6 +1925,7 @@ def blacklist_update(entry_id: int, payload: BlacklistUpdate, request: Request) 
     updated = db.update_blacklist_entry(entry_id, owner, payload.reason, uid, key_id=key_id)
     if not updated:
         raise HTTPException(status_code=400, detail="Failed to update blacklist entry")
+    db.log_blacklist_event(owner, "update", reason=payload.reason, user_id=uid, key_id=key_id)
     return {"success": True}
 
 
@@ -1918,6 +1934,8 @@ def blacklist_remove(payload: BlacklistRemove, request: Request) -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
     removed = db.remove_blacklist_entries(payload.owners, uid, key_id=key_id)
+    for owner in payload.owners:
+        db.log_blacklist_event(owner, "remove", user_id=uid, key_id=key_id)
     return {"removed": removed}
 
 
@@ -1926,6 +1944,13 @@ def blacklist_clear(request: Request) -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
     removed = db.clear_blacklist(uid, key_id=key_id)
+    db.log_blacklist_event(
+        "all",
+        "clear_all",
+        details=f"removed={removed}",
+        user_id=uid,
+        key_id=key_id,
+    )
     return {"removed": removed}
 
 

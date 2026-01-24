@@ -163,6 +163,14 @@ type BlacklistEntry = {
   createdAt?: string | null;
 };
 
+type BlacklistLog = {
+  owner: string;
+  action: string;
+  reason?: string | null;
+  details?: string | null;
+  created_at?: string | null;
+};
+
 const extractSteamId = (a: any): string => {
   const direct =
     a?.steamId ??
@@ -647,6 +655,8 @@ const App: React.FC = () => {
   const [blacklistEditOwner, setBlacklistEditOwner] = useState("");
   const [blacklistEditReason, setBlacklistEditReason] = useState("");
   const [blacklistResolving, setBlacklistResolving] = useState(false);
+  const [blacklistLogs, setBlacklistLogs] = useState<BlacklistLog[]>([]);
+  const [blacklistLogsLoading, setBlacklistLogsLoading] = useState(false);
   const [lots, setLots] = useState<LotRow[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [lotsQuery, setLotsQuery] = useState("");
@@ -1775,6 +1785,29 @@ const App: React.FC = () => {
     [token, swrFetch, scopedKey]
   );
 
+  const loadBlacklistLogs = useCallback(
+    async (revalidate = false) => {
+      if (!token || activeKeyId === "all") return;
+      await swrFetch<BlacklistLog[]>({
+        key: scopedKey(`${CACHE_PREFIX}blacklist_logs`),
+        url: "/api/blacklist/logs?limit=200",
+        ttl: 20, // keep fresh
+        revalidate,
+        onLoading: setBlacklistLogsLoading,
+        onData: (items) => setBlacklistLogs(items),
+        map: (data) =>
+          (data.items || []).map((item: any) => ({
+            owner: String(item.owner ?? "").trim(),
+            action: String(item.action ?? "").trim(),
+            reason: item.reason ?? null,
+            details: item.details ?? null,
+            created_at: item.created_at ?? item.createdAt ?? null,
+          })),
+      });
+    },
+    [token, activeKeyId, swrFetch, scopedKey]
+  );
+
   useEffect(() => {
     if (token) {
       loadOverview("fast");
@@ -1787,6 +1820,13 @@ const App: React.FC = () => {
     }
     return undefined;
   }, [token, sessionKey, loadOverview, loadNotifications, loadChats]);
+
+  useEffect(() => {
+    if (!token || activeKeyId === "all") return;
+    // keep blacklist data reasonably fresh for nav badge; revalidate when tab is active
+    loadBlacklist(blacklistQuery, activeNav === "blacklist");
+    loadBlacklistLogs(activeNav === "blacklist");
+  }, [token, sessionKey, activeKeyId, activeNav, blacklistQuery, loadBlacklist, loadBlacklistLogs]);
 
   useEffect(() => {
     if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
@@ -3567,6 +3607,7 @@ const App: React.FC = () => {
     () => chats.reduce((sum, chat) => sum + (chat.adminCalls || 0), 0),
     [chats]
   );
+  const totalBlacklisted = useMemo(() => blacklistEntries.length, [blacklistEntries]);
   const targetLotKeyId = useMemo(() => {
     if (activeKeyId !== "all") return activeKeyId;
     const raw = lotKeyId.trim();
@@ -3650,6 +3691,7 @@ const App: React.FC = () => {
                       {NAV_ITEMS.filter((i) => !BOTTOM_NAV_IDS.has(i.id)).map((item) => {
                         const isActive = activeNav === item.id;
                         const showAdminBadge = item.id === "chats" && totalAdminCalls > 0;
+                        const showBlacklistBadge = item.id === "blacklist" && totalBlacklisted > 0;
                         return (
                           <motion.button
                             key={item.id}
@@ -3684,6 +3726,15 @@ const App: React.FC = () => {
                                 }`}
                               >
                                 {totalAdminCalls}
+                              </span>
+                            )}
+                            {!showAdminBadge && showBlacklistBadge && (
+                              <span
+                                className={`relative z-10 ml-auto rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  isActive ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700"
+                                }`}
+                              >
+                                {totalBlacklisted}
                               </span>
                             )}
                           </motion.button>
@@ -4962,6 +5013,68 @@ const App: React.FC = () => {
                               </div>
                             </div>
                           </div>
+                        </div>
+                        <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-4">
+                          <div className="mb-3 flex items-center justify-between">
+                            <div>
+                              <div className="text-sm font-semibold text-neutral-900">Activity</div>
+                              <div className="text-xs text-neutral-500">Latest blacklist / unblacklist events.</div>
+                            </div>
+                            <button
+                              onClick={() => loadBlacklistLogs(true)}
+                              disabled={activeKeyId === "all" || blacklistLogsLoading}
+                              className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                            >
+                              Refresh
+                            </button>
+                          </div>
+                          {blacklistLogsLoading ? (
+                            <div className="py-4 text-sm text-neutral-500">Loading activity...</div>
+                          ) : blacklistLogs.length === 0 ? (
+                            <div className="py-4 text-sm text-neutral-500">No activity yet.</div>
+                          ) : (
+                            <div className="space-y-2">
+                              {blacklistLogs.map((log, idx) => {
+                                const action = (log.action || "").toLowerCase();
+                                const badge =
+                                  action === "add"
+                                    ? { label: "Added", className: "bg-blue-100 text-blue-700" }
+                                    : action.includes("unblacklist")
+                                    ? { label: "Unblocked", className: "bg-green-100 text-green-700" }
+                                    : action === "blocked_order"
+                                    ? { label: "Blocked order", className: "bg-red-100 text-red-700" }
+                                    : action === "compensation_payment"
+                                    ? { label: "Payment", className: "bg-amber-100 text-amber-700" }
+                                    : action === "update"
+                                    ? { label: "Updated", className: "bg-neutral-100 text-neutral-700" }
+                                    : action === "clear_all"
+                                    ? { label: "Cleared", className: "bg-neutral-100 text-neutral-700" }
+                                    : { label: action || "Event", className: "bg-neutral-100 text-neutral-700" };
+                                return (
+                                  <div
+                                    key={`${log.owner}-${log.action}-${idx}`}
+                                    className="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-2"
+                                  >
+                                    <span
+                                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.className}`}
+                                    >
+                                      {badge.label}
+                                    </span>
+                                    <span className="text-sm font-semibold text-neutral-900">{log.owner}</span>
+                                    {log.reason && (
+                                      <span className="text-xs text-neutral-600">• {log.reason}</span>
+                                    )}
+                                    {log.details && (
+                                      <span className="text-xs text-neutral-500">• {log.details}</span>
+                                    )}
+                                    <span className="ml-auto text-[11px] text-neutral-500">
+                                      {log.created_at ? formatDate(log.created_at) : ""}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </motion.div>
