@@ -58,6 +58,9 @@ PROXY_TEST_URL = "https://api.ipify.org"
 # In-memory workspace health
 _workspace_health: dict[tuple[int, int | None], dict] = {}
 _health_lock = Lock()
+# Simple in-memory support ticket log (stub)
+_support_tickets: list[dict] = []
+_support_lock = Lock()
 
 
 def _set_health(user_id: int, key_id: int | None, **fields) -> None:
@@ -1190,6 +1193,13 @@ class AuthLogin(BaseModel):
     password: str
 
 
+class SupportTicketCreate(BaseModel):
+    topic: str
+    role: str
+    order_id: Optional[str] = None
+    comment: str
+
+
 class GoldenKeyUpdate(BaseModel):
     golden_key: str
 
@@ -1319,6 +1329,29 @@ def keys_health(request: Request) -> dict:
         if key_entry:
             item["label"] = key_entry.get("label")
     return {"items": items}
+
+
+@app.post("/api/support/tickets", dependencies=[Depends(require_admin)])
+def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    key_id = _resolve_key_id(request)
+    if key_id is None:
+        raise HTTPException(status_code=400, detail="Select a workspace first")
+    with _support_lock:
+        ticket_id = len(_support_tickets) + 1
+        _support_tickets.append(
+            {
+                "id": ticket_id,
+                "user_id": user.get("id"),
+                "key_id": key_id,
+                "topic": payload.topic,
+                "role": payload.role,
+                "order_id": payload.order_id,
+                "comment": payload.comment,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
+    return {"id": ticket_id, "status": "queued", "note": "Stub: ticket recorded locally (not yet sent to FunPay)"}
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])

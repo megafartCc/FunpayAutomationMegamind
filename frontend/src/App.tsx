@@ -401,6 +401,7 @@ const NAV_ITEMS = [
   { id: "overview", label: "Dashboard", Icon: DashboardIcon },
   { id: "rentals", label: "Active Rentals", Icon: RentalsIcon },
   { id: "orders", label: "Orders History", Icon: OrdersHistoryIcon },
+  { id: "tickets", label: "Tickets (FunPay)", Icon: OrdersHistoryIcon },
   { id: "blacklist", label: "Blacklist", Icon: BlacklistIcon },
   { id: "inventory", label: "Inventory", Icon: InventoryIcon },
   { id: "lots", label: "Lots", Icon: LotsIcon },
@@ -628,6 +629,11 @@ const App: React.FC = () => {
   const [uiMode, setUiMode] = useState<"light" | "dark">(
     () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
   );
+  const [ticketTopic, setTicketTopic] = useState("problem_order");
+  const [ticketRole, setTicketRole] = useState<"buyer" | "seller">("seller");
+  const [ticketOrderId, setTicketOrderId] = useState("");
+  const [ticketComment, setTicketComment] = useState("");
+  const [ticketSubmitting, setTicketSubmitting] = useState(false);
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
@@ -2203,6 +2209,9 @@ const App: React.FC = () => {
     }
     if (activeNav === "orders") {
       loadOrdersHistory(ordersQuery.trim(), true);
+    }
+    if (activeNav === "tickets") {
+      return;
     }
   }, [
     token,
@@ -3986,7 +3995,111 @@ const App: React.FC = () => {
                     </div>
                     )
                   )}
-                  {activeNav === "funpay-stats" ? null : activeNav === "chats" ? (
+                  {activeNav === "funpay-stats" ? null : activeNav === "tickets" ? (
+                    <motion.div
+                      key="tickets"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 space-y-4"
+                    >
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70 max-w-3xl">
+                        <div className="mb-4">
+                          <h3 className="text-lg font-semibold text-neutral-900">FunPay Support Ticket (manual)</h3>
+                          <p className="text-sm text-neutral-500">
+                            Отправляет заявку от имени выбранного рабочего пространства (пока только локально).
+                          </p>
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-xs font-semibold text-neutral-600">Тема</label>
+                          <select
+                            value={ticketTopic}
+                            onChange={(e) => setTicketTopic(e.target.value)}
+                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                          >
+                            <option value="problem_order">Проблема с заказом</option>
+                            <option value="problem_payment">Проблема с платежом</option>
+                            <option value="problem_account">Проблема с аккаунтом FunPay</option>
+                            <option value="problem_chat">Нарушение в чате</option>
+                            <option value="other">Другое</option>
+                          </select>
+                          <label className="text-xs font-semibold text-neutral-600">Вы покупатель или продавец?</label>
+                          <div className="flex items-center gap-4 text-sm text-neutral-700">
+                            <label className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                checked={ticketRole === "buyer"}
+                                onChange={() => setTicketRole("buyer")}
+                              />
+                              Покупатель
+                            </label>
+                            <label className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                checked={ticketRole === "seller"}
+                                onChange={() => setTicketRole("seller")}
+                              />
+                              Продавец
+                            </label>
+                          </div>
+                          <div className="grid gap-2">
+                            <label className="text-xs font-semibold text-neutral-600">Номер заказа</label>
+                            <input
+                              value={ticketOrderId}
+                              onChange={(e) => setTicketOrderId(e.target.value)}
+                              placeholder="Например RXD6QMP9"
+                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <label className="text-xs font-semibold text-neutral-600">Комментарий</label>
+                            <textarea
+                              value={ticketComment}
+                              onChange={(e) => setTicketComment(e.target.value)}
+                              rows={5}
+                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              placeholder="Опишите проблему..."
+                            />
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={async () => {
+                                if (!ticketComment.trim() || !ticketTopic) {
+                                  showToast("Заполните тему и комментарий.", "error");
+                                  return;
+                                }
+                                if (ticketSubmitting) return;
+                                setTicketSubmitting(true);
+                                try {
+                                  await apiFetch("/api/support/tickets", {
+                                    method: "POST",
+                                    headers: buildKeyHeader(),
+                                    body: JSON.stringify({
+                                      topic: ticketTopic,
+                                      role: ticketRole,
+                                      order_id: ticketOrderId.trim() || null,
+                                      comment: ticketComment.trim(),
+                                    }),
+                                  });
+                                  showToast("Заявка создана (пока только локально).");
+                                  setTicketComment("");
+                                  setTicketOrderId("");
+                                } catch (error) {
+                                  showToast((error as Error).message || "Не удалось отправить заявку.", "error");
+                                } finally {
+                                  setTicketSubmitting(false);
+                                }
+                              }}
+                              disabled={ticketSubmitting}
+                              className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                            >
+                              {ticketSubmitting ? "Отправка..." : "Отправить"}
+                            </button>
+                            <span className="text-xs text-neutral-500">Используется выбранное workspace.</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : activeNav === "chats" ? (
                     activeKeyId === "all" ? (
                       <div className="mt-8 rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 p-6">
                         <div className="text-sm font-semibold text-neutral-900">
