@@ -1,4 +1,4 @@
-import html as html_module
+﻿import html as html_module
 import json
 import hashlib
 import asyncio
@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Thread
 from threading import Lock
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -54,7 +54,13 @@ import requests
 from FunpayHandler.bot import FunpayBot
 
 PROXY_TEST_URL = "https://api.ipify.org"
-FUNPAY_SUPPORT_NEW_TICKET_URL = "https://support.funpay.com/tickets/new"
+FUNPAY_SUPPORT_BASE = "https://support.funpay.com/tickets"
+FUNPAY_SUPPORT_TOPIC_IDS = {
+    "problem_order": 1,
+    "problem_payment": 2,
+    "problem_account": 3,
+    "other": 4,
+}
 
 # In-memory workspace health
 _workspace_health: dict[tuple[int, int | None], dict] = {}
@@ -90,22 +96,22 @@ app = FastAPI(title="FunpaySeller")
 
 _TIME_RE = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
 _DATE_RE = re.compile(r"\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b")
-_MONTH_RE = re.compile(r"\b(\d{1,2})\s+([a-zа-я.]+)\b", re.IGNORECASE)
+_MONTH_RE = re.compile(r"\b(\d{1,2})\s+([a-zÐ°-Ñ.]+)\b", re.IGNORECASE)
 _MONTHS = {
-    "янв": 1,
-    "фев": 2,
-    "мар": 3,
-    "апр": 4,
-    "май": 5,
-    "мая": 5,
-    "июн": 6,
-    "июл": 7,
-    "авг": 8,
-    "сен": 9,
-    "сент": 9,
-    "окт": 10,
-    "ноя": 11,
-    "дек": 12,
+    "ÑÐ½Ð²": 1,
+    "Ñ„ÐµÐ²": 2,
+    "Ð¼Ð°Ñ€": 3,
+    "Ð°Ð¿Ñ€": 4,
+    "Ð¼Ð°Ð¹": 5,
+    "Ð¼Ð°Ñ": 5,
+    "Ð¸ÑŽÐ½": 6,
+    "Ð¸ÑŽÐ»": 7,
+    "Ð°Ð²Ð³": 8,
+    "ÑÐµÐ½": 9,
+    "ÑÐµÐ½Ñ‚": 9,
+    "Ð¾ÐºÑ‚": 10,
+    "Ð½Ð¾Ñ": 11,
+    "Ð´ÐµÐº": 12,
     "jan": 1,
     "feb": 2,
     "mar": 3,
@@ -255,9 +261,9 @@ def _extract_message_time_from_text(text: str) -> str | None:
     lower = text.lower()
     today = datetime.now().date()
     date_value = None
-    if "сегодня" in lower or "today" in lower:
+    if "ÑÐµÐ³Ð¾Ð´Ð½Ñ" in lower or "today" in lower:
         date_value = today
-    elif "вчера" in lower or "yesterday" in lower:
+    elif "Ð²Ñ‡ÐµÑ€Ð°" in lower or "yesterday" in lower:
         date_value = today - timedelta(days=1)
     else:
         date_match = _DATE_RE.search(text)
@@ -275,7 +281,7 @@ def _extract_message_time_from_text(text: str) -> str | None:
             month_match = _MONTH_RE.search(lower)
             if month_match:
                 day = int(month_match.group(1))
-                raw_month = re.sub(r"[^a-zа-я]", "", month_match.group(2))
+                raw_month = re.sub(r"[^a-zÐ°-Ñ]", "", month_match.group(2))
                 month_key = raw_month[:3]
                 month = _MONTHS.get(raw_month) or _MONTHS.get(month_key)
                 if month:
@@ -1344,23 +1350,55 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
     token = (key_entry or {}).get("golden_key")
     if not token:
         raise HTTPException(status_code=400, detail="Workspace has no golden key")
+    proxy_url = key_entry.get("proxy_url")
+    proxy_username = key_entry.get("proxy_username")
+    proxy_password = key_entry.get("proxy_password")
+    if not proxy_url:
+        raise HTTPException(status_code=503, detail="Proxy is required for this workspace to send tickets")
+    try:
+        proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Invalid proxy: {exc}")
     session = requests.Session()
+    session.proxies.update(proxy or {})
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        }
+    )
     # set cookies on both domains
     session.cookies.set("golden_key", token, domain=".funpay.com")
     session.cookies.set("golden_key", token, domain="support.funpay.com")
-    try:
-        resp = session.get(FUNPAY_SUPPORT_NEW_TICKET_URL, timeout=15)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to load support form: {exc}")
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail="Failed to load support form")
-    soup = BeautifulSoup(resp.text, "html.parser")
-    form = soup.find("form")
+    resp = None
+    form = None
+    form_url = None
+    topic_id = FUNPAY_SUPPORT_TOPIC_IDS.get(payload.topic) or FUNPAY_SUPPORT_TOPIC_IDS.get("other")
+    candidate_urls = [f"{FUNPAY_SUPPORT_BASE}/new"]
+    if topic_id:
+        candidate_urls.insert(0, f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}")
+    candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new?locale=ru")
+    if topic_id:
+        candidate_urls.append(f"{FUNPAY_SUPPORT_BASE}/new/{topic_id}?locale=ru")
+    for candidate_url in candidate_urls:
+        try:
+            resp = session.get(candidate_url, timeout=20)
+        except Exception as exc:
+            logger.warning("Support form GET failed for %s: %s", candidate_url, exc)
+            continue
+        if resp.status_code >= 400:
+            logger.warning("Support form GET returned %s for %s", resp.status_code, candidate_url)
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        form = soup.find("form")
+        if form:
+            form_url = resp.url or candidate_url
+            break
     if not form:
-        raise HTTPException(status_code=502, detail="Support form not found")
-    action = form.get("action") or FUNPAY_SUPPORT_NEW_TICKET_URL
-    if action.startswith("/"):
-        action = f"https://support.funpay.com{action}"
+        raise HTTPException(status_code=502, detail="Support form not found on support.funpay.com")
+    action = form.get("action") or form_url
+    action = urljoin(form_url, action)
     form_data = {}
     # preload existing hidden values
     for inp in form.find_all("input"):
@@ -1377,14 +1415,13 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
         name = ta.get("name")
         if not name:
             continue
-        form_data[name] = payload.comment
+        form_data[name] = payload.comment or ""
     # select/topic mapping
     topic_text = {
         "problem_order": "Проблема с заказом",
         "problem_payment": "Проблема с платежом",
-        "problem_account": "Проблема с аккаунтом",
-        "problem_chat": "Пожаловаться на нарушение правил в чате",
-        "other": "Прочее",
+        "problem_account": "Проблема с аккаунтом FunPay",
+        "other": "Другое",
     }.get(payload.topic, payload.topic)
     for sel in form.find_all("select"):
         name = sel.get("name")
@@ -1404,7 +1441,11 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
         for inp in form.find_all("input"):
             placeholder = (inp.get("placeholder") or "").lower()
             name = inp.get("name") or ""
-            if "заказ" in placeholder or "order" in name.lower():
+            label_text = ""
+            label = inp.find_previous("label")
+            if label:
+                label_text = (label.text or "").lower()
+            if "?????" in placeholder or "order" in name.lower() or "?????" in label_text:
                 form_data[name] = payload.order_id
                 break
     # role radio
@@ -1417,22 +1458,18 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
         if label:
             label_text = (label.text or "").lower()
         value = inp.get("value")
-        if payload.role == "buyer" and ("покуп" in label_text or value == "buyer"):
+        if payload.role == "buyer" and ("?????" in label_text or value == "buyer"):
             role_value = value
-        if payload.role == "seller" and ("продав" in label_text or value == "seller"):
+        if payload.role == "seller" and ("??????" in label_text or value == "seller"):
             role_value = value
     if role_value:
-        for k in list(form_data.keys()):
-            # ensure same radio name overwritten
-            pass
         # find radio name
         for inp in form.find_all("input"):
-            if inp.get("type") == "radio":
-                if inp.get("value") == role_value:
-                    form_data[inp.get("name")] = role_value
-                    break
+            if inp.get("type") == "radio" and inp.get("value") == role_value:
+                form_data[inp.get("name")] = role_value
+                break
     try:
-        post_resp = session.post(action, data=form_data, timeout=15)
+        post_resp = session.post(action, data=form_data, timeout=20, headers={"Referer": form_url})
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to submit support form: {exc}")
     status_ok = post_resp.status_code < 400
@@ -1961,7 +1998,7 @@ def _is_admin_call_message(text: str | None) -> bool:
     if not text:
         return False
     value = str(text).strip().lower()
-    return value.startswith("!admin") or value.startswith("!админ")
+    return value.startswith("!admin") or value.startswith("!Ð°Ð´Ð¼Ð¸Ð½")
 
 
 def _annotate_admin_calls(items: list[dict]) -> list[dict]:
@@ -2140,7 +2177,7 @@ def _presence_empty() -> dict:
         "lobby_info": "",
         "hero_name": None,
         "hero_token": None,
-        "presence_label": "Оффлайн",
+        "presence_label": "ÐžÑ„Ñ„Ð»Ð°Ð¹Ð½",
         "hero_level": None,
         "match_seconds": None,
         "match_time": None,
@@ -2171,11 +2208,11 @@ def _presence_for_steamid(
             extras.append(hero_name)
         if match_time:
             extras.append(match_time)
-        presence_label = f"В матче({')('.join(extras)})" if extras else "В матче"
+        presence_label = f"Ð’ Ð¼Ð°Ñ‚Ñ‡Ðµ({')('.join(extras)})" if extras else "Ð’ Ð¼Ð°Ñ‚Ñ‡Ðµ"
     elif in_game:
-        presence_label = "В игре"
+        presence_label = "Ð’ Ð¸Ð³Ñ€Ðµ"
     else:
-        presence_label = "Оффлайн"
+        presence_label = "ÐžÑ„Ñ„Ð»Ð°Ð¹Ð½"
     return {
         "in_game": bool(bridge_presence.get("in_game")),
         "in_match": bool(bridge_presence.get("in_match")),
@@ -2432,8 +2469,8 @@ async def freeze_rental(account_id: int, payload: FreezeRequest, request: Reques
             bot_manager.send_message(
                 uid,
                 owner,
-                "Администратор заморозил вашу аренду. Вход и Steam Guard временно отключены. "
-                "Если нужна помощь — !админ.",
+                "ÐÐ´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€ Ð·Ð°Ð¼Ð¾Ñ€Ð¾Ð·Ð¸Ð» Ð²Ð°ÑˆÑƒ Ð°Ñ€ÐµÐ½Ð´Ñƒ. Ð’Ñ…Ð¾Ð´ Ð¸ Steam Guard Ð²Ñ€ÐµÐ¼ÐµÐ½Ð½Ð¾ Ð¾Ñ‚ÐºÐ»ÑŽÑ‡ÐµÐ½Ñ‹. "
+                "Ð•ÑÐ»Ð¸ Ð½ÑƒÐ¶Ð½Ð° Ð¿Ð¾Ð¼Ð¾Ñ‰ÑŒ â€” !Ð°Ð´Ð¼Ð¸Ð½.",
                 key_id=key_id,
             )
         return {"success": True, "frozen": True}
@@ -2492,7 +2529,7 @@ async def steam_deauthorize(account_id: int, request: Request) -> dict:
                     extra = f" ({steam_display})" if steam_display else ""
                     raise HTTPException(
                         status_code=409,
-                        detail=f"Аккаунт сейчас в матче Dota 2{extra}. Попробуйте снова после окончания матча.",
+                        detail=f"ÐÐºÐºÐ°ÑƒÐ½Ñ‚ ÑÐµÐ¹Ñ‡Ð°Ñ Ð² Ð¼Ð°Ñ‚Ñ‡Ðµ Dota 2{extra}. ÐŸÐ¾Ð¿Ñ€Ð¾Ð±ÑƒÐ¹Ñ‚Ðµ ÑÐ½Ð¾Ð²Ð° Ð¿Ð¾ÑÐ»Ðµ Ð¾ÐºÐ¾Ð½Ñ‡Ð°Ð½Ð¸Ñ Ð¼Ð°Ñ‚Ñ‡Ð°.",
                     )
 
     ok = await logout_all_steam_sessions(
@@ -3074,3 +3111,4 @@ def spa_fallback(path: str) -> FileResponse:
     if index_path.exists():
         return FileResponse(index_path)
     return _frontend_build_missing_response()
+
