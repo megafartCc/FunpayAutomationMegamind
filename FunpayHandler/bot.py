@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import time
+import math
 import requests
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -1884,13 +1885,14 @@ class FunpayBot:
             minutes_remaining = time_remaining.total_seconds() / 60
             start_key = f"{start_datetime.isoformat()}|{total_minutes}"
             if self._expire_warning_start.get(account_id) != start_key:
-                self._expire_warning_start[account_id] = start_key
-                self._expire_warning_sent.pop(account_id, None)
+            self._expire_warning_start[account_id] = start_key
+            self._expire_warning_sent.pop(account_id, None)
 
-            sent = self._expire_warning_sent.setdefault(account_id, set())
-            if 0 < minutes_remaining <= 10 and 10 not in sent:
-                self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
-                sent.add(10)
+        sent = self._expire_warning_sent.setdefault(account_id, set())
+        floor_minutes = math.floor(minutes_remaining)
+        if floor_minutes == 10 and 10 not in sent:
+            self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
+            sent.add(10)
 
             if current_time >= expiry_time and account_id not in invalid_accs:
                 steam_login = login or account_name
@@ -2083,7 +2085,7 @@ class FunpayBot:
                 owner,
                 f"Внимание! Ваша аренда скоро закончится через {reminder_minutes} минут.\n\n"
                 f"ID аккаунта: {account_id}\n"
-                f"Осталось: ~{remaining_minutes} мин\n"
+                f"Осталось: {math.floor(minutes_remaining)} мин\n"
                 "Если нужно продление — используйте команду:\n"
                 "!продлить <часы> <ID аккаунта>\n\n"
                 f"Окончание: {expiry_time.strftime('%H:%M:%S')} МСК",
@@ -2145,6 +2147,7 @@ class FunpayBot:
                     owner,
                     "\u0412\u0430\u0448\u0430 \u0430\u0440\u0435\u043d\u0434\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430.\n\n"
                     f"ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430: {account_id}\n"
+                    "\u0417\u0430\u043a\u0430\u0437 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d. \u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0437\u0430\u0439\u0434\u0438\u0442\u0435 \u0432 \u0440\u0430\u0437\u0434\u0435\u043b \u00ab\u041f\u043e\u043a\u0443\u043f\u043a\u0438\u00bb, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0437\u0430\u043a\u0430\u0437 \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u0430\u00bb.\n"
                     "\u0415\u0441\u043b\u0438 \u0445\u043e\u0442\u0438\u0442\u0435 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, \u043a\u0443\u043f\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439 \u043b\u043e\u0442.\n"
                     "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442.",
                 )
