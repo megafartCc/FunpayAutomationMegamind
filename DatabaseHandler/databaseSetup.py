@@ -3028,6 +3028,33 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def remove_from_blacklist(
+        self,
+        owner: str,
+        user_id: int | None = None,
+        key_id: int | None = None,
+    ) -> bool:
+        """
+        Remove a single owner from the blacklist for a given user/key.
+        """
+        if not owner:
+            return False
+        owner_key = str(owner).strip().lower()
+        try:
+            key_clause, key_params = self._key_filter(key_id, "key_id")
+            cursor = self._cursor()
+            cursor.execute(
+                f"DELETE FROM blacklist WHERE owner = ? AND user_id = ?{key_clause}",
+                (owner_key, int(user_id or 0), *key_params),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            logger.error(f"Error removing {owner} from blacklist: {exc}")
+            return False
+        finally:
+            cursor.close()
+
     def remove_blacklist_entries(
         self, owners: list[str], user_id: int | None = None, key_id: int | None = None
     ) -> int:
