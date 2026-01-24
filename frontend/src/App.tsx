@@ -643,6 +643,9 @@ const App: React.FC = () => {
   const [ticketComment, setTicketComment] = useState("");
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
   const [lastTicketUrl, setLastTicketUrl] = useState<string | null>(null);
+  const [ticketHistory, setTicketHistory] = useState<any[]>([]);
+  const [ticketHistoryLoading, setTicketHistoryLoading] = useState(false);
+  const [ticketAIDrafting, setTicketAIDrafting] = useState(false);
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
@@ -1808,6 +1811,22 @@ const App: React.FC = () => {
     [token, activeKeyId, swrFetch, scopedKey]
   );
 
+  const loadTicketHistory = useCallback(
+    async (revalidate = false) => {
+      if (!token) return;
+      await swrFetch<any[]>({
+        key: `${CACHE_PREFIX}ticket_history`,
+        url: "/api/support/tickets/logs",
+        ttl: 15,
+        revalidate,
+        onLoading: setTicketHistoryLoading,
+        onData: (items) => setTicketHistory(items),
+        map: (data) => data.items || [],
+      });
+    },
+    [token, swrFetch]
+  );
+
   useEffect(() => {
     if (token) {
       loadOverview("fast");
@@ -1826,7 +1845,10 @@ const App: React.FC = () => {
     // keep blacklist data reasonably fresh for nav badge; revalidate when tab is active
     loadBlacklist(blacklistQuery, activeNav === "blacklist");
     loadBlacklistLogs(activeNav === "blacklist");
-  }, [token, sessionKey, activeKeyId, activeNav, blacklistQuery, loadBlacklist, loadBlacklistLogs]);
+    if (activeNav === "tickets") {
+      loadTicketHistory(true);
+    }
+  }, [token, sessionKey, activeKeyId, activeNav, blacklistQuery, loadBlacklist, loadBlacklistLogs, loadTicketHistory]);
 
   useEffect(() => {
     if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
@@ -4054,7 +4076,7 @@ const App: React.FC = () => {
                       animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
                       className="mt-8 space-y-4"
                     >
-                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70 max-w-3xl">
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70 max-w-4xl">
                         <div className="mb-4">
                           <h3 className="text-lg font-semibold text-neutral-900">FunPay Support Ticket (manual)</h3>
                           <p className="text-sm text-neutral-500">
@@ -4147,6 +4169,34 @@ const App: React.FC = () => {
                             >
                               {ticketSubmitting ? "Отправка..." : "Отправить"}
                             </button>
+                            <button
+                              onClick={async () => {
+                                if (ticketAIDrafting) return;
+                                setTicketAIDrafting(true);
+                                try {
+                                  const res = await apiFetch<{ text: string }>("/api/support/tickets/compose", {
+                                    method: "POST",
+                                    headers: buildKeyHeader(),
+                                    body: JSON.stringify({
+                                      topic: ticketTopic,
+                                      role: ticketRole,
+                                      order_id: ticketOrderId.trim() || null,
+                                      comment: ticketComment.trim() || null,
+                                    }),
+                                  });
+                                  setTicketComment(res?.text || ticketComment);
+                                  showToast("AI-сообщение обновлено.");
+                                } catch (error) {
+                                  showToast((error as Error).message || "Не удалось сгенерировать текст.", "error");
+                                } finally {
+                                  setTicketAIDrafting(false);
+                                }
+                              }}
+                              disabled={ticketAIDrafting}
+                              className="rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
+                            >
+                              {ticketAIDrafting ? "AI..." : "AI текст"}
+                            </button>
                             <span className="text-xs text-neutral-500">Используется выбранное workspace.</span>
                           </div>
                           {lastTicketUrl && (
@@ -4163,6 +4213,61 @@ const App: React.FC = () => {
                             </div>
                           )}
                         </div>
+                      </div>
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="mb-4 flex items-center justify-between">
+                          <div>
+                            <h4 className="text-base font-semibold text-neutral-900">Ticket history</h4>
+                            <p className="text-xs text-neutral-500">Последние локальные отправки.</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => loadTicketHistory(true)}
+                              className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                            >
+                              Refresh
+                            </button>
+                          </div>
+                        </div>
+                        {ticketHistoryLoading ? (
+                          <div className="py-3 text-sm text-neutral-500">Loading history...</div>
+                        ) : ticketHistory.length === 0 ? (
+                          <div className="py-3 text-sm text-neutral-500">No tickets yet.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {ticketHistory.slice(0, 20).map((item, idx) => (
+                              <div
+                                key={`${item.id}-${idx}`}
+                                className="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-2"
+                              >
+                                <span className="text-sm font-semibold text-neutral-900">
+                                  {item.topic || "ticket"} · {item.role || "role"}
+                                </span>
+                                {item.order_id && (
+                                  <span className="text-xs text-neutral-600">• Order {item.order_id}</span>
+                                )}
+                                <span className="text-xs text-neutral-500">• {item.status}</span>
+                                {item.ticket_url && (
+                                  <a
+                                    className="text-xs font-semibold text-blue-600 underline"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    href={
+                                      String(item.ticket_url).startswith("http")
+                                        ? item.ticket_url
+                                        : `https://support.funpay.com${item.ticket_url}`
+                                    }
+                                  >
+                                    open
+                                  </a>
+                                )}
+                                <span className="ml-auto text-[11px] text-neutral-500">
+                                  {item.created_at ? formatDate(item.created_at) : ""}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </motion.div>
                   ) : activeNav === "chats" ? (
