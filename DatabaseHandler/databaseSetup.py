@@ -3070,7 +3070,7 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def get_chat_messages(self, owner: str, user_id: int | None = None, limit: int = 20) -> list[dict]:
+    def get_chat_messages(self, owner: str, user_id: int | None = None, limit: int = 200) -> list[dict]:
         """
         Return recent chat messages for an owner (buyer) within a user workspace.
         """
@@ -3082,7 +3082,7 @@ class MySQLDB:
                 """
                 SELECT role, message, created_at
                 FROM chat_messages
-                WHERE owner = ? AND user_id = ?
+                WHERE LOWER(owner) = LOWER(?) AND user_id = ?
                 ORDER BY id DESC
                 LIMIT ?
                 """,

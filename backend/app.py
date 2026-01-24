@@ -1531,11 +1531,11 @@ def compose_support_ticket(payload: ComposeTicketRequest, request: Request) -> d
 
     chat_messages: list[dict] = []
     if buyer:
-        chat_messages = db.get_chat_messages(str(buyer), uid, limit=12)
+        chat_messages = db.get_chat_messages(str(buyer), uid, limit=200)
 
     # Build a short chat transcript for AI context
     chat_snippets = []
-    for msg in chat_messages[:8]:
+    for msg in chat_messages[:20]:
         role = (msg.get("role") or "").upper()
         text = msg.get("message") or ""
         chat_snippets.append(f"{role}: {text}")
