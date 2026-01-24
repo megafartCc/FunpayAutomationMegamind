@@ -137,6 +137,7 @@ class FunpayBot:
         # Pending order confirmations; auto-ticket after deadline
         self._confirm_tasks: Dict[str, dict] = {}
         self._confirm_lock = threading.Lock()
+        self._auto_ticket_cache: tuple[bool, float] = (True, 0.0)
 
     def _get_unit_minutes(self, account: dict) -> int:
         base_minutes = get_duration_minutes(account)
@@ -173,6 +174,8 @@ class FunpayBot:
         lot_number: int | None,
         rental_minutes: int | None,
     ) -> None:
+        if not self._auto_tickets_enabled():
+            return
         if not order_id:
             return
         minutes = rental_minutes if rental_minutes and rental_minutes > 0 else 60
@@ -192,6 +195,15 @@ class FunpayBot:
             return
         with self._confirm_lock:
             self._confirm_tasks.pop(order_id, None)
+
+    def _auto_tickets_enabled(self) -> bool:
+        now = time.time()
+        cached_val, ts = self._auto_ticket_cache
+        if now - ts < 60:
+            return cached_val
+        enabled = self._db.get_setting_bool("auto_ticket_enabled", True)
+        self._auto_ticket_cache = (enabled, now)
+        return enabled
 
     def _build_replacement_message(self, account: dict, lot_number: int | None = None) -> str:
         subject = "\u043b\u043e\u0442" if lot_number is not None else "\u0430\u043a\u043a\u0430\u0443\u043d\u0442"
@@ -740,6 +752,9 @@ class FunpayBot:
 
     def _confirm_check_loop(self) -> None:
         while not self._stop_requested.is_set():
+            if not self._auto_tickets_enabled():
+                time.sleep(60)
+                continue
             now = datetime.utcnow()
             to_submit: list[tuple[str, dict]] = []
             with self._confirm_lock:

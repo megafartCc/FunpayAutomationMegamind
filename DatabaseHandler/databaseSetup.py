@@ -514,6 +514,7 @@ class MySQLDB:
         self._ensure_blacklist_table()
         self._ensure_blacklist_logs_table()
         self._ensure_admin_calls_table()
+        self._ensure_settings_table()
         self._ensure_chat_columns()
         self._ensure_support_tickets_table()
         self._ensure_feedback_rewards_revoked_column()
@@ -995,6 +996,78 @@ class MySQLDB:
             pass
         finally:
             cursor.close()
+
+    def _ensure_settings_table(self):
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS settings (
+                        `key` VARCHAR(255) PRIMARY KEY,
+                        `value` TEXT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NULL
+                    )
+                    """
+                )
+            self.conn.commit()
+        except Exception as exc:
+            logger.error(f"Error ensuring settings table: {exc}")
+        finally:
+            cursor.close()
+
+    def set_setting(self, key: str, value: str | None) -> bool:
+        cursor = self._cursor()
+        try:
+            if self.db_type == "mysql":
+                cursor.execute(
+                    """
+                    INSERT INTO settings (`key`, `value`) VALUES (?, ?)
+                    ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)
+                    """,
+                    (key, value),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO settings (key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (key, value),
+                )
+            self.conn.commit()
+            return True
+        except Exception as exc:
+            logger.error(f"Error setting setting {key}: {exc}")
+            return False
+        finally:
+            cursor.close()
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        cursor = self._cursor()
+        try:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else default
+        except Exception as exc:
+            logger.error(f"Error getting setting {key}: {exc}")
+            return default
+        finally:
+            cursor.close()
+
+    def get_setting_bool(self, key: str, default: bool = False) -> bool:
+        val = self.get_setting(key, None)
+        if val is None:
+            return default
+        return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
     def _ensure_feedback_rewards_revoked_column(self):
         cursor = self._cursor()

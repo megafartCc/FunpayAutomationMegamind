@@ -636,6 +636,7 @@ const App: React.FC = () => {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [autoRaise, setAutoRaise] = useState<boolean>(() => localStorage.getItem("autoRaise") === "1");
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
+  const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
     () => (localStorage.getItem("uiMode") as "light" | "dark") || "light"
   );
@@ -1240,6 +1241,21 @@ const App: React.FC = () => {
     }
     setToken("");
     setProfileName("");
+  };
+
+  const handleToggleAutoTickets = async (enabled: boolean) => {
+    const prev = autoTickets;
+    setAutoTickets(enabled);
+    try {
+      await apiFetch("/api/settings/auto-ticket", {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+      showToast(enabled ? "Auto-tickets enabled." : "Auto-tickets disabled.", "success");
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update auto-ticket setting.", "error");
+      setAutoTickets(prev);
+    }
   };
 
   const handleCreateKey = async () => {
@@ -2439,6 +2455,18 @@ const App: React.FC = () => {
   }, [autoOnline]);
 
   useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await apiFetch<{ enabled: boolean }>("/api/settings/auto-ticket");
+        setAutoTickets(!!res.enabled);
+      } catch {
+        setAutoTickets(true);
+      }
+    })();
+  }, [token, apiFetch]);
+
+  useEffect(() => {
     localStorage.setItem("uiMode", uiMode);
   }, [uiMode]);
 
@@ -3101,10 +3129,15 @@ const App: React.FC = () => {
     label: string;
     enabled: boolean;
     onChange: (next: boolean) => void;
-  }> = ({ label, enabled, onChange }) => (
+    disabled?: boolean;
+  }> = ({ label, enabled, onChange, disabled }) => (
     <button
       type="button"
-      onClick={() => onChange(!enabled)}
+      onClick={() => {
+        if (disabled) return;
+        onChange(!enabled);
+      }}
+      disabled={disabled}
       className="flex h-16 w-full items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
     >
       <div className="text-sm font-semibold text-neutral-900">{label}</div>
@@ -4312,6 +4345,21 @@ const App: React.FC = () => {
                                 )}
                                 <div><span className="font-semibold">Topic:</span> {ticketAIAnalysis.topic}</div>
                                 <div><span className="font-semibold">Role:</span> {ticketAIAnalysis.role}</div>
+                                {ticketAIAnalysis.ai_dispute && (
+                                  <div className="pt-1">
+                                    <span
+                                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                                        ticketAIAnalysis.ai_dispute.label === "dispute"
+                                          ? "bg-rose-100 text-rose-700"
+                                          : ticketAIAnalysis.ai_dispute.label === "clear"
+                                            ? "bg-emerald-100 text-emerald-700"
+                                            : "bg-neutral-200 text-neutral-700"
+                                      }`}
+                                    >
+                                      AI: {ticketAIAnalysis.ai_dispute.label || "unknown"}
+                                    </span>
+                                  </div>
+                                )}
                                 {ticketAIAnalysis.base_comment && (
                                   <div className="text-neutral-600">
                                     <span className="font-semibold">Base comment:</span> {ticketAIAnalysis.base_comment}
@@ -4636,6 +4684,12 @@ const App: React.FC = () => {
                           <h3 className="text-lg font-semibold text-neutral-900">Funpay Profile Settings</h3>
                         </div>
                         <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
+                          <ToggleRow
+                            label="Auto Tickets"
+                            enabled={!!autoTickets}
+                            onChange={(val) => handleToggleAutoTickets(val)}
+                            disabled={autoTickets === null}
+                          />
                           <ToggleRow label="Auto Raise" enabled={autoRaise} onChange={setAutoRaise} />
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
