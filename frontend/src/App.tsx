@@ -583,15 +583,15 @@ const readCache = <T,>(key: string, maxAgeMs?: number) => {
   }
 };
 
-const writeCache = <T,>(key: string, data: T, etag?: string) => {
-  try {
-    const entry: CacheEntry<T> = { data, ts: Date.now(), etag };
-    memoryCache.set(key, entry);
-    localStorage.setItem(key, JSON.stringify(entry));
-  } catch {
-    // ignore cache writes
-  }
-};
+  const writeCache = <T,>(key: string, data: T, etag?: string) => {
+    try {
+      const entry: CacheEntry<T> = { data, ts: Date.now(), etag };
+      memoryCache.set(key, entry);
+      localStorage.setItem(key, JSON.stringify(entry));
+    } catch {
+      // ignore cache writes
+    }
+  };
 
 const App: React.FC = () => {
   const [token, setToken] = useState("");
@@ -646,8 +646,10 @@ const App: React.FC = () => {
   const [autoRaiseCategories, setAutoRaiseCategories] = useState<string>("");
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const [categorySearch, setCategorySearch] = useState("");
+  const [categoryIdSearch, setCategoryIdSearch] = useState("");
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [categoryMeta, setCategoryMeta] = useState<{ ts?: number; count?: number }>({});
+  const [expandedGames, setExpandedGames] = useState<Set<string>>(() => new Set());
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -704,6 +706,32 @@ const App: React.FC = () => {
   const [editKeyProxyUsername, setEditKeyProxyUsername] = useState("");
   const [editKeyProxyPassword, setEditKeyProxyPassword] = useState("");
   const [profileName, setProfileName] = useState("");
+
+  const groupedCategories = useMemo(() => {
+    const term = categorySearch.trim().toLowerCase();
+    const idTerm = categoryIdSearch.trim();
+    const groups: Record<string, CategoryOption[]> = {};
+    (categoryOptions || []).forEach((c) => {
+      const game = (c.game || "Other").trim() || "Other";
+      const haystack = `${c.name || ""} ${c.game || ""} ${c.category || ""}`.toLowerCase();
+      if (term && !haystack.includes(term)) return;
+      if (idTerm && !String(c.id).includes(idTerm)) return;
+      if (!groups[game]) groups[game] = [];
+      groups[game].push(c);
+    });
+    const sorted: { game: string; items: CategoryOption[] }[] = Object.entries(groups)
+      .map(([game, items]) => ({
+        game,
+        items: items.sort(
+          (a, b) =>
+            (a.category || a.name || "").localeCompare(b.category || b.name || "") ||
+            a.id - b.id
+        ),
+      }))
+      .sort((a, b) => a.game.localeCompare(b.game));
+    return sorted;
+  }, [categoryOptions, categorySearch, categoryIdSearch]);
+
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
@@ -4788,48 +4816,76 @@ const App: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            <input
-                              value={categorySearch}
-                              onChange={(e) => setCategorySearch(e.target.value)}
-                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                              placeholder="Search categories..."
-                            />
-                            <div className="max-h-48 overflow-y-auto rounded-lg border border-neutral-200 bg-white">
-                              {(categoryOptions || [])
-                                .filter((c) => {
-                                  const term = categorySearch.trim().toLowerCase();
-                                  if (!term) return true;
-                                  const haystack = `${c.name || ""} ${c.game || ""} ${c.category || ""}`.toLowerCase();
-                                  return haystack.includes(term) || String(c.id).includes(categorySearch.trim());
-                                })
-                                .map((c) => {
+                            <div className="grid gap-2 md:grid-cols-[2fr_1fr]">
+                              <input
+                                value={categorySearch}
+                                onChange={(e) => setCategorySearch(e.target.value)}
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                placeholder="Search by game/category..."
+                              />
+                              <input
+                                value={categoryIdSearch}
+                                onChange={(e) => setCategoryIdSearch(e.target.value)}
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                placeholder="Search by ID..."
+                              />
+                            </div>
+                            <div className="max-h-72 overflow-y-auto rounded-lg border border-neutral-200 bg-white divide-y divide-neutral-100">
+                              {groupedCategories.length ? (
+                                groupedCategories.map(({ game, items }) => {
+                                  const isOpen = expandedGames.has(game) || (!expandedGames.size && groupedCategories.length <= 5);
                                   const selectedIds = autoRaiseCategories
                                     .split(",")
                                     .map((s) => s.trim())
                                     .filter(Boolean);
-                                  const isSelected = selectedIds.includes(String(c.id));
-                                  const label = c.game ? `${c.game} - ${c.category || c.name}` : c.name;
                                   return (
-                                    <label
-                                      key={c.id}
-                                      className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={(e) => {
-                                          let next = new Set(selectedIds);
-                                          if (e.target.checked) next.add(String(c.id));
-                                          else next.delete(String(c.id));
-                                          setAutoRaiseCategories(Array.from(next).join(","));
-                                        }}
-                                      />
-                                      <span className="font-mono text-xs text-neutral-500">{c.id}</span>
-                                      <span className="truncate">{label}</span>
-                                    </label>
+                                    <div key={game}>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedGames((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(game)) next.delete(game);
+                                            else next.add(game);
+                                            return next;
+                                          })
+                                        }
+                                        className="flex w-full items-center justify-between bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-800 hover:bg-neutral-100"
+                                      >
+                                        <span className="truncate">{game}</span>
+                                        <span className="text-xs text-neutral-500">{items.length}</span>
+                                      </button>
+                                      {isOpen && (
+                                        <div className="space-y-1 py-2">
+                                          {items.map((c) => {
+                                            const isSelected = selectedIds.includes(String(c.id));
+                                            const label = c.category || c.name;
+                                            return (
+                                              <label
+                                                key={c.id}
+                                                className="flex items-center gap-3 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  checked={isSelected}
+                                                  onChange={(e) => {
+                                                    let next = new Set(selectedIds);
+                                                    if (e.target.checked) next.add(String(c.id));
+                                                    else next.delete(String(c.id));
+                                                    setAutoRaiseCategories(Array.from(next).join(","));
+                                                  }}
+                                                />
+                                                <span className="font-mono text-xs text-neutral-500">{c.id}</span>
+                                                <span className="truncate">{label}</span>
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
                                   );
-                                })}
-                              {!categoryOptions.length && (
+                                })
+                              ) : (
                                 <div className="px-3 py-2 text-neutral-500 text-sm">No categories loaded.</div>
                               )}
                             </div>
