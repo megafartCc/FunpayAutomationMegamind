@@ -1823,7 +1823,18 @@ class FunpayBot:
         conn, cursor = self._db.open_connection()
         try:
             query = """
-                SELECT a.ID, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.path_to_maFile, a.mafile_json, a.password, a.login, a.account_name
+                SELECT 
+                    a.ID,
+                    a.owner,
+                    a.rental_start,
+                    a.rental_duration,
+                    a.rental_duration_minutes,
+                    a.path_to_maFile,
+                    a.mafile_json,
+                    a.password,
+                    a.login,
+                    a.account_name,
+                    a.rental_order_id
                 FROM accounts a
                 WHERE a.owner IS NOT NULL
                 AND a.rental_start IS NOT NULL
@@ -1855,6 +1866,7 @@ class FunpayBot:
                 password,
                 login,
                 account_name,
+                rental_order_id,
             ) = row
             # Raw DB values keep sensitive fields encrypted; decrypt before using them.
             try:
@@ -1913,7 +1925,7 @@ class FunpayBot:
                     password=password,
                     steam_login=steam_login,
                     expiry_time=expiry_time,
-                    order_id=account.get("rental_order_id"),
+                    order_id=rental_order_id,
                 )
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
@@ -2105,6 +2117,7 @@ class FunpayBot:
         password: str,
         steam_login: str,
         expiry_time: datetime,
+        order_id: str | None = None,
     ) -> None:
         logger.info(f"Account {account_id} rental expired.")
         self._expire_warning_sent.pop(account_id, None)
