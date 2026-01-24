@@ -634,6 +634,7 @@ const App: React.FC = () => {
   const [ticketOrderId, setTicketOrderId] = useState("");
   const [ticketComment, setTicketComment] = useState("");
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [lastTicketUrl, setLastTicketUrl] = useState<string | null>(null);
   const [submittingAccount, setSubmittingAccount] = useState(false);
   const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
   const [blacklistQuery, setBlacklistQuery] = useState("");
@@ -4070,7 +4071,7 @@ const App: React.FC = () => {
                                 if (ticketSubmitting) return;
                                 setTicketSubmitting(true);
                                 try {
-                                  await apiFetch("/api/support/tickets", {
+                                  const res = await apiFetch<{ url?: string }>("/api/support/tickets", {
                                     method: "POST",
                                     headers: buildKeyHeader(),
                                     body: JSON.stringify({
@@ -4083,6 +4084,7 @@ const App: React.FC = () => {
                                   showToast("Заявка отправлена в поддержку.");
                                   setTicketComment("");
                                   setTicketOrderId("");
+                                  setLastTicketUrl(res?.url || null);
                                 } catch (error) {
                                   showToast((error as Error).message || "Не удалось отправить заявку.", "error");
                                 } finally {
@@ -4096,6 +4098,19 @@ const App: React.FC = () => {
                             </button>
                             <span className="text-xs text-neutral-500">Используется выбранное workspace.</span>
                           </div>
+                          {lastTicketUrl && (
+                            <div className="text-xs text-neutral-600">
+                              Последняя заявка:{" "}
+                              <a
+                                className="text-blue-600 underline"
+                                href={lastTicketUrl.startsWith("http") ? lastTicketUrl : `https://support.funpay.com${lastTicketUrl}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {lastTicketUrl}
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </motion.div>
