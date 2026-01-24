@@ -1707,7 +1707,7 @@ class FunpayBot:
             available_lots = self._get_available_lots()
             if available_lots:
                 batches: list[list[str]] = []
-                current: list[str] = [USER.stock_title]
+                current: list[str] = []
                 for index, account in enumerate(available_lots, start=1):
                     display_name = self._display_account_name(account.get("account_name"))
                     lot_number = account.get("lot_number")
@@ -1716,16 +1716,21 @@ class FunpayBot:
                     lot_url = account.get("lot_url")
                     line = f"{display_name} - {lot_url}" if lot_url else f"{display_name}"
                     current.append(line)
-                    if len(current) - 1 >= STOCK_LIST_LIMIT:
+                    if len(current) >= STOCK_LIST_LIMIT:
                         batches.append(current)
-                        current = [USER.stock_title]
-                if len(current) > 1:
+                        current = []
+                if len(current) > 0:
                     batches.append(current)
                 if not batches:
                     acc.send_message(chat_id, self._build_stock_message())
                     return
+                header_sent = False
                 for batch in batches:
-                    acc.send_message(chat_id, "\n".join(batch))
+                    message_lines = batch
+                    if not header_sent:
+                        message_lines = [USER.stock_title, *batch]
+                        header_sent = True
+                    acc.send_message(chat_id, "\n".join(message_lines))
                 return
             acc.send_message(chat_id, self._build_stock_message())
         except Exception as exc:

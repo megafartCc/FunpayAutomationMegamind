@@ -707,6 +707,7 @@ const App: React.FC = () => {
   const sessionKeyRef = useRef<string>(sessionKey);
   sessionKeyRef.current = sessionKey;
   const presenceWarmupRef = useRef<number>(0);
+  const presenceCacheRef = useRef<Map<string, { data: PresenceData; fetchedAt: number }>>(new Map());
   const overviewRequestRef = useRef<number>(0);
   const scopedKey = useCallback(
     (key: string) => `${key}:u:${sessionKey || "anon"}`,
@@ -1853,11 +1854,11 @@ const App: React.FC = () => {
     }
   }, [token, sessionKey, activeKeyId, activeNav, blacklistQuery, loadBlacklist, loadBlacklistLogs, loadTicketHistory]);
 
-  useEffect(() => {
-    if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
-    if (!rentalsTable.length) return;
-    const anyPresence = rentalsTable.some((item) => item.presence);
-    if (!anyPresence) return;
+    useEffect(() => {
+      if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
+      if (!rentalsTable.length) return;
+      const anyPresence = rentalsTable.some((item) => item.presence);
+      if (!anyPresence) return;
     const allOffline = rentalsTable.every((item) => {
       const presence = item.presence;
       return !presence || (!presence.in_game && !presence.in_match);
@@ -1865,12 +1866,87 @@ const App: React.FC = () => {
     if (!allOffline) return;
     const nowTs = Date.now();
     if (nowTs - presenceWarmupRef.current < 8000) return;
-    presenceWarmupRef.current = nowTs;
-    const handle = window.setTimeout(() => {
-      loadOverview();
-    }, 2000);
-    return () => window.clearTimeout(handle);
-  }, [token, activeNav, rentalsTable, loadOverview]);
+      presenceWarmupRef.current = nowTs;
+      const handle = window.setTimeout(() => {
+        loadOverview();
+      }, 2000);
+      return () => window.clearTimeout(handle);
+    }, [token, activeNav, rentalsTable, loadOverview]);
+
+    // Refresh presence (match time, hero) directly from NodeBridge to keep timers accurate
+    useEffect(() => {
+      if (!token || !(activeNav === "overview" || activeNav === "rentals")) return;
+      const now = Date.now();
+      const targets = Array.from(
+        new Set(
+          rentalsTable
+            .map((r) => (r.steamId ? String(r.steamId).trim() : ""))
+            .filter(Boolean)
+        )
+      ).filter((steamId) => {
+        const cached = presenceCacheRef.current.get(steamId);
+        return !cached || now - cached.fetchedAt > 15_000;
+      });
+      if (!targets.length) return;
+
+      let cancelled = false;
+
+      const fetchPresence = async (steamId: string) => {
+        try {
+          const res = await fetch(`${PRESENCE_BASE}/${steamId}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const payload: PresenceData = {
+            in_game: !!data.in_game,
+            in_match: !!data.in_match,
+            hero_name: data.hero_name ?? data.hero ?? null,
+            hero_token: data.hero_token ?? null,
+            hero_level: data.hero_level ?? null,
+            lobby_info: data.lobby_info ?? null,
+            match_time: data.match_time ?? null,
+            match_seconds: Number.isFinite(Number(data.match_seconds))
+              ? Number(data.match_seconds)
+              : data.match_seconds ?? null,
+          };
+          const fetchedAt = Date.now();
+          presenceCacheRef.current.set(steamId, { data: payload, fetchedAt });
+          if (cancelled) return;
+          const presenceLabel = payload.in_match ? "In match" : payload.in_game ? "In game" : "Offline";
+          setRentalsTable((prev) =>
+            prev.map((r) =>
+              String(r.steamId || "") === steamId
+                ? {
+                    ...r,
+                    presence: payload,
+                    presenceLabel,
+                    presenceObservedAt: fetchedAt,
+                    hero: r.hero || payload.hero_name || r.hero,
+                  }
+                : r
+            )
+          );
+        } catch {
+          // ignore fetch errors
+        }
+      };
+
+      const CONCURRENCY = 4;
+      let index = 0;
+      const runNext = () => {
+        if (cancelled) return;
+        const sid = targets[index++];
+        if (!sid) return;
+        fetchPresence(sid).finally(runNext);
+      };
+      const starters = Math.min(CONCURRENCY, targets.length);
+      for (let i = 0; i < starters; i += 1) {
+        runNext();
+      }
+
+      return () => {
+        cancelled = true;
+      };
+    }, [token, activeNav, rentalsTable]);
 
   // load chat list when on chats tab
   useEffect(() => {
@@ -6140,6 +6216,9 @@ type PresenceData = {
   in_game?: boolean;
   in_match?: boolean;
   hero_name?: string | null;
+  hero_token?: string | null;
+  lobby_info?: string | null;
+  hero_level?: number | null;
   match_time?: string | null;
   match_seconds?: number | null;
   fetched_at?: number | null;
