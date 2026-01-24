@@ -268,12 +268,23 @@ class BotManager:
     def __init__(self):
         self._bots: dict[tuple[int, int | None], dict] = {}
         self._token_index: dict[tuple[int, str], tuple[int | None]] = {}
+        self._global_tokens: dict[str, tuple[int, int | None]] = {}
         self._lock = Lock()
 
     def start_for_user_key(self, user_id: int, key_id: int | None, golden_key: str) -> None:
         if not golden_key:
             return
         with self._lock:
+            global_owner = self._global_tokens.get(golden_key)
+            if global_owner and global_owner[0] != user_id:
+                logger.warning(
+                    "FunPay token already active for user %s key %s; skipping start for user %s key %s",
+                    global_owner[0],
+                    global_owner[1],
+                    user_id,
+                    key_id,
+                )
+                return
             existing = self._bots.get((user_id, key_id))
             if existing and existing.get("thread") and existing["thread"].is_alive():
                 if existing.get("key") == golden_key:
@@ -281,8 +292,11 @@ class BotManager:
                 bot = existing.get("bot")
                 if bot is not None:
                     bot.request_token_update(golden_key)
+                if existing.get("key") and self._global_tokens.get(existing.get("key")) == (user_id, key_id):
+                    self._global_tokens.pop(existing.get("key"), None)
                 existing["key"] = golden_key
                 self._token_index[(user_id, golden_key)] = key_id
+                self._global_tokens[golden_key] = (user_id, key_id)
                 return
             token_key = (user_id, golden_key)
             canonical = self._token_index.get(token_key)
@@ -290,6 +304,7 @@ class BotManager:
                 canonical_entry = self._bots.get((user_id, canonical))
                 if canonical_entry:
                     self._bots[(user_id, key_id)] = canonical_entry
+                    self._global_tokens.setdefault(golden_key, (user_id, canonical))
                     logger.info(
                         f"FunPay bot reused for user {user_id} key {key_id} (shared token)."
                     )
@@ -300,6 +315,7 @@ class BotManager:
                 thread.start()
                 self._bots[(user_id, key_id)] = {"bot": bot, "key": golden_key, "thread": thread}
                 self._token_index[token_key] = key_id
+                self._global_tokens[golden_key] = (user_id, key_id)
                 logger.info(f"FunPay bot started for user {user_id} key {key_id}")
             except Exception as exc:
                 logger.error(f"Failed to start FunPay bot for user {user_id} key {key_id}: {exc}")
@@ -327,8 +343,11 @@ class BotManager:
                             continue
                         if other.get("bot") is bot:
                             self._token_index[token_key] = kid
+                            self._global_tokens[token] = (user_id, kid)
                             return
                     self._token_index.pop(token_key, None)
+                    if self._global_tokens.get(token) == (user_id, key_id):
+                        self._global_tokens.pop(token, None)
 
     def send_message(self, user_id: int, owner: str, message: str, key_id: int | None = None) -> bool:
         if not owner or not message:

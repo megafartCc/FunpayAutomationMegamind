@@ -1596,29 +1596,37 @@ class MySQLDB:
         self, user_id: int | None = None, key_id: int | None = None
     ) -> list:
         cursor = self._cursor()
-        key_clause, key_params = self._key_filter(key_id, "l.key_id")
+        key_clause_accounts, key_params_accounts = self._key_filter(key_id, "a.key_id")
+        key_clause_lots, key_params_lots = self._key_filter(key_id, "l.key_id")
         if user_id is None:
             cursor.execute(
                 f"""
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
-                FROM lots l
-                JOIN accounts a ON a.ID = l.account_id
-                WHERE a.owner IS NULL AND (a.account_frozen = 0 OR a.account_frozen IS NULL){key_clause}
-                ORDER BY l.lot_number
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration,
+                        a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url,
+                        a.account_frozen, a.rental_frozen, a.rental_frozen_at
+                FROM accounts a
+                LEFT JOIN lots l ON l.account_id = a.ID
+                WHERE a.owner IS NULL AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
+                {key_clause_accounts}{key_clause_lots}
+                ORDER BY (l.lot_number IS NULL), l.lot_number
                 """
                 ,
-                (*key_params,),
+                (*key_params_accounts, *key_params_lots),
             )
         else:
             cursor.execute(
                 f"""
-                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration, a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url
-                FROM lots l
-                JOIN accounts a ON a.ID = l.account_id
-                WHERE a.owner IS NULL AND a.user_id = ? AND (a.account_frozen = 0 OR a.account_frozen IS NULL){key_clause}
-                ORDER BY l.lot_number
+                SELECT a.ID, a.account_name, a.owner, a.rental_start, a.rental_duration,
+                        a.rental_duration_minutes, a.mmr, l.lot_number, l.lot_url,
+                        a.account_frozen, a.rental_frozen, a.rental_frozen_at
+                FROM accounts a
+                LEFT JOIN lots l ON l.account_id = a.ID
+                WHERE a.owner IS NULL AND a.user_id = ?
+                    AND (a.account_frozen = 0 OR a.account_frozen IS NULL)
+                    {key_clause_accounts}{key_clause_lots}
+                ORDER BY (l.lot_number IS NULL), l.lot_number
                 """,
-                (user_id, *key_params),
+                (user_id, *key_params_accounts, *key_params_lots),
             )
         rows = cursor.fetchall()
         if self.db_type == "mysql":

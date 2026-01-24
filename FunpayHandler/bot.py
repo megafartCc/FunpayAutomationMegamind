@@ -115,6 +115,9 @@ class FunpayBot:
         self._pending_lot_extend: Dict[str, PendingLotExtend] = {}
         self._processed_order_ids: set[str] = set()
         self._processed_order_statuses: set[tuple[str, str]] = set()
+        self._processed_message_ids: set[str] = set()
+        self._recent_message_signatures: Dict[tuple[int, str, str], float] = {}
+        self._recent_message_cleanup_ts = 0.0
 
         self._last_refresh_ts = 0.0
         self._token_lock = threading.Lock()
@@ -360,7 +363,7 @@ class FunpayBot:
         self._refresh_requested.set()
 
     def start(self) -> None:
-        logger.info("Starting FunPay bot...")
+        logger.info(f"Starting FunPay bot (user={self._user_id} key={self._key_id})...")
         if not self._token:
             logger.error("FunPay golden key is missing. FunPay automation stopped.")
             return
@@ -907,6 +910,33 @@ class FunpayBot:
         if event.message.author_id == acc.id:
             return
 
+        message_id = (
+            getattr(event.message, "id", None)
+            or getattr(event.message, "message_id", None)
+            or getattr(event.message, "msg_id", None)
+        )
+        if message_id is not None:
+            message_key = str(message_id)
+            if message_key in self._processed_message_ids:
+                return
+            self._processed_message_ids.add(message_key)
+            if len(self._processed_message_ids) > 5000:
+                self._processed_message_ids.clear()
+
+        raw_text = (event.message.text or "").strip()
+        signature = (int(chat_id), str(event.message.author), raw_text.lower())
+        now_ts = time.time()
+        last_seen = self._recent_message_signatures.get(signature)
+        if last_seen and now_ts - last_seen < 2.0:
+            return
+        self._recent_message_signatures[signature] = now_ts
+        if now_ts - self._recent_message_cleanup_ts > 30:
+            self._recent_message_cleanup_ts = now_ts
+            cutoff = now_ts - 60
+            self._recent_message_signatures = {
+                key: ts for key, ts in self._recent_message_signatures.items() if ts >= cutoff
+            }
+
         owner = event.message.author
         if self._user_id is not None:
             sent_time = _extract_message_time_from_text(getattr(event.message, "html", None))
@@ -964,8 +994,10 @@ class FunpayBot:
                     logger.warning(f"Failed to process paid order {order_id}: {exc}")
             return
 
-        logger.info(f"{event.message.author} : {event.message.text}")
-        raw_text = (event.message.text or "").strip()
+        logger.info(
+            f"[bot u={self._user_id} key={self._key_id} chat={chat_id}] "
+            f"{event.message.author} : {event.message.text}"
+        )
         message_text = raw_text.lower()
 
         if message_text and not message_text.startswith("!"):
@@ -1390,7 +1422,7 @@ class FunpayBot:
                     if lot_url:
                         lines.append(f"{display_name} - {lot_url}")
                     else:
-                        lines.append(f"{display_name}")
+                        lines.append(f"{display_name} \u2014 \u0431\u0435\u0437 \u043b\u043e\u0442\u0430")
                     if index % STOCK_LIST_LIMIT == 0:
                         acc.send_message(chat_id, "\n".join(lines))
                         lines = [USER.stock_title]
@@ -1589,7 +1621,7 @@ class FunpayBot:
             acc.send_message(chat_id, "Не удалось выполнить замену. Попробуйте позже.")
 
     def _build_stock_message(self) -> str:
-        all_lots = self._db.get_all_lot_accounts(self._user_id, key_id=self._key_id)
+        all_lots = self._db.get_all_lot_accounts(self._user_id, key_id=None)
         if not all_lots:
             return USER.stock_no_lots_configured
 
