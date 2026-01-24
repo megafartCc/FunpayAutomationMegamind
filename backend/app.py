@@ -118,6 +118,70 @@ def _normalize_time_label(time_text: str) -> str:
         return time_text
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+
+def build_proxy_config(
+    proxy_url: Optional[str],
+    proxy_username: Optional[str] = None,
+    proxy_password: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Normalize proxy inputs into a requests-compatible dict.
+    Accepts formats:
+      - socks5://host:port
+      - socks5://user:pass@host:port
+      - socks5://host:port:user:pass (legacy)
+      - host:port[:user[:pass]] (scheme defaults to socks5)
+    """
+    if not proxy_url:
+        return None
+    raw = str(proxy_url).strip()
+    if not raw:
+        return None
+
+    scheme = "socks5"
+    rest = raw
+    if "://" in raw:
+        scheme, rest = raw.split("://", 1)
+        scheme = scheme or "socks5"
+
+    user = proxy_username.strip() if proxy_username else None
+    password = proxy_password.strip() if proxy_password else None
+
+    # credentials@host:port
+    if "@" in rest:
+        creds, rest = rest.split("@", 1)
+        if ":" in creds:
+            parts = creds.split(":", 1)
+            if not user:
+                user = parts[0]
+            if len(parts) > 1 and not password:
+                password = parts[1]
+        elif creds and not user:
+            user = creds
+
+    parts = rest.split(":")
+    if len(parts) < 2:
+        raise ValueError("Invalid proxy format, expected host:port")
+    host = parts[0]
+    port = parts[1]
+    if len(parts) >= 3 and not user:
+        user = parts[2]
+    if len(parts) >= 4 and not password:
+        password = parts[3]
+
+    if not host or not port:
+        raise ValueError("Invalid proxy format, missing host or port")
+
+    auth = ""
+    if user:
+        auth = quote(user)
+        if password:
+            auth += f":{quote(password)}"
+        auth += "@"
+
+    proxy_uri = f"{scheme}://{auth}{host}:{port}"
+    return {"http": proxy_uri, "https": proxy_uri}
+
 def _format_epoch_time(raw_value: str) -> str | None:
     if not raw_value or not raw_value.isdigit():
         return None
@@ -290,11 +354,21 @@ def _start_bot_for_user(user: dict | None) -> None:
         return
     default_key = db.get_default_key(user_id)
     if default_key and default_key.get("golden_key"):
-        bot_manager.start_for_user_key(user_id, default_key["id"], default_key["golden_key"])
+        if not default_key.get("proxy_url"):
+            logger.error("Proxy is required for default workspace but missing; skip starting bot.")
+            return
+        bot_manager.start_for_user_key(
+            user_id,
+            default_key["id"],
+            default_key["golden_key"],
+            proxy_url=default_key.get("proxy_url"),
+            proxy_username=default_key.get("proxy_username"),
+            proxy_password=default_key.get("proxy_password"),
+        )
         return
     token = user.get("golden_key")
     if token:
-        bot_manager.start_for_user_key(user_id, None, token)
+        logger.error("Add a workspace with a proxy to start FunPay bot; inline golden key is not supported without proxy.")
 
 
 class BotManager:
@@ -304,8 +378,23 @@ class BotManager:
         self._global_tokens: dict[str, tuple[int, int | None]] = {}
         self._lock = Lock()
 
-    def start_for_user_key(self, user_id: int, key_id: int | None, golden_key: str) -> None:
+    def start_for_user_key(
+        self,
+        user_id: int,
+        key_id: int | None,
+        golden_key: str,
+        *,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ) -> None:
         if not golden_key:
+            return
+        proxy = None
+        try:
+            proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
+        except Exception as exc:
+            logger.error(f"Invalid proxy for user {user_id} key {key_id}: {exc}")
             return
         with self._lock:
             global_owner = self._global_tokens.get(golden_key)
@@ -320,33 +409,42 @@ class BotManager:
                 return
             existing = self._bots.get((user_id, key_id))
             if existing and existing.get("thread") and existing["thread"].is_alive():
-                if existing.get("key") == golden_key:
+                if existing.get("key") == golden_key and existing.get("proxy") == proxy:
                     return
                 bot = existing.get("bot")
                 if bot is not None:
-                    bot.request_token_update(golden_key)
+                    if existing.get("key") != golden_key:
+                        bot.request_token_update(golden_key)
+                    if existing.get("proxy") != proxy:
+                        bot.update_proxy(proxy)
                 if existing.get("key") and self._global_tokens.get(existing.get("key")) == (user_id, key_id):
                     self._global_tokens.pop(existing.get("key"), None)
                 existing["key"] = golden_key
+                existing["proxy"] = proxy
                 self._token_index[(user_id, golden_key)] = key_id
                 self._global_tokens[golden_key] = (user_id, key_id)
                 return
             token_key = (user_id, golden_key)
             if token_key in self._token_index:
-                canonical = self._token_index.get(token_key)
-                canonical_entry = self._bots.get((user_id, canonical))
-                if canonical_entry:
-                    self._bots[(user_id, key_id)] = canonical_entry
-                    self._global_tokens.setdefault(golden_key, (user_id, canonical))
+                    canonical = self._token_index.get(token_key)
+                    canonical_entry = self._bots.get((user_id, canonical))
+                    if canonical_entry:
+                        self._bots[(user_id, key_id)] = canonical_entry
+                        self._global_tokens.setdefault(golden_key, (user_id, canonical))
                     logger.info(
                         f"FunPay bot reused for user {user_id} key {key_id} (shared token)."
                     )
                     return
             try:
-                bot = FunpayBot(token=golden_key, db=db, user_id=user_id, key_id=key_id)
+                bot = FunpayBot(token=golden_key, db=db, user_id=user_id, key_id=key_id, proxy=proxy)
                 thread = Thread(target=bot.start, daemon=True)
                 thread.start()
-                self._bots[(user_id, key_id)] = {"bot": bot, "key": golden_key, "thread": thread}
+                self._bots[(user_id, key_id)] = {
+                    "bot": bot,
+                    "key": golden_key,
+                    "thread": thread,
+                    "proxy": proxy,
+                }
                 self._token_index[token_key] = key_id
                 self._global_tokens[golden_key] = (user_id, key_id)
                 logger.info(f"FunPay bot started for user {user_id} key {key_id}")
@@ -356,7 +454,14 @@ class BotManager:
     def start_all(self) -> None:
         for user in db.list_users_with_keys():
             try:
-                self.start_for_user_key(user["id"], user.get("key_id"), user["golden_key"])
+                self.start_for_user_key(
+                    user["id"],
+                    user.get("key_id"),
+                    user["golden_key"],
+                    proxy_url=user.get("proxy_url"),
+                    proxy_username=user.get("proxy_username"),
+                    proxy_password=user.get("proxy_password"),
+                )
             except Exception as exc:
                 logger.error(f"Failed to start bot for user {user.get('id')}: {exc}")
 
@@ -519,8 +624,8 @@ class ChatCache:
                         break
                 chats_entry["ts"] = now
 
-    def _fetch_chats(self, token: str) -> list[dict]:
-        account = FPAccount(token).get()
+    def _fetch_chats(self, token: str, proxy: Optional[dict] = None) -> list[dict]:
+        account = FPAccount(token, proxy=proxy).get()
         chats_map = account.get_chats(update=True)
         items = []
         for chat in chats_map.values():
@@ -540,8 +645,8 @@ class ChatCache:
             )
         return items
 
-    def _fetch_history(self, token: str, chat_id: int) -> list[dict]:
-        account = FPAccount(token).get()
+    def _fetch_history(self, token: str, chat_id: int, proxy: Optional[dict] = None) -> list[dict]:
+        account = FPAccount(token, proxy=proxy).get()
         messages = account.get_chat_history(chat_id) or []
         items = []
         for message in messages:
@@ -561,17 +666,17 @@ class ChatCache:
             )
         return items
 
-    def refresh_chats_sync(self, user_id: int, key_id: int | None, token: str) -> list[dict]:
-        items = self._fetch_chats(token)
+    def refresh_chats_sync(self, user_id: int, key_id: int | None, token: str, proxy: Optional[dict] = None) -> list[dict]:
+        items = self._fetch_chats(token, proxy=proxy)
         self._set_chats(user_id, key_id, items)
         return items
 
-    def refresh_history_sync(self, user_id: int, key_id: int | None, chat_id: int, token: str) -> list[dict]:
-        items = self._fetch_history(token, chat_id)
+    def refresh_history_sync(self, user_id: int, key_id: int | None, chat_id: int, token: str, proxy: Optional[dict] = None) -> list[dict]:
+        items = self._fetch_history(token, chat_id, proxy=proxy)
         self._set_history(user_id, key_id, chat_id, items)
         return items
 
-    def refresh_chats_async(self, user_id: int, key_id: int | None, token: str, on_done=None) -> None:
+    def refresh_chats_async(self, user_id: int, key_id: int | None, token: str, proxy: Optional[dict] = None, on_done=None) -> None:
         cache_key = (user_id, key_id)
         with self._lock:
             if cache_key in self._refreshing_chats:
@@ -580,7 +685,7 @@ class ChatCache:
 
         def runner() -> None:
             try:
-                items = self._fetch_chats(token)
+                items = self._fetch_chats(token, proxy=proxy)
                 self._set_chats(user_id, key_id, items)
                 if on_done:
                     try:
@@ -595,7 +700,7 @@ class ChatCache:
 
         Thread(target=runner, daemon=True).start()
 
-    def refresh_history_async(self, user_id: int, key_id: int | None, chat_id: int, token: str, on_done=None) -> None:
+    def refresh_history_async(self, user_id: int, key_id: int | None, chat_id: int, token: str, proxy: Optional[dict] = None, on_done=None) -> None:
         key = (user_id, chat_id, key_id)
         with self._lock:
             if key in self._refreshing_histories:
@@ -604,7 +709,7 @@ class ChatCache:
 
         def runner() -> None:
             try:
-                items = self._fetch_history(token, chat_id)
+                items = self._fetch_history(token, chat_id, proxy=proxy)
                 self._set_history(user_id, key_id, chat_id, items)
                 if on_done:
                     try:
@@ -895,31 +1000,47 @@ def _resolve_key_id(request: Request) -> int | None:
     return None
 
 
-def require_funpay_token(request: Request) -> tuple[int, str, int | None]:
+def require_funpay_token(request: Request) -> tuple[int, str, int | None, Optional[dict]]:
     user = getattr(request.state, "user", None) or {}
     user_id = user.get("id")
     if user_id is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     key_id = _resolve_key_id(request)
     token = None
+    proxy_url = None
+    proxy_username = None
+    proxy_password = None
     if key_id is not None:
         key_entry = db.get_user_key(user_id, key_id)
         token = (key_entry or {}).get("golden_key")
+        proxy_url = (key_entry or {}).get("proxy_url")
+        proxy_username = (key_entry or {}).get("proxy_username")
+        proxy_password = (key_entry or {}).get("proxy_password")
     if not token:
         default_key = db.get_default_key(user_id)
         token = (default_key or {}).get("golden_key") or user.get("golden_key")
         if default_key:
             key_id = default_key.get("id")
+            proxy_url = default_key.get("proxy_url")
+            proxy_username = default_key.get("proxy_username")
+            proxy_password = default_key.get("proxy_password")
     if not token:
         raise HTTPException(status_code=503, detail="FunPay golden key not configured")
-    return user_id, token, key_id
+    if not proxy_url:
+        raise HTTPException(status_code=503, detail="Proxy is required for this workspace")
+    try:
+        proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
+    except Exception as exc:
+        logger.error(f"Proxy configuration invalid for user {user_id} key {key_id}: {exc}")
+        raise HTTPException(status_code=503, detail="Invalid proxy configuration")
+    return user_id, token, key_id, proxy
 
 
 def require_funpay_account(request: Request):
     user = getattr(request.state, "user", None)
-    _, token, _ = require_funpay_token(request)
+    _, token, _, proxy = require_funpay_token(request)
     try:
-        acc = FPAccount(token).get()
+        acc = FPAccount(token, proxy=proxy).get()
     except Exception:
         raise HTTPException(status_code=503, detail="FunPay session not initialized")
     return acc
@@ -1010,12 +1131,18 @@ class KeyCreate(BaseModel):
     label: str
     golden_key: str
     make_default: bool = False
+    proxy_url: Optional[str] = None
+    proxy_username: Optional[str] = None
+    proxy_password: Optional[str] = None
 
 
 class KeyUpdate(BaseModel):
     label: Optional[str] = None
     golden_key: Optional[str] = None
     make_default: Optional[bool] = None
+    proxy_url: Optional[str] = None
+    proxy_username: Optional[str] = None
+    proxy_password: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -1103,27 +1230,70 @@ def create_key(payload: KeyCreate, request: Request) -> dict:
     golden_key = (payload.golden_key or "").strip()
     if not golden_key:
         raise HTTPException(status_code=400, detail="golden_key is required")
-    key_id = db.add_user_key(user.get("id"), label, golden_key, payload.make_default)
+    proxy_url = (payload.proxy_url or "").strip()
+    proxy_username = (payload.proxy_username or "").strip() or None
+    proxy_password = (payload.proxy_password or "").strip() or None
+    if not proxy_url:
+        raise HTTPException(status_code=400, detail="proxy_url is required")
+    key_id = db.add_user_key(
+        user.get("id"),
+        label,
+        golden_key,
+        payload.make_default,
+        proxy_url=proxy_url,
+        proxy_username=proxy_username,
+        proxy_password=proxy_password,
+    )
     if key_id is None:
         raise HTTPException(status_code=400, detail="Failed to create key")
-    bot_manager.start_for_user_key(user.get("id"), key_id, golden_key)
+    bot_manager.start_for_user_key(
+        user.get("id"),
+        key_id,
+        golden_key,
+        proxy_url=proxy_url,
+        proxy_username=proxy_username,
+        proxy_password=proxy_password,
+    )
     return {"id": key_id, "cloned": None}
 
 
 @app.patch("/api/keys/{key_id}", dependencies=[Depends(require_admin)])
 def update_key(key_id: int, payload: KeyUpdate, request: Request) -> dict:
     user = getattr(request.state, "user", None) or {}
+    proxy_url = None
+    proxy_username = None
+    proxy_password = None
+    if payload.proxy_url is not None:
+        proxy_url = payload.proxy_url.strip()
+        if not proxy_url:
+            raise HTTPException(status_code=400, detail="proxy_url is required")
+    if payload.proxy_username is not None:
+        proxy_username = payload.proxy_username.strip()
+    if payload.proxy_password is not None:
+        proxy_password = payload.proxy_password.strip()
     ok = db.update_user_key(
         user.get("id"),
         key_id,
         label=payload.label,
         golden_key=payload.golden_key,
         make_default=payload.make_default,
+        proxy_url=proxy_url,
+        proxy_username=proxy_username,
+        proxy_password=proxy_password,
     )
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update key")
-    if payload.golden_key:
-        bot_manager.start_for_user_key(user.get("id"), key_id, payload.golden_key)
+    if payload.golden_key or proxy_url is not None or proxy_username is not None or proxy_password is not None:
+        key = db.get_user_key(user.get("id"), key_id)
+        if key and key.get("golden_key"):
+            bot_manager.start_for_user_key(
+                user.get("id"),
+                key_id,
+                key.get("golden_key"),
+                proxy_url=key.get("proxy_url"),
+                proxy_username=key.get("proxy_username"),
+                proxy_password=key.get("proxy_password"),
+            )
     return {"success": True}
 
 
@@ -1135,7 +1305,14 @@ def set_default_key(key_id: int, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Failed to set default key")
     key = db.get_user_key(user.get("id"), key_id)
     if key and key.get("golden_key"):
-        bot_manager.start_for_user_key(user.get("id"), key_id, key.get("golden_key"))
+        bot_manager.start_for_user_key(
+            user.get("id"),
+            key_id,
+            key.get("golden_key"),
+            proxy_url=key.get("proxy_url"),
+            proxy_username=key.get("proxy_username"),
+            proxy_password=key.get("proxy_password"),
+        )
     return {"success": True}
 
 
@@ -1163,7 +1340,7 @@ def notifications(limit: int = 50) -> dict:
 
 @app.get("/api/funpay/stats", dependencies=[Depends(require_admin)])
 def funpay_stats(request: Request, refresh: bool = False) -> dict:
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     now = datetime.utcnow()
     latest = db.get_latest_balance_snapshot(user_id, key_id=key_id)
 
@@ -1191,7 +1368,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
 
     if should_refresh:
         try:
-            balance = _fetch_funpay_balance(token)
+            balance = _fetch_funpay_balance(token, proxy=proxy)
             if balance:
                 db.insert_balance_snapshot(
                     user_id,
@@ -1350,9 +1527,10 @@ def orders_history(
 
     chat_map = {}
     token = None
+    proxy = None
     if include_chat:
         try:
-            _, token, resolved_key_id = require_funpay_token(request)
+            _, token, resolved_key_id, proxy = require_funpay_token(request)
             key_id = resolved_key_id
         except HTTPException:
             token = None
@@ -1365,13 +1543,13 @@ def orders_history(
                 if chat.get("name")
             }
             if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
-                chat_cache.refresh_chats_async(uid, key_id, token)
+                chat_cache.refresh_chats_async(uid, key_id, token, proxy=proxy)
         else:
             if fast:
-                chat_cache.refresh_chats_async(uid, key_id, token)
+                chat_cache.refresh_chats_async(uid, key_id, token, proxy=proxy)
             else:
                 try:
-                    chats = chat_cache.refresh_chats_sync(uid, key_id, token)
+                    chats = chat_cache.refresh_chats_sync(uid, key_id, token, proxy=proxy)
                     chat_map = {
                         chat.get("name"): chat.get("id")
                         for chat in chats
@@ -1699,8 +1877,8 @@ def _balance_series_from_snapshots(snapshots: list[dict], days: int) -> list[flo
     return series
 
 
-def _fetch_funpay_balance(token: str) -> dict | None:
-    account = FPAccount(token).get()
+def _fetch_funpay_balance(token: str, proxy: Optional[dict] = None) -> dict | None:
+    account = FPAccount(token, proxy=proxy).get()
     subcats = account.get_sorted_subcategories().get(fp_enums.SubCategoryTypes.COMMON, {}) or {}
     subcat_ids = list(subcats.keys())
     random.shuffle(subcat_ids)
@@ -2149,9 +2327,10 @@ def active_rentals(
     include_mafile = include_presence or include_steamid
     items = db.get_active_users(uid, include_mafile=include_mafile, key_id=key_id)
     token = None
+    proxy = None
     if include_chat:
         try:
-            _, token, resolved_key_id = require_funpay_token(request)
+            _, token, resolved_key_id, proxy = require_funpay_token(request)
             key_id = resolved_key_id
         except HTTPException:
             token = None
@@ -2167,13 +2346,13 @@ def active_rentals(
                 if chat.get("name")
             }
             if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
-                chat_cache.refresh_chats_async(uid, key_id, token)
+                chat_cache.refresh_chats_async(uid, key_id, token, proxy=proxy)
         else:
             if fast:
-                chat_cache.refresh_chats_async(uid, key_id, token)
+                chat_cache.refresh_chats_async(uid, key_id, token, proxy=proxy)
             else:
                 try:
-                    chats = chat_cache.refresh_chats_sync(uid, key_id, token)
+                    chats = chat_cache.refresh_chats_sync(uid, key_id, token, proxy=proxy)
                     chat_map = {
                         chat.get("name"): chat.get("id")
                         for chat in chats
@@ -2240,19 +2419,19 @@ def chats(
     refresh: bool = False,
     max_age: float = CHAT_LIST_TTL,
 ) -> dict:
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     cached, ts = chat_cache.get_cached_chats(user_id, key_id)
     now = time.time()
 
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
-            chat_cache.refresh_chats_async(user_id, key_id, token)
+            chat_cache.refresh_chats_async(user_id, key_id, token, proxy=proxy)
         items_with_calls = _attach_admin_call_counts(cached, user_id, key_id)
         return _etag_response(request, {"items": items_with_calls})
 
     try:
-        items = chat_cache.refresh_chats_sync(user_id, key_id, token)
+        items = chat_cache.refresh_chats_sync(user_id, key_id, token, proxy=proxy)
         items_with_calls = _attach_admin_call_counts(items, user_id, key_id)
         return _etag_response(request, {"items": items_with_calls})
     except Exception as exc:
@@ -2268,7 +2447,7 @@ async def stream_chats(
     max_age: float = CHAT_LIST_TTL,
     interval: float = 2.5,
 ) -> Response:
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     interval = max(1.0, float(interval))
 
@@ -2283,7 +2462,7 @@ async def stream_chats(
             items = cached
             if cached is None or ts is None or now - ts > max_age:
                 try:
-                    items = chat_cache.refresh_chats_sync(user_id, key_id, token)
+                    items = chat_cache.refresh_chats_sync(user_id, key_id, token, proxy=proxy)
                 except Exception:
                     items = cached or []
             merged = _attach_admin_call_counts(items or [], user_id, key_id)
@@ -2321,7 +2500,7 @@ def chat_history(
     refresh: bool = False,
     max_age: float = CHAT_HISTORY_TTL,
 ) -> dict:
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
 
@@ -2330,22 +2509,22 @@ def chat_history(
     if fast and cached is not None:
         if refresh:
             try:
-                items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
+                items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token, proxy=proxy)
                 items = _annotate_admin_calls(items[-limit:])
                 return _etag_response(request, {"items": items})
             except Exception:
                 items = _annotate_admin_calls(cached[-limit:])
                 return _etag_response(request, {"items": items})
         if ts is None or now - ts > max_age:
-            chat_cache.refresh_history_async(user_id, key_id, chat_id, token)
+            chat_cache.refresh_history_async(user_id, key_id, chat_id, token, proxy=proxy)
         items = _annotate_admin_calls(cached[-limit:])
         return _etag_response(request, {"items": items})
 
-    try:
-        items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
-        items = _annotate_admin_calls(items[-limit:])
-        return _etag_response(request, {"items": items})
-    except Exception as exc:
+        try:
+            items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token, proxy=proxy)
+            items = _annotate_admin_calls(items[-limit:])
+            return _etag_response(request, {"items": items})
+        except Exception as exc:
         if cached is not None:
             items = _annotate_admin_calls(cached[-limit:])
             return _etag_response(request, {"items": items})
@@ -2360,7 +2539,7 @@ async def stream_chat_history(
     max_age: float = CHAT_HISTORY_TTL,
     interval: float = 2.0,
 ) -> Response:
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     interval = max(1.0, float(interval))
     limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
@@ -2376,7 +2555,7 @@ async def stream_chat_history(
             items = cached
             if cached is None or ts is None or now - ts > max_age:
                 try:
-                    items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
+                    items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token, proxy=proxy)
                 except Exception:
                     items = cached or []
             payload = {"items": _annotate_admin_calls((items or [])[-limit:])}
@@ -2415,6 +2594,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         or websocket.query_params.get("key")
     )
     key_id: int | None = None
+    proxy_url = None
+    proxy_username = None
+    proxy_password = None
     if raw_key_id:
         try:
             key_id = int(raw_key_id)
@@ -2424,11 +2606,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     if key_id is not None:
         key_entry = db.get_user_key(int(user_id), key_id)
         token = (key_entry or {}).get("golden_key") or ""
+        proxy_url = (key_entry or {}).get("proxy_url")
+        proxy_username = (key_entry or {}).get("proxy_username")
+        proxy_password = (key_entry or {}).get("proxy_password")
     if not token:
         default_key = db.get_default_key(int(user_id))
         token = (default_key or {}).get("golden_key") or session.get("golden_key") or ""
         if default_key:
             key_id = default_key.get("id")
+            proxy_url = default_key.get("proxy_url")
+            proxy_username = default_key.get("proxy_username")
+            proxy_password = default_key.get("proxy_password")
+
+    proxy = None
+    if token:
+        if not proxy_url:
+            await websocket.send_json(_ws_payload({"type": "error", "message": "Proxy is required for this workspace"}))
+            await websocket.close(code=4000)
+            return
+        try:
+            proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
+        except Exception as exc:
+            await websocket.send_json(_ws_payload({"type": "error", "message": f"Invalid proxy: {exc}"}))
+            await websocket.close(code=4001)
+            return
 
     await realtime_manager.connect(websocket, int(user_id), key_id)
 
@@ -2449,6 +2650,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     int(user_id),
                     key_id,
                     token,
+                    proxy=proxy,
                     on_done=lambda updated: broadcast_to_user(
                         int(user_id),
                         {"type": "chats:list", "items": _attach_admin_call_counts(updated, int(user_id), key_id)},
@@ -2496,6 +2698,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                             key_id,
                             chat_id,
                             token,
+                            proxy=proxy,
                             on_done=lambda updated: broadcast_to_user_chat(
                                 int(user_id),
                                 chat_id,
@@ -2537,7 +2740,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json(_ws_payload({"type": "send:error", "message": "Invalid chat id"}))
                     continue
                 try:
-                    account = FPAccount(token).get()
+                    account = FPAccount(token, proxy=proxy).get()
                     cached_chat = chat_cache.get_chat_summary(int(user_id), key_id, chat_id)
                     chat_name = cached_chat.get("name") if cached_chat else None
                     message = account.send_message(chat_id, text, chat_name)
@@ -2571,9 +2774,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Message text is required")
-    user_id, token, key_id = require_funpay_token(request)
+    user_id, token, key_id, proxy = require_funpay_token(request)
     try:
-        account = FPAccount(token).get()
+        account = FPAccount(token, proxy=proxy).get()
         cached_chat = chat_cache.get_chat_summary(user_id, key_id, chat_id)
         chat_name = cached_chat.get("name") if cached_chat else None
         message = account.send_message(chat_id, payload.text, chat_name)

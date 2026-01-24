@@ -140,6 +140,9 @@ type UserKey = {
   label: string;
   is_default?: boolean;
   created_at?: string | null;
+  proxy_url?: string | null;
+  proxy_username?: string | null;
+  proxy_password?: string | null;
 };
 
 type LotRow = {
@@ -657,6 +660,12 @@ const App: React.FC = () => {
   const [editKeyLabel, setEditKeyLabel] = useState("");
   const [editKeyValue, setEditKeyValue] = useState("");
   const [keyActionBusy, setKeyActionBusy] = useState(false);
+  const [newKeyProxyUrl, setNewKeyProxyUrl] = useState("");
+  const [newKeyProxyUsername, setNewKeyProxyUsername] = useState("");
+  const [newKeyProxyPassword, setNewKeyProxyPassword] = useState("");
+  const [editKeyProxyUrl, setEditKeyProxyUrl] = useState("");
+  const [editKeyProxyUsername, setEditKeyProxyUsername] = useState("");
+  const [editKeyProxyPassword, setEditKeyProxyPassword] = useState("");
   const [profileName, setProfileName] = useState("");
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
@@ -1213,8 +1222,15 @@ const App: React.FC = () => {
     if (keyActionBusy) return;
     const label = newKeyLabel.trim() || "Workspace";
     const goldenKey = newKeyValue.trim();
+    const proxyUrl = newKeyProxyUrl.trim();
+    const proxyUser = newKeyProxyUsername.trim();
+    const proxyPass = newKeyProxyPassword.trim();
     if (!goldenKey) {
       showToast("Golden key is required.", "error");
+      return;
+    }
+    if (!proxyUrl) {
+      showToast("Proxy is required for each workspace.", "error");
       return;
     }
     setKeyActionBusy(true);
@@ -1225,11 +1241,17 @@ const App: React.FC = () => {
           label,
           golden_key: goldenKey,
           make_default: newKeyDefault,
+          proxy_url: proxyUrl,
+          proxy_username: proxyUser || undefined,
+          proxy_password: proxyPass || undefined,
         }),
       });
       showToast("Workspace added.");
       setNewKeyLabel("");
       setNewKeyValue("");
+      setNewKeyProxyUrl("");
+      setNewKeyProxyUsername("");
+      setNewKeyProxyPassword("");
       setNewKeyDefault(false);
       await loadKeys();
       if (newKeyDefault && result?.id) {
@@ -1246,12 +1268,18 @@ const App: React.FC = () => {
     setEditingKeyId(item.id);
     setEditKeyLabel(item.label || "");
     setEditKeyValue("");
+    setEditKeyProxyUrl(item.proxy_url || "");
+    setEditKeyProxyUsername(item.proxy_username || "");
+    setEditKeyProxyPassword(item.proxy_password || "");
   };
 
   const cancelEditKey = () => {
     setEditingKeyId(null);
     setEditKeyLabel("");
     setEditKeyValue("");
+    setEditKeyProxyUrl("");
+    setEditKeyProxyUsername("");
+    setEditKeyProxyPassword("");
   };
 
   const handleSaveKeyEdit = async () => {
@@ -1263,9 +1291,19 @@ const App: React.FC = () => {
     }
     const nextLabel = editKeyLabel.trim();
     const nextKey = editKeyValue.trim();
+    const nextProxyUrl = editKeyProxyUrl.trim();
+    const nextProxyUser = editKeyProxyUsername.trim();
+    const nextProxyPass = editKeyProxyPassword.trim();
+    if (!nextProxyUrl) {
+      showToast("Proxy is required for this workspace.", "error");
+      return;
+    }
     const payload: Record<string, unknown> = {};
     if (nextLabel && nextLabel !== current.label) payload.label = nextLabel;
     if (nextKey) payload.golden_key = nextKey;
+    if (nextProxyUrl !== current.proxy_url?.trim()) payload.proxy_url = nextProxyUrl;
+    if (nextProxyUser !== (current.proxy_username || "").trim()) payload.proxy_username = nextProxyUser;
+    if (nextProxyPass !== (current.proxy_password || "").trim()) payload.proxy_password = nextProxyPass;
     if (!Object.keys(payload).length) {
       showToast("No changes to save.", "error");
       return;
@@ -4237,6 +4275,32 @@ const App: React.FC = () => {
                                 className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                               />
                             </div>
+                            <div className="grid gap-3">
+                              <input
+                                value={newKeyProxyUrl}
+                                onChange={(e) => setNewKeyProxyUrl(e.target.value)}
+                                placeholder="Proxy URL (e.g. socks5://host:port[:user:pass])"
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              />
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <input
+                                  value={newKeyProxyUsername}
+                                  onChange={(e) => setNewKeyProxyUsername(e.target.value)}
+                                  placeholder="Proxy username (optional)"
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                />
+                                <input
+                                  value={newKeyProxyPassword}
+                                  onChange={(e) => setNewKeyProxyPassword(e.target.value)}
+                                  placeholder="Proxy password (optional)"
+                                  type="password"
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                                />
+                              </div>
+                              <p className="text-[11px] text-neutral-500">
+                                Proxy is required for every workspace. FunPay traffic will be sent through this proxy.
+                              </p>
+                            </div>
                             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                               <label className="flex items-center gap-2 text-xs font-semibold text-neutral-600">
                                 <input
@@ -4249,7 +4313,7 @@ const App: React.FC = () => {
                               </label>
                               <button
                                 onClick={handleCreateKey}
-                                disabled={keyActionBusy || !newKeyValue.trim()}
+                                disabled={keyActionBusy || !newKeyValue.trim() || !newKeyProxyUrl.trim()}
                                 className="rounded-lg bg-neutral-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                               >
                                 Add workspace
@@ -4301,21 +4365,49 @@ const App: React.FC = () => {
                                       </div>
                                     </div>
                                     {isEditing && (
-                                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        <input
-                                          value={editKeyLabel}
-                                          onChange={(e) => setEditKeyLabel(e.target.value)}
-                                          placeholder="Workspace name"
-                                          className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                                        />
-                                        <input
-                                          value={editKeyValue}
-                                          onChange={(e) => setEditKeyValue(e.target.value)}
-                                          placeholder="New golden key (optional)"
-                                          type="password"
-                                          className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                                        />
-                                        <div className="md:col-span-2 flex flex-wrap items-center gap-2">
+                                      <div className="mt-3 space-y-3">
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                          <input
+                                            value={editKeyLabel}
+                                            onChange={(e) => setEditKeyLabel(e.target.value)}
+                                            placeholder="Workspace name"
+                                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                          />
+                                          <input
+                                            value={editKeyValue}
+                                            onChange={(e) => setEditKeyValue(e.target.value)}
+                                            placeholder="New golden key (optional)"
+                                            type="password"
+                                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                          />
+                                        </div>
+                                        <div className="grid gap-3">
+                                          <input
+                                            value={editKeyProxyUrl}
+                                            onChange={(e) => setEditKeyProxyUrl(e.target.value)}
+                                            placeholder="Proxy URL (socks5://host:port[:user:pass])"
+                                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                          />
+                                          <div className="grid gap-3 md:grid-cols-2">
+                                            <input
+                                              value={editKeyProxyUsername}
+                                              onChange={(e) => setEditKeyProxyUsername(e.target.value)}
+                                              placeholder="Proxy username"
+                                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                            />
+                                            <input
+                                              value={editKeyProxyPassword}
+                                              onChange={(e) => setEditKeyProxyPassword(e.target.value)}
+                                              placeholder="Proxy password"
+                                              type="password"
+                                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                            />
+                                          </div>
+                                          <p className="text-[11px] text-neutral-500">
+                                            Proxy must stay valid; bots refresh sessions through it.
+                                          </p>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
                                           <button
                                             onClick={handleSaveKeyEdit}
                                             className="rounded-lg bg-neutral-900 px-3 py-2 text-xs font-semibold text-white"

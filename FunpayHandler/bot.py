@@ -103,11 +103,13 @@ class FunpayBot:
         db: Optional[MySQLDB] = None,
         user_id: Optional[int] = None,
         key_id: Optional[int] = None,
+        proxy: Optional[dict] = None,
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
         self._user_id = user_id
         self._key_id = key_id
+        self._proxy = proxy
 
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
@@ -352,7 +354,7 @@ class FunpayBot:
         if not token:
             logger.error("FunPay golden key is missing. FunPay automation stopped.")
             return
-        self._acc = Account(token).get()
+        self._acc = Account(token, proxy=self._proxy).get()
         self._runner = Runner(self._acc)
         logger.info("FunPay session refreshed successfully.")
 
@@ -361,6 +363,10 @@ class FunpayBot:
             return
         with self._token_lock:
             self._token = token
+        self._refresh_requested.set()
+
+    def update_proxy(self, proxy: Optional[dict]) -> None:
+        self._proxy = proxy
         self._refresh_requested.set()
 
     def request_stop(self) -> None:

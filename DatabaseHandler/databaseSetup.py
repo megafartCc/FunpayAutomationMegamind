@@ -518,6 +518,7 @@ class MySQLDB:
         self._ensure_order_history_columns()
         self._migrate_lots_schema()
         self._ensure_user_keys_default()
+        self._ensure_user_keys_proxy_columns()
         self._ensure_key_columns()
         self._ensure_account_name_not_unique()
 
@@ -831,6 +832,11 @@ class MySQLDB:
             logger.error(f"Error ensuring default user keys: {exc}")
         finally:
             cursor.close()
+
+    def _ensure_user_keys_proxy_columns(self):
+        self._add_column_if_missing("user_keys", "proxy_url", "TEXT")
+        self._add_column_if_missing("user_keys", "proxy_username", "TEXT")
+        self._add_column_if_missing("user_keys", "proxy_password", "TEXT")
 
     def _ensure_key_columns(self):
         self._add_column_if_missing("accounts", "key_id", "INT NULL")
@@ -3935,14 +3941,23 @@ class MySQLDB:
         try:
             cursor.execute(
                 """
-                SELECT u.id, u.username, uk.id as key_id, uk.golden_key
+                SELECT u.id, u.username, uk.id as key_id, uk.golden_key,
+                       uk.proxy_url, uk.proxy_username, uk.proxy_password
                 FROM users u
                 JOIN user_keys uk ON uk.user_id = u.id
                 WHERE uk.golden_key IS NOT NULL AND uk.golden_key <> ''
                 """
             )
             return [
-                {"id": row[0], "username": row[1], "key_id": row[2], "golden_key": row[3]}
+                {
+                    "id": row[0],
+                    "username": row[1],
+                    "key_id": row[2],
+                    "golden_key": row[3],
+                    "proxy_url": row[4],
+                    "proxy_username": row[5],
+                    "proxy_password": row[6],
+                }
                 for row in cursor.fetchall()
             ]
         finally:
@@ -3989,11 +4004,24 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute(
-                "SELECT id, label, is_default, created_at FROM user_keys WHERE user_id = ? ORDER BY is_default DESC, id ASC",
+                """
+                SELECT id, label, is_default, created_at, proxy_url, proxy_username, proxy_password
+                FROM user_keys
+                WHERE user_id = ?
+                ORDER BY is_default DESC, id ASC
+                """,
                 (user_id,),
             )
             return [
-                {"id": row[0], "label": row[1], "is_default": bool(row[2]), "created_at": row[3]}
+                {
+                    "id": row[0],
+                    "label": row[1],
+                    "is_default": bool(row[2]),
+                    "created_at": row[3],
+                    "proxy_url": row[4],
+                    "proxy_username": row[5],
+                    "proxy_password": row[6],
+                }
                 for row in cursor.fetchall()
             ]
         finally:
@@ -4005,13 +4033,25 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute(
-                "SELECT id, label, golden_key, is_default FROM user_keys WHERE user_id = ? AND id = ?",
+                """
+                SELECT id, label, golden_key, is_default, proxy_url, proxy_username, proxy_password
+                FROM user_keys
+                WHERE user_id = ? AND id = ?
+                """,
                 (user_id, key_id),
             )
             row = cursor.fetchone()
             if not row:
                 return None
-            return {"id": row[0], "label": row[1], "golden_key": row[2], "is_default": bool(row[3])}
+            return {
+                "id": row[0],
+                "label": row[1],
+                "golden_key": row[2],
+                "is_default": bool(row[3]),
+                "proxy_url": row[4],
+                "proxy_username": row[5],
+                "proxy_password": row[6],
+            }
         finally:
             cursor.close()
 
@@ -4281,7 +4321,16 @@ class MySQLDB:
         finally:
             cursor.close()
 
-    def add_user_key(self, user_id: int, label: str, golden_key: str, make_default: bool = False) -> int | None:
+    def add_user_key(
+        self,
+        user_id: int,
+        label: str,
+        golden_key: str,
+        make_default: bool = False,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ) -> int | None:
         cursor = self._cursor()
         try:
             cursor.execute(
@@ -4295,11 +4344,18 @@ class MySQLDB:
                     cursor.execute("UPDATE user_keys SET is_default = 0 WHERE user_id = ?", (user_id,))
                     cursor.execute("UPDATE user_keys SET is_default = 1 WHERE user_id = ? AND id = ?", (user_id, key_id))
                     cursor.execute("UPDATE users SET golden_key = ? WHERE id = ?", (golden_key, user_id))
-                    self.conn.commit()
+                cursor.execute(
+                    "UPDATE user_keys SET proxy_url = ?, proxy_username = ?, proxy_password = ? WHERE id = ?",
+                    (proxy_url, proxy_username, proxy_password, key_id),
+                )
+                self.conn.commit()
                 return key_id
             cursor.execute(
-                "INSERT INTO user_keys (user_id, label, golden_key, is_default) VALUES (?, ?, ?, ?)",
-                (user_id, label, golden_key, 1 if make_default else 0),
+                """
+                INSERT INTO user_keys (user_id, label, golden_key, is_default, proxy_url, proxy_username, proxy_password)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, label, golden_key, 1 if make_default else 0, proxy_url, proxy_username, proxy_password),
             )
             key_id = cursor.lastrowid
             if make_default:
@@ -4320,6 +4376,9 @@ class MySQLDB:
         label: str | None = None,
         golden_key: str | None = None,
         make_default: bool | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
     ) -> bool:
         cursor = self._cursor()
         try:
@@ -4331,6 +4390,15 @@ class MySQLDB:
             if golden_key is not None:
                 sets.append("golden_key = ?")
                 params.append(golden_key)
+            if proxy_url is not None:
+                sets.append("proxy_url = ?")
+                params.append(proxy_url)
+            if proxy_username is not None:
+                sets.append("proxy_username = ?")
+                params.append(proxy_username)
+            if proxy_password is not None:
+                sets.append("proxy_password = ?")
+                params.append(proxy_password)
             if sets:
                 params.extend([user_id, key_id])
                 cursor.execute(f"UPDATE user_keys SET {', '.join(sets)} WHERE user_id = ? AND id = ?", params)
@@ -4399,19 +4467,44 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute(
-                "SELECT id, label, golden_key FROM user_keys WHERE user_id = ? AND is_default = 1 LIMIT 1",
+                """
+                SELECT id, label, golden_key, proxy_url, proxy_username, proxy_password
+                FROM user_keys
+                WHERE user_id = ? AND is_default = 1
+                LIMIT 1
+                """,
                 (user_id,),
             )
             row = cursor.fetchone()
             if row:
-                return {"id": row[0], "label": row[1], "golden_key": row[2]}
+                return {
+                    "id": row[0],
+                    "label": row[1],
+                    "golden_key": row[2],
+                    "proxy_url": row[3],
+                    "proxy_username": row[4],
+                    "proxy_password": row[5],
+                }
             cursor.execute(
-                "SELECT id, label, golden_key FROM user_keys WHERE user_id = ? ORDER BY id ASC LIMIT 1",
+                """
+                SELECT id, label, golden_key, proxy_url, proxy_username, proxy_password
+                FROM user_keys
+                WHERE user_id = ?
+                ORDER BY id ASC
+                LIMIT 1
+                """,
                 (user_id,),
             )
             row = cursor.fetchone()
             if row:
-                return {"id": row[0], "label": row[1], "golden_key": row[2]}
+                return {
+                    "id": row[0],
+                    "label": row[1],
+                    "golden_key": row[2],
+                    "proxy_url": row[3],
+                    "proxy_username": row[4],
+                    "proxy_password": row[5],
+                }
             return None
         finally:
             cursor.close()
