@@ -4235,7 +4235,7 @@ const App: React.FC = () => {
                           <div className="py-3 text-sm text-neutral-500">No tickets yet.</div>
                         ) : (
                           <div className="space-y-2">
-                            {ticketHistory.slice(0, 20).map((item, idx) => (
+                            {ticketHistory.slice(0, 50).map((item, idx) => (
                               <div
                                 key={`${item.id}-${idx}`}
                                 className="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-2"
@@ -4246,7 +4246,12 @@ const App: React.FC = () => {
                                 {item.order_id && (
                                   <span className="text-xs text-neutral-600">• Order {item.order_id}</span>
                                 )}
-                                <span className="text-xs text-neutral-500">• {item.status}</span>
+                                {item.status && <span className="text-xs text-neutral-500">• {item.status}</span>}
+                                {item.source && (
+                                  <span className="text-[11px] rounded-full bg-neutral-200 px-2 py-0.5 font-semibold text-neutral-700">
+                                    {item.source}
+                                  </span>
+                                )}
                                 {item.ticket_url && (
                                   <a
                                     className="text-xs font-semibold text-blue-600 underline"
@@ -4260,6 +4265,12 @@ const App: React.FC = () => {
                                   >
                                     open
                                   </a>
+                                )}
+                                {item.comment && (
+                                  <div className="w-full text-xs text-neutral-600">
+                                    <span className="font-semibold text-neutral-700">Comment:</span>{" "}
+                                    <span>{String(item.comment).slice(0, 220)}{String(item.comment).length > 220 ? "…" : ""}</span>
+                                  </div>
                                 )}
                                 <span className="ml-auto text-[11px] text-neutral-500">
                                   {item.created_at ? formatDate(item.created_at) : ""}
