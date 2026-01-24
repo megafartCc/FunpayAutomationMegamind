@@ -1054,7 +1054,7 @@ class MySQLDB:
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         cursor = self._cursor()
         try:
-            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            cursor.execute("SELECT `value` FROM settings WHERE `key` = ?", (key,))
             row = cursor.fetchone()
             return row[0] if row and row[0] is not None else default
         except Exception as exc:
