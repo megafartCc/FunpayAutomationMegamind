@@ -2544,18 +2544,23 @@ const App: React.FC = () => {
     return `${minutes}:${String(secs).padStart(2, "0")}`;
   };
 
-  const getMatchSecondsFromPresence = (presence?: PresenceData | null) => {
+  const getMatchSecondsFromPresence = (presence?: PresenceData | null, observedAt?: number | null) => {
     if (!presence || !presence.in_match) return null;
     const rawSeconds = Number(presence.match_seconds);
     const baseSeconds = Number.isFinite(rawSeconds)
       ? Math.max(0, Math.floor(rawSeconds))
       : parseMatchTimeSeconds(presence.match_time ?? null);
-    return baseSeconds === null ? null : baseSeconds;
+    if (baseSeconds === null) return null;
+    if (observedAt && Number.isFinite(observedAt)) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+      return baseSeconds + elapsed;
+    }
+    return baseSeconds;
   };
 
-  const getMatchTimeLabel = (presence?: PresenceData | null) => {
+  const getMatchTimeLabel = (presence?: PresenceData | null, observedAt?: number | null) => {
     if (!presence || !presence.in_match) return "-";
-    const seconds = getMatchSecondsFromPresence(presence);
+    const seconds = getMatchSecondsFromPresence(presence, observedAt);
     if (seconds !== null) {
       const formatted = formatMatchTimeSeconds(seconds);
       if (formatted) return formatted;
@@ -2934,7 +2939,7 @@ const App: React.FC = () => {
                     frozen ? selectedRental.rentalFrozenAt ?? null : null
                   )
                 : "-";
-            const matchTime = getMatchTimeLabel(presence);
+            const matchTime = getMatchTimeLabel(presence, selectedRental.presenceObservedAt ?? null);
             const heroLabel = presence?.hero_name || selectedRental.hero || "-";
             return (
               <div className="space-y-4">
@@ -4908,7 +4913,7 @@ const App: React.FC = () => {
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
                             const presence = r.presence ?? null;
-                            const timer = getMatchTimeLabel(presence);
+                            const timer = getMatchTimeLabel(presence, r.presenceObservedAt ?? null);
                             const frozen = !!r.rentalFrozen;
                             const presenceLabel = frozen
                               ? "Frozen"
@@ -6067,8 +6072,8 @@ const App: React.FC = () => {
                             </div>
                             <div className="mt-3 space-y-3 overflow-y-auto overflow-x-hidden pr-1" style={{ maxHeight: "640px" }}>
                           {rentalsTable.map((r, idx) => {
-                            const presence = r.presence ?? null;
-                            const timer = getMatchTimeLabel(presence);
+            const presence = r.presence ?? null;
+            const timer = getMatchTimeLabel(presence, r.presenceObservedAt ?? null);
                             const frozen = !!r.rentalFrozen;
                             const presenceLabel = frozen
                               ? "Frozen"
