@@ -915,6 +915,7 @@ class FunpayBot:
             self._user_id,
             start_rental=False,
             key_id=self._key_id,
+            order_id=str(event.order.id),
         )
         unit_minutes = self._get_unit_minutes(account)
         duration_label = format_duration_minutes(unit_minutes * units)
@@ -1912,6 +1913,7 @@ class FunpayBot:
                     password=password,
                     steam_login=steam_login,
                     expiry_time=expiry_time,
+                    order_id=account.get("rental_order_id"),
                 )
 
     def _steamid64_from_mafile(self, mafile_json: Optional[str]) -> Optional[int]:
@@ -2143,14 +2145,17 @@ class FunpayBot:
             send_message_to_admin(admin_message)
 
             try:
-                self.send_message_by_owner(
-                    owner,
+                order_link = f"https://funpay.com/orders/{order_id}" if order_id else None
+                message = (
                     "\u0412\u0430\u0448\u0430 \u0430\u0440\u0435\u043d\u0434\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430.\n\n"
                     f"ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430: {account_id}\n"
                     "\u0417\u0430\u043a\u0430\u0437 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d. \u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0437\u0430\u0439\u0434\u0438\u0442\u0435 \u0432 \u0440\u0430\u0437\u0434\u0435\u043b \u00ab\u041f\u043e\u043a\u0443\u043f\u043a\u0438\u00bb, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0437\u0430\u043a\u0430\u0437 \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u0430\u00bb.\n"
                     "\u0415\u0441\u043b\u0438 \u0445\u043e\u0442\u0438\u0442\u0435 \u043f\u0440\u043e\u0434\u043b\u0438\u0442\u044c, \u043a\u0443\u043f\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439 \u043b\u043e\u0442.\n"
-                    "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442.",
+                    "\u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442."
                 )
+                if order_link:
+                    message += f"\n\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 \u0442\u0443\u0442 -> {order_link}"
+                self.send_message_by_owner(owner, message)
             except Exception as exc:
                 logger.error(f"Failed to send expiration notification: {exc}")
         except Exception as exc:

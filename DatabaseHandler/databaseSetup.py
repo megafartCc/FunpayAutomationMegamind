@@ -521,6 +521,7 @@ class MySQLDB:
         self._ensure_user_keys_proxy_columns()
         self._ensure_key_columns()
         self._ensure_account_name_not_unique()
+        self._ensure_account_order_column()
 
     def _ensure_mafile_column(self):
         cursor = self._cursor()
@@ -845,6 +846,7 @@ class MySQLDB:
         self._add_column_if_missing("order_history", "key_id", "INT NULL")
         self._add_column_if_missing("admin_calls", "key_id", "INT NULL")
         self._add_column_if_missing("funpay_balance_snapshots", "key_id", "INT NULL")
+        self._add_column_if_missing("accounts", "rental_order_id", "TEXT")
 
     def _ensure_account_name_not_unique(self):
         if self.db_type != "mysql":
@@ -1180,6 +1182,15 @@ class MySQLDB:
                         """,
                         (login, user_id, *key_params),
                     )
+            if order_id:
+                cursor.execute(
+                    f"""
+                    UPDATE accounts
+                    SET rental_order_id = ?
+                    WHERE ID = ?{key_clause}
+                    """,
+                    (order_id, account_id, *key_params),
+                )
             self.conn.commit()
             return True
         except Exception as e:
@@ -3328,7 +3339,8 @@ class MySQLDB:
                             account_frozen,
                             rental_frozen,
                             rental_frozen_at,
-                            key_id
+                            key_id,
+                            rental_order_id
                         FROM accounts 
                         WHERE owner IS NOT NULL 
                         AND owner != 'OTHER_ACCOUNT'
@@ -3353,6 +3365,7 @@ class MySQLDB:
                     "rental_frozen": row[10] if len(row) > 10 else 0,
                     "rental_frozen_at": row[11] if len(row) > 11 else None,
                     "key_id": row[12] if len(row) > 12 else None,
+                    "rental_order_id": row[13] if len(row) > 13 else None,
                 }
                 for row in rows
             ]
