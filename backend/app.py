@@ -2520,11 +2520,11 @@ def chat_history(
         items = _annotate_admin_calls(cached[-limit:])
         return _etag_response(request, {"items": items})
 
-        try:
-            items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token, proxy=proxy)
-            items = _annotate_admin_calls(items[-limit:])
-            return _etag_response(request, {"items": items})
-        except Exception as exc:
+    try:
+        items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token, proxy=proxy)
+        items = _annotate_admin_calls(items[-limit:])
+        return _etag_response(request, {"items": items})
+    except Exception as exc:
         if cached is not None:
             items = _annotate_admin_calls(cached[-limit:])
             return _etag_response(request, {"items": items})
