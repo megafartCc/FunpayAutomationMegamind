@@ -3070,6 +3070,39 @@ class MySQLDB:
         finally:
             cursor.close()
 
+    def get_chat_messages(self, owner: str, user_id: int | None = None, limit: int = 20) -> list[dict]:
+        """
+        Return recent chat messages for an owner (buyer) within a user workspace.
+        """
+        if not owner:
+            return []
+        try:
+            cursor = self._cursor()
+            cursor.execute(
+                """
+                SELECT role, message, created_at
+                FROM chat_messages
+                WHERE owner = ? AND user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (str(owner).strip(), int(user_id or 0), int(limit)),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "role": row[0],
+                    "message": row[1],
+                    "created_at": row[2],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error(f"Error getting chat messages for {owner}: {exc}")
+            return []
+        finally:
+            cursor.close()
+
     def log_blacklist_event(
         self,
         owner: str,

@@ -1520,24 +1520,45 @@ class ComposeTicketRequest(BaseModel):
 
 @app.post("/api/support/tickets/compose", dependencies=[Depends(require_admin)])
 def compose_support_ticket(payload: ComposeTicketRequest) -> dict:
+    uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     order_id = payload.order_id or ""
+    buyer = payload.buyer
+    if (not buyer) and order_id:
+        items = db.search_order_history(query=order_id, limit=1, user_id=uid, key_id=key_id)
+        if items:
+            buyer = items[0].get("owner")
+
+    chat_messages: list[dict] = []
+    if buyer:
+        chat_messages = db.get_chat_messages(str(buyer), uid, limit=12)
+
+    # Build a short chat transcript for AI context
+    chat_snippets = []
+    for msg in chat_messages[:8]:
+        role = (msg.get("role") or "").upper()
+        text = msg.get("message") or ""
+        chat_snippets.append(f"{role}: {text}")
+    history_text = "\n".join(chat_snippets)
+
     text = _compose_ticket_comment(
         order_id,
-        payload.buyer,
+        buyer,
         payload.lot_number,
         payload.topic,
         payload.role,
-        payload.comment,
+        payload.comment or (f"Чат:\n{history_text}" if history_text else None),
     )
     return {
         "text": text,
         "analysis": {
             "order_id": order_id,
-            "buyer": payload.buyer,
+            "buyer": buyer,
             "lot_number": payload.lot_number,
             "topic": payload.topic,
             "role": payload.role,
             "base_comment": payload.comment,
+            "chat_messages": chat_messages,
         },
     }
 

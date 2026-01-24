@@ -4235,6 +4235,21 @@ const App: React.FC = () => {
                                     <span className="font-semibold">Base comment:</span> {ticketAIAnalysis.base_comment}
                                   </div>
                                 )}
+                                {ticketAIAnalysis.chat_messages && Array.isArray(ticketAIAnalysis.chat_messages) && (
+                                  <div className="pt-2">
+                                    <div className="text-[11px] font-semibold uppercase text-neutral-500">Chat excerpt used</div>
+                                    <div className="mt-1 space-y-1 rounded-lg bg-white p-2">
+                                      {ticketAIAnalysis.chat_messages.slice(0, 8).map((m: any, midx: number) => (
+                                        <div key={midx} className="flex gap-2">
+                                          <span className="min-w-[56px] text-[11px] font-semibold uppercase text-neutral-500">
+                                            {m.role || "MSG"}
+                                          </span>
+                                          <span className="text-neutral-800">{m.message}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           )}
