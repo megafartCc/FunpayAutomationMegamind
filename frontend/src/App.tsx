@@ -637,6 +637,11 @@ const App: React.FC = () => {
   const [lotUrl, setLotUrl] = useState("");
   const [lotKeyId, setLotKeyId] = useState("");
   const [lotActionBusy, setLotActionBusy] = useState(false);
+  const [editingLotNumber, setEditingLotNumber] = useState<number | null>(null);
+  const [editingLotKeyId, setEditingLotKeyId] = useState<number | null>(null);
+  const [editLotNumber, setEditLotNumber] = useState("");
+  const [editLotAccountId, setEditLotAccountId] = useState("");
+  const [editLotUrl, setEditLotUrl] = useState("");
   const [newKeyLabel, setNewKeyLabel] = useState("");
   const [newKeyValue, setNewKeyValue] = useState("");
   const [newKeyDefault, setNewKeyDefault] = useState(false);
@@ -3312,6 +3317,66 @@ const App: React.FC = () => {
     }
   };
 
+  const startEditLot = (item: LotRow) => {
+    setEditingLotNumber(item.lotNumber);
+    setEditingLotKeyId(item.keyId ?? null);
+    setEditLotNumber(String(item.lotNumber));
+    setEditLotAccountId(String(item.accountId));
+    setEditLotUrl(item.lotUrl ?? "");
+  };
+
+  const cancelEditLot = () => {
+    setEditingLotNumber(null);
+    setEditingLotKeyId(null);
+    setEditLotNumber("");
+    setEditLotAccountId("");
+    setEditLotUrl("");
+  };
+
+  const handleSaveLotEdit = async () => {
+    if (editingLotNumber === null || lotActionBusy) return;
+    const nextLotNumber = Number(editLotNumber);
+    const nextAccountId = Number(editLotAccountId);
+    if (!Number.isFinite(nextLotNumber) || nextLotNumber <= 0) {
+      showToast("Enter a valid lot number.", "error");
+      return;
+    }
+    if (!Number.isFinite(nextAccountId) || nextAccountId <= 0) {
+      showToast("Select a valid account.", "error");
+      return;
+    }
+    const targetKey = editingLotKeyId;
+    const payload: Record<string, unknown> = {
+      lot_number: nextLotNumber,
+      account_id: nextAccountId,
+      lot_url: editLotUrl.trim() || null,
+    };
+    if (targetKey !== null) {
+      payload.key_id = targetKey;
+    }
+    setLotActionBusy(true);
+    try {
+      if (nextLotNumber !== editingLotNumber) {
+        await apiFetch(`/api/lots/${encodeURIComponent(String(editingLotNumber))}`, {
+          method: "DELETE",
+          headers: buildKeyHeader(targetKey),
+        });
+      }
+      await apiFetch("/api/lots", {
+        method: "POST",
+        headers: buildKeyHeader(targetKey),
+        body: JSON.stringify(payload),
+      });
+      showToast("Lot mapping updated.");
+      cancelEditLot();
+      loadLots(true);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update lot.", "error");
+    } finally {
+      setLotActionBusy(false);
+    }
+  };
+
   const handleDeleteLot = async (item: LotRow) => {
     if (lotActionBusy) return;
     if (!window.confirm(`Delete lot #${item.lotNumber}?`)) return;
@@ -3383,10 +3448,26 @@ const App: React.FC = () => {
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : null;
   }, [activeKeyId, lotKeyId]);
+  const mappedAccountIds = useMemo(() => {
+    const set = new Set<string>();
+    lots.forEach((item) => {
+      if (item.accountId !== undefined && item.accountId !== null) {
+        set.add(String(item.accountId));
+      }
+    });
+    return set;
+  }, [lots]);
+  const scopedLots = useMemo(() => {
+    if (activeKeyId === "all") return lots;
+    return lots.filter((item) => {
+      const keyValue = item.keyId ?? null;
+      return keyValue === null || keyValue === activeKeyId;
+    });
+  }, [lots, activeKeyId]);
   const filteredLots = useMemo(() => {
     const query = lotsQuery.trim().toLowerCase();
-    if (!query) return lots;
-    return lots.filter((item) => {
+    if (!query) return scopedLots;
+    return scopedLots.filter((item) => {
       const accountName = (item.accountName || "").toLowerCase();
       const owner = (item.owner || "").toLowerCase();
       return (
@@ -3396,7 +3477,7 @@ const App: React.FC = () => {
         owner.includes(query)
       );
     });
-  }, [lots, lotsQuery]);
+  }, [scopedLots, lotsQuery]);
   const lotAccounts = useMemo(() => {
     if (activeKeyId !== "all") return accountsTable;
     if (!targetLotKeyId) return accountsTable;
@@ -4026,7 +4107,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                       <div className="space-y-4">
-                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70 max-h-[calc(100vh-260px)] overflow-y-auto">
                           <div className="mb-3">
                             <h3 className="text-lg font-semibold text-neutral-900">UI Settings</h3>
                           </div>
@@ -4054,7 +4135,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70 max-h-[calc(100vh-260px)] flex flex-col">
                           <div className="mb-4">
                             <h3 className="text-lg font-semibold text-neutral-900">Workspaces</h3>
                             <p className="text-xs text-neutral-500">
@@ -4831,9 +4912,10 @@ const App: React.FC = () => {
                                   {lotAccounts.map((acc, idx) => {
                                     const label = acc.name || acc.login || `ID ${acc.id ?? idx}`;
                                     const rented = isAccountRented(acc);
+                                    const mapped = mappedAccountIds.has(String(acc.id ?? ""));
                                     return (
-                                      <option key={acc.id ?? idx} value={acc.id ?? idx}>
-                                        {label} {rented ? "• rented" : "• available"}
+                                      <option key={acc.id ?? idx} value={acc.id ?? idx} disabled={mapped}>
+                                        {label} {rented ? "• rented" : "• available"} {mapped ? "• mapped" : ""}
                                       </option>
                                     );
                                   })}
@@ -4890,7 +4972,7 @@ const App: React.FC = () => {
                                 <span>URL</span>
                                 <span className="text-right">Actions</span>
                               </div>
-                              <div className="mt-3 space-y-3">
+                              <div className="mt-3 space-y-3 max-h-[520px] overflow-y-auto pr-1">
                                 {lotsLoading && (
                                   <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
                                     Loading lots...
@@ -4898,43 +4980,125 @@ const App: React.FC = () => {
                                 )}
                                 {!lotsLoading &&
                                   filteredLots.map((item) => (
-                                    <div
-                                      key={`${item.lotNumber}-${item.accountId}`}
-                                      className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
-                                      style={{ gridTemplateColumns: LOTS_GRID }}
-                                    >
-                                      <span className="font-semibold text-neutral-900">#{item.lotNumber}</span>
-                                      <div className="min-w-0">
-                                        <div className="truncate font-semibold text-neutral-900">
-                                          {item.accountName || `ID ${item.accountId}`}
+                                    (() => {
+                                      const isEditing = editingLotNumber === item.lotNumber;
+                                      const editKey = editingLotKeyId ?? item.keyId ?? null;
+                                      const editAccounts =
+                                        activeKeyId === "all" && editKey !== null
+                                          ? accountsTable.filter((acc) => {
+                                              const keyValue = acc.keyId ?? null;
+                                              return keyValue === editKey || keyValue === null;
+                                            })
+                                          : lotAccounts;
+                                      return (
+                                        <div
+                                          key={`${item.lotNumber}-${item.accountId}`}
+                                          className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                          style={{ gridTemplateColumns: LOTS_GRID }}
+                                        >
+                                          <div className="font-semibold text-neutral-900">
+                                            {isEditing ? (
+                                              <input
+                                                value={editLotNumber}
+                                                onChange={(e) => setEditLotNumber(e.target.value)}
+                                                type="number"
+                                                min="1"
+                                                className="w-full rounded-lg border border-neutral-200 bg-white px-2 py-1 text-sm text-neutral-700 outline-none"
+                                              />
+                                            ) : (
+                                              `#${item.lotNumber}`
+                                            )}
+                                          </div>
+                                          <div className="min-w-0">
+                                            {isEditing ? (
+                                              <select
+                                                value={editLotAccountId}
+                                                onChange={(e) => setEditLotAccountId(e.target.value)}
+                                                className="w-full rounded-lg border border-neutral-200 bg-white px-2 py-1 text-sm text-neutral-700 outline-none"
+                                              >
+                                                {editAccounts.map((acc, idx) => {
+                                                  const label = acc.name || acc.login || `ID ${acc.id ?? idx}`;
+                                                  const mapped = mappedAccountIds.has(String(acc.id ?? ""));
+                                                  const isCurrent = String(acc.id ?? "") === String(item.accountId);
+                                                  return (
+                                                    <option
+                                                      key={acc.id ?? idx}
+                                                      value={acc.id ?? idx}
+                                                      disabled={mapped && !isCurrent}
+                                                    >
+                                                      {label} {mapped && !isCurrent ? "• mapped" : ""}
+                                                    </option>
+                                                  );
+                                                })}
+                                              </select>
+                                            ) : (
+                                              <>
+                                                <div className="truncate font-semibold text-neutral-900">
+                                                  {item.accountName || `ID ${item.accountId}`}
+                                                </div>
+                                                <div className="text-xs text-neutral-400">ID {item.accountId}</div>
+                                              </>
+                                            )}
+                                          </div>
+                                          <span className="text-xs font-semibold text-neutral-600">
+                                            {resolveKeyLabel(editKey)}
+                                          </span>
+                                          <span className="text-xs text-neutral-500">{item.owner || "-"}</span>
+                                          {isEditing ? (
+                                            <input
+                                              value={editLotUrl}
+                                              onChange={(e) => setEditLotUrl(e.target.value)}
+                                              placeholder="https://funpay.com/lots/..."
+                                              className="w-full rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 outline-none"
+                                            />
+                                          ) : item.lotUrl ? (
+                                            <a
+                                              href={item.lotUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="min-w-0 truncate text-xs font-semibold text-neutral-700 hover:underline"
+                                            >
+                                              Open
+                                            </a>
+                                          ) : (
+                                            <span className="text-xs text-neutral-400">-</span>
+                                          )}
+                                          <div className="flex justify-end gap-2">
+                                            {isEditing ? (
+                                              <>
+                                                <button
+                                                  onClick={handleSaveLotEdit}
+                                                  className="rounded-lg bg-neutral-900 px-3 py-1 text-xs font-semibold text-white"
+                                                >
+                                                  Save
+                                                </button>
+                                                <button
+                                                  onClick={cancelEditLot}
+                                                  className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                                >
+                                                  Cancel
+                                                </button>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <button
+                                                  onClick={() => startEditLot(item)}
+                                                  className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                                >
+                                                  Edit
+                                                </button>
+                                                <button
+                                                  onClick={() => handleDeleteLot(item)}
+                                                  className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                                >
+                                                  Remove
+                                                </button>
+                                              </>
+                                            )}
+                                          </div>
                                         </div>
-                                        <div className="text-xs text-neutral-400">ID {item.accountId}</div>
-                                      </div>
-                                      <span className="text-xs font-semibold text-neutral-600">
-                                        {resolveKeyLabel(item.keyId)}
-                                      </span>
-                                      <span className="text-xs text-neutral-500">{item.owner || "-"}</span>
-                                      {item.lotUrl ? (
-                                        <a
-                                          href={item.lotUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="min-w-0 truncate text-xs font-semibold text-neutral-700 hover:underline"
-                                        >
-                                          Open
-                                        </a>
-                                      ) : (
-                                        <span className="text-xs text-neutral-400">-</span>
-                                      )}
-                                      <div className="flex justify-end">
-                                        <button
-                                          onClick={() => handleDeleteLot(item)}
-                                          className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
-                                        >
-                                          Remove
-                                        </button>
-                                      </div>
-                                    </div>
+                                      );
+                                    })()
                                   ))}
                                 {!lotsLoading && filteredLots.length === 0 && (
                                   <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
