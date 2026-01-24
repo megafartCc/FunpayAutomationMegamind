@@ -1286,8 +1286,15 @@ def _build_funpay_categories(token: str, proxy: dict | None) -> list[dict]:
         cid: v
         for cid, v in merged.items()
         if not (
+            # drop bare game-only entries for games we already have detailed categories for
             (v.get("game") or "").strip() in games_with_categories
             and (not v.get("category") or v.get("category") == v.get("name"))
+            # also drop fallback entries that carry no game but whose category/name equals a known game label
+            or (
+                not (v.get("game") or "").strip()
+                and ((v.get("category") or "").strip() in games_with_categories
+                     or (v.get("name") or "").strip() in games_with_categories)
+            )
         )
     }
 
