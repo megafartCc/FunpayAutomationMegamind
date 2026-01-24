@@ -1489,8 +1489,8 @@ def _compose_ticket_comment(order_id: str, buyer: str | None, lot_number: int | 
     api_key = os.getenv("GROQ_API_KEY")
     model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
     fallback = base_comment or (
-        f"Здравствуйте! Заказ {order_id or 'N/A'} выполнен, данные переданы. "
-        "Покупатель пока не подтвердил выполнение. Просьба подтвердить заказ. Спасибо!"
+        f"Здравствуйте, поддержка FunPay! Просьба подтвердить заказ {order_id or 'N/A'}, "
+        "потому что покупатель получил услугу/товар, но не подтвердил выполнение. Спасибо."
     )
     if not api_key:
         return fallback
@@ -1501,14 +1501,22 @@ def _compose_ticket_comment(order_id: str, buyer: str | None, lot_number: int | 
             json={
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "Ты вежливый саппорт FunPay. Пиши кратко и по делу."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты пишешь обращение в поддержку FunPay от лица продавца. "
+                            "Адресат — сотрудник поддержки, НЕ покупатель. "
+                            "Проси подтвердить заказ, т.к. покупатель не нажал 'Подтвердить выполнение'. "
+                            "Пиши кратко, вежливо, по делу, без воды."
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": (
-                            "Сформулируй текст для тикета FunPay: заказ выполнен, покупатель не подтвердил.\n"
+                            "Сформулируй текст для тикета FunPay в поддержку: заказ выполнен, покупатель не подтвердил.\n"
                             f"Order: {order_id or 'N/A'}; Buyer: {buyer or 'unknown'}; Lot: {lot_number or 'n/a'}; "
                             f"Topic: {topic}; Role: {role}. "
-                            "Попроси подтвердить заказ."
+                            "Скажи, что товар/услуга выданы, попроси поддержку подтвердить заказ."
                         ),
                     },
                 ],
