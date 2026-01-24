@@ -1885,14 +1885,14 @@ class FunpayBot:
             minutes_remaining = time_remaining.total_seconds() / 60
             start_key = f"{start_datetime.isoformat()}|{total_minutes}"
             if self._expire_warning_start.get(account_id) != start_key:
-            self._expire_warning_start[account_id] = start_key
-            self._expire_warning_sent.pop(account_id, None)
+                self._expire_warning_start[account_id] = start_key
+                self._expire_warning_sent.pop(account_id, None)
 
-        sent = self._expire_warning_sent.setdefault(account_id, set())
-        floor_minutes = math.floor(minutes_remaining)
-        if floor_minutes == 10 and 10 not in sent:
-            self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
-            sent.add(10)
+            sent = self._expire_warning_sent.setdefault(account_id, set())
+            floor_minutes = math.floor(minutes_remaining)
+            if floor_minutes == 10 and 10 not in sent:
+                self._send_expiration_warning(owner, account_id, minutes_remaining, expiry_time, 10)
+                sent.add(10)
 
             if current_time >= expiry_time and account_id not in invalid_accs:
                 steam_login = login or account_name
