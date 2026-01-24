@@ -6,6 +6,7 @@ import { createApiClient } from "./services/api";
 import { connectChatWS } from "./services/ws";
 import { useToast } from "./hooks/useToast";
 import AddAccountForm from "./components/account/AddAccountForm";
+import { formatDate } from "./utils/format";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const PRESENCE_BASE =
