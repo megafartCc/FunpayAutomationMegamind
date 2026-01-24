@@ -1520,15 +1520,26 @@ class ComposeTicketRequest(BaseModel):
 
 @app.post("/api/support/tickets/compose", dependencies=[Depends(require_admin)])
 def compose_support_ticket(payload: ComposeTicketRequest) -> dict:
+    order_id = payload.order_id or ""
     text = _compose_ticket_comment(
-        payload.order_id or "",
+        order_id,
         payload.buyer,
         payload.lot_number,
         payload.topic,
         payload.role,
         payload.comment,
     )
-    return {"text": text}
+    return {
+        "text": text,
+        "analysis": {
+            "order_id": order_id,
+            "buyer": payload.buyer,
+            "lot_number": payload.lot_number,
+            "topic": payload.topic,
+            "role": payload.role,
+            "base_comment": payload.comment,
+        },
+    }
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])
