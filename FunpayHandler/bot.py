@@ -356,7 +356,12 @@ class FunpayBot:
             return
         self._acc = Account(token, proxy=self._proxy).get()
         self._runner = Runner(self._acc)
-        logger.info("FunPay session refreshed successfully.")
+        logger.info(
+            "FunPay session refreshed successfully (user=%s key=%s proxy=%s)",
+            self._user_id,
+            self._key_id,
+            self._proxy.get("http") if isinstance(self._proxy, dict) else None,
+        )
 
     def request_token_update(self, token: str) -> None:
         if not token:

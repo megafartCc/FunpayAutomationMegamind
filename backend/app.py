@@ -180,6 +180,8 @@ def build_proxy_config(
         auth += "@"
 
     proxy_uri = f"{scheme}://{auth}{host}:{port}"
+    safe_uri = f"{scheme}://{host}:{port}"
+    logger.info(f"Proxy configured: {safe_uri}")
     return {"http": proxy_uri, "https": proxy_uri}
 
 def _format_epoch_time(raw_value: str) -> str | None:
@@ -389,6 +391,13 @@ class BotManager:
         proxy_password: str | None = None,
     ) -> None:
         if not golden_key:
+            return
+        if not proxy_url:
+            logger.warning(
+                "Workspace offline: proxy missing for user %s key %s; bot not started.",
+                user_id,
+                key_id,
+            )
             return
         proxy = None
         try:
@@ -2525,6 +2534,7 @@ def chat_history(
         items = _annotate_admin_calls(items[-limit:])
         return _etag_response(request, {"items": items})
     except Exception as exc:
+        logger.error(f"History refresh failed for user {user_id} key {key_id} via proxy {proxy}: {exc}")
         if cached is not None:
             items = _annotate_admin_calls(cached[-limit:])
             return _etag_response(request, {"items": items})
