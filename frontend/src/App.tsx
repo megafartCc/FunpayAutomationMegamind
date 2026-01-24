@@ -129,6 +129,12 @@ type OrderHistoryItem = {
   lotNumber?: number | null;
 };
 
+type OverviewCachePayload = {
+  overview: OverviewData;
+  accounts: AccountRow[];
+  rentals: RentalRow[];
+};
+
 type UserKey = {
   id: number;
   label: string;
@@ -502,6 +508,7 @@ const createEmptyFunpayStats = (): FunpayStatsPayload => ({
   reviews: { daily: [], weekly: [], monthly: [] },
 });
 const STATS_CACHE_KEY = `${CACHE_PREFIX}funpay_stats`;
+const OVERVIEW_CACHE_KEY = `${CACHE_PREFIX}overview`;
 const CHAT_LIST_CACHE_KEY = `${CACHE_PREFIX}chat_list`;
 const CHAT_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}chat_history:`;
 const ORDERS_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}orders_history:`;
@@ -513,6 +520,7 @@ const revalidateGuards = new Map<string, number>();
 const REVALIDATE_THROTTLE_MS = 4000;
 const CACHE_TTLS = {
   stats: 10 * 60 * 1000,
+  overview: 30 * 1000,
   chatList: 15 * 1000,
   chatHistory: 8 * 1000,
   orders: 5 * 60 * 1000,
@@ -1107,10 +1115,17 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!sessionChecked) return;
     if (sessionKey === lastSessionRef.current) return;
-    setOverview(createEmptyOverview());
+    const overviewCache = readCache<OverviewCachePayload>(scopedKey(OVERVIEW_CACHE_KEY), CACHE_TTLS.overview);
+    if (overviewCache?.data) {
+      setOverview(overviewCache.data.overview || createEmptyOverview());
+      setAccountsTable(overviewCache.data.accounts || []);
+      setRentalsTable(overviewCache.data.rentals || []);
+    } else {
+      setOverview(createEmptyOverview());
+      setAccountsTable([]);
+      setRentalsTable([]);
+    }
     setFunpayStats(createEmptyFunpayStats());
-    setAccountsTable([]);
-    setRentalsTable([]);
     setNotifications([]);
     setChats([]);
     setChatMessages([]);
@@ -1320,6 +1335,13 @@ const App: React.FC = () => {
   const loadOverview = useCallback(async () => {
     const requestId = ++overviewRequestRef.current;
     const guardKey = sessionKey;
+    const cacheKey = scopedKey(OVERVIEW_CACHE_KEY);
+    const cached = readCache<OverviewCachePayload>(cacheKey, CACHE_TTLS.overview);
+    if (cached?.data && sessionKeyRef.current === guardKey) {
+      setOverview(cached.data.overview || createEmptyOverview());
+      setAccountsTable(cached.data.accounts || []);
+      setRentalsTable(cached.data.rentals || []);
+    }
     try {
       const [stats, activeRentals, accounts] = await Promise.all([
         apiFetch<Record<string, number>>("/api/stats").catch(() => null),
@@ -1347,20 +1369,22 @@ const App: React.FC = () => {
         stats?.free_accounts ??
         (totalAccounts != null && active != null ? Math.max(totalAccounts - active, 0) : null);
 
-      setOverview({
+      const nextOverview = {
         totalAccounts,
         activeRentals: active,
         freeAccounts,
         past24,
         totalHours,
-      });
+      };
+      setOverview(nextOverview);
 
       const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
       const accountSteamMap = new Map<string, string>();
+      let mappedAccounts: AccountRow[] = [];
 
       // inventory table
       if (accountsList.length) {
-        const mappedAccounts = accountsList.map((a, idx) => {
+        mappedAccounts = accountsList.map((a, idx) => {
           const name = (() => {
             const preferred =
               a.account_name ??
@@ -1401,12 +1425,14 @@ const App: React.FC = () => {
           };
         });
         setAccountsTable(mappedAccounts);
+      } else {
+        setAccountsTable([]);
       }
 
+      let mappedRentals: RentalRow[] = [];
       // rentals table
       if (Array.isArray(activeRentals?.items)) {
-        setRentalsTable(
-          (activeRentals.items as any[]).map((r, idx) => {
+        mappedRentals = (activeRentals.items as any[]).map((r, idx) => {
             const matchTimeRaw = r.match_time ?? r.matchTime ?? null;
             const matchTime = matchTimeRaw ? String(matchTimeRaw) : null;
             const matchSecondsRaw = Number(r.match_seconds ?? r.matchSeconds ?? r.matchtime);
@@ -1472,13 +1498,20 @@ const App: React.FC = () => {
               rentalFrozenAt: r.rental_frozen_at ?? r.rentalFrozenAt ?? null,
               keyId: r.key_id ?? r.keyId ?? null,
             };
-          })
-        );
+          });
+        setRentalsTable(mappedRentals);
+      } else {
+        setRentalsTable([]);
       }
+      writeCache(cacheKey, {
+        overview: nextOverview,
+        accounts: mappedAccounts,
+        rentals: mappedRentals,
+      });
     } catch {
       // ignore overview load errors
     }
-  }, [apiFetch, sessionKey]);
+  }, [apiFetch, scopedKey, sessionKey]);
 
   const loadNotifications = useCallback(async () => {
     try {
