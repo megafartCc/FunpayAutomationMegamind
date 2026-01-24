@@ -418,7 +418,19 @@ class FunpayBot:
         return self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id) or []
 
     def _get_available_lots(self) -> list[dict]:
-        return self._db.get_available_lot_accounts(self._user_id, key_id=self._key_id) or []
+        return self._db.get_available_lot_accounts(self._user_id, key_id=None) or []
+
+    def _confirm_order(self, acc: Account, order_id: str | int | None) -> None:
+        if not order_id:
+            return
+        for method_name in ("confirm", "confirm_order", "confirm_order_by_id"):
+            handler = getattr(acc, method_name, None)
+            if callable(handler):
+                try:
+                    handler(order_id)
+                except Exception as exc:
+                    logger.warning(f"Order confirm failed via {method_name}: {exc}")
+                return
 
     def _clean_account_label(self, text: Optional[str]) -> str:
         if not text:
@@ -659,7 +671,7 @@ class FunpayBot:
                 user_id=self._user_id,
                 key_id=self._key_id,
             )
-            acc.confirm(event.order.id)
+            self._confirm_order(acc, event.order.id)
             self._mark_order_processed(event)
             return
 
@@ -811,7 +823,7 @@ class FunpayBot:
             user_id=self._user_id,
             key_id=self._key_id,
         )
-        acc.confirm(event.order.id)
+        self._confirm_order(acc, event.order.id)
 
     def _issue_new_account(
         self,
@@ -880,7 +892,7 @@ class FunpayBot:
             user_id=self._user_id,
             key_id=self._key_id,
         )
-        acc.confirm(event.order.id)
+        self._confirm_order(acc, event.order.id)
 
     def _handle_new_message(self, event: Any) -> None:
         if self._acc is None:

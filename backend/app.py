@@ -267,6 +267,7 @@ STATS_SERIES_DAYS = 370
 class BotManager:
     def __init__(self):
         self._bots: dict[tuple[int, int | None], dict] = {}
+        self._token_index: dict[tuple[int, str], tuple[int | None]] = {}
         self._lock = Lock()
 
     def start_for_user_key(self, user_id: int, key_id: int | None, golden_key: str) -> None:
@@ -281,12 +282,24 @@ class BotManager:
                 if bot is not None:
                     bot.request_token_update(golden_key)
                 existing["key"] = golden_key
+                self._token_index[(user_id, golden_key)] = key_id
                 return
+            token_key = (user_id, golden_key)
+            canonical = self._token_index.get(token_key)
+            if canonical is not None:
+                canonical_entry = self._bots.get((user_id, canonical))
+                if canonical_entry:
+                    self._bots[(user_id, key_id)] = canonical_entry
+                    logger.info(
+                        f"FunPay bot reused for user {user_id} key {key_id} (shared token)."
+                    )
+                    return
             try:
                 bot = FunpayBot(token=golden_key, db=db, user_id=user_id, key_id=key_id)
                 thread = Thread(target=bot.start, daemon=True)
                 thread.start()
                 self._bots[(user_id, key_id)] = {"bot": bot, "key": golden_key, "thread": thread}
+                self._token_index[token_key] = key_id
                 logger.info(f"FunPay bot started for user {user_id} key {key_id}")
             except Exception as exc:
                 logger.error(f"Failed to start FunPay bot for user {user_id} key {key_id}: {exc}")
@@ -300,7 +313,22 @@ class BotManager:
 
     def stop_for_user_key(self, user_id: int, key_id: int | None) -> None:
         with self._lock:
-            self._bots.pop((user_id, key_id), None)
+            entry = self._bots.pop((user_id, key_id), None)
+            if not entry:
+                return
+            bot = entry.get("bot")
+            token = entry.get("key")
+            if token:
+                token_key = (user_id, token)
+                if self._token_index.get(token_key) == key_id:
+                    # Keep the token mapping if another key shares the same bot.
+                    for (uid, kid), other in self._bots.items():
+                        if uid != user_id:
+                            continue
+                        if other.get("bot") is bot:
+                            self._token_index[token_key] = kid
+                            return
+                    self._token_index.pop(token_key, None)
 
     def send_message(self, user_id: int, owner: str, message: str, key_id: int | None = None) -> bool:
         if not owner or not message:

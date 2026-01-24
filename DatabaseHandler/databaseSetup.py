@@ -4194,6 +4194,19 @@ class MySQLDB:
         cursor = self._cursor()
         try:
             cursor.execute(
+                "SELECT id FROM user_keys WHERE user_id = ? AND golden_key = ? LIMIT 1",
+                (user_id, golden_key),
+            )
+            row = cursor.fetchone()
+            if row:
+                key_id = int(row[0])
+                if make_default:
+                    cursor.execute("UPDATE user_keys SET is_default = 0 WHERE user_id = ?", (user_id,))
+                    cursor.execute("UPDATE user_keys SET is_default = 1 WHERE user_id = ? AND id = ?", (user_id, key_id))
+                    cursor.execute("UPDATE users SET golden_key = ? WHERE id = ?", (golden_key, user_id))
+                    self.conn.commit()
+                return key_id
+            cursor.execute(
                 "INSERT INTO user_keys (user_id, label, golden_key, is_default) VALUES (?, ?, ?, ?)",
                 (user_id, label, golden_key, 1 if make_default else 0),
             )
