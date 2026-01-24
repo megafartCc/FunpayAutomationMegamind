@@ -758,10 +758,76 @@ class FunpayBot:
                     self._clear_confirm_task(order_id)
             time.sleep(60)
 
-    def _generate_ticket_comment(self, order_id: str, buyer: str, lot_number: int | None) -> str:
+    def _classify_ticket_dispute(self, buyer: str) -> bool:
+        """
+        Use AI to judge if the buyer chat contains a dispute/complaint after delivery.
+        Returns True if ambiguous/dispute, False if clear or inconclusive.
+        """
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key or not self._acc:
+            return False
+        try:
+            chat = self._acc.get_chat_by_name(buyer, True)
+            if not chat:
+                return False
+            history = self._acc.get_chat_history(chat.id) or []
+            texts = [msg.text for msg in history if getattr(msg, "text", None)]
+            if not texts:
+                return False
+            last_msgs = texts[-20:]
+            payload = {
+                "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты модератор FunPay. Определи, есть ли спор/претензия покупателя по заказу. "
+                            "Ответь только 'dispute' если есть жалоба/неудовлетворенность/возврат/не работает/бан, "
+                            "иначе 'clear'. Запросы Steam Guard и коды не считаются спором."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": "Сообщения (последние):\n" + "\n".join(last_msgs),
+                    },
+                ],
+                "max_tokens": 4,
+                "temperature": 0,
+            }
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+                timeout=8,
+            )
+            resp.raise_for_status()
+            content = (
+                resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .lower()
+            )
+            return "dispute" in content
+        except Exception as exc:
+            logger.warning(f"AI dispute check failed for buyer {buyer}: {exc}")
+            return False
+
+    def _generate_ticket_comment(self, order_id: str, buyer: str, lot_number: int | None, ambiguous: bool) -> str:
         api_key = os.getenv("GROQ_API_KEY")
         model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
         # Follow FunPay admin guidance: two lists, clear that service is rendered and buyer just forgot confirmation.
+        list1 = (
+            f"заказ {order_id}, покупатель {buyer}" + (f", лот №{lot_number}" if lot_number else "")
+            if not ambiguous
+            else "нет"
+        )
+        list2 = (
+            f"заказ {order_id}, покупатель {buyer}" + (f", лот №{lot_number}" if lot_number else "")
+            if ambiguous
+            else "нет"
+        )
         prompt = (
             "Составь обращение в поддержку FunPay (адресат — сотрудник поддержки). "
             "Формат должен быть строгим:\n"
@@ -769,14 +835,13 @@ class FunpayBot:
             "2) Далее два списка, как просит саппорт:\n"
             "   Список 1 — однозначно оказанные услуги (покупатель лишь не нажал подтвердить).\n"
             "   Список 2 — неоднозначные случаи (если нет, напиши \"нет\").\n"
-            f"Используй данные заказа: id={order_id}, покупатель={buyer}" + (f\", лот №{lot_number}\" if lot_number else "") + ". "
+            f"Список 1: {list1}. Список 2: {list2}. "
             "Не обращайся к покупателю. Кратко и без воды."
         )
         fallback = (
             "Я предоставил услугу, покупатель забыл подтвердить.\n"
-            "Список 1 (однозначно оказанные): "
-            f"заказ {order_id}, покупатель {buyer}" + (f", лот №{lot_number}" if lot_number else "") + ".\n"
-            "Список 2 (неоднозначные): нет.\n"
+            f"Список 1 (однозначно оказанные): {list1}.\n"
+            f"Список 2 (неоднозначные): {list2}.\n"
             "Просьба подтвердить заказ. Спасибо!"
         )
         if not api_key:
@@ -807,7 +872,9 @@ class FunpayBot:
     def _submit_missing_confirmation_ticket(self, order_id: str, data: dict) -> None:
         if not self._token:
             return
-        comment = self._generate_ticket_comment(order_id, data.get("buyer") or "", data.get("lot_number"))
+        buyer = data.get("buyer") or ""
+        ambiguous = self._classify_ticket_dispute(buyer)
+        comment = self._generate_ticket_comment(order_id, buyer, data.get("lot_number"), ambiguous)
         session = requests.Session()
         if self._proxy:
             session.proxies.update(self._proxy)
