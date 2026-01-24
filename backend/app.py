@@ -1449,6 +1449,7 @@ def create_support_ticket(payload: SupportTicketCreate, request: Request) -> dic
                 "created_at": datetime.utcnow().isoformat(),
                 "status": "ok" if ok else f"fail:{post_resp.status_code}",
                 "ticket_url": ticket_url,
+                "source": "manual",
             }
         )
 
