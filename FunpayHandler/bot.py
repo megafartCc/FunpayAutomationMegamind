@@ -774,7 +774,7 @@ class FunpayBot:
             texts = [msg.text for msg in history if getattr(msg, "text", None)]
             if not texts:
                 return False
-            last_msgs = texts[-20:]
+            last_msgs = texts[-50:]
             payload = {
                 "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 "messages": [

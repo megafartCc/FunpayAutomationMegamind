@@ -1534,6 +1534,55 @@ def _compose_ticket_comment(order_id: str, buyer: str | None, lot_number: int | 
         return fallback
 
 
+def _classify_dispute_texts(texts: list[str]) -> dict | None:
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return None
+    try:
+        payload = {
+            "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты модератор FunPay. Определи, есть ли спор/претензия покупателя по заказу. "
+                        "Ответь строго одним словом: 'dispute' если есть жалоба/недовольство/возврат/бан/не работает, "
+                        "или 'clear' если такого нет. Запросы кодов Steam Guard не считать спором."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "Последние сообщения:\n" + "\n".join(texts[-50:]),
+                },
+            ],
+            "max_tokens": 4,
+            "temperature": 0,
+        }
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=8,
+        )
+        resp.raise_for_status()
+        content = (
+            resp.json()
+            .get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+            .lower()
+        )
+        if "dispute" in content:
+            return {"label": "dispute", "raw": content}
+        if "clear" in content:
+            return {"label": "clear", "raw": content}
+        return {"label": "unknown", "raw": content}
+    except Exception as exc:
+        logger.warning(f"AI dispute classify failed: {exc}")
+        return None
+
+
 class ComposeTicketRequest(BaseModel):
     order_id: str | None = None
     buyer: str | None = None
@@ -1569,11 +1618,13 @@ def compose_support_ticket(payload: ComposeTicketRequest, request: Request) -> d
 
     # Build a short chat transcript for AI context
     chat_snippets = []
-    for msg in chat_messages[:20]:
+    for msg in chat_messages[:50]:
         role = (msg.get("role") or "").upper()
         text = msg.get("message") or ""
         chat_snippets.append(f"{role}: {text}")
     history_text = "\n".join(chat_snippets)
+
+    ai_dispute = _classify_dispute_texts([m.get("message") or "" for m in chat_messages]) if chat_messages else None
 
     text = _compose_ticket_comment(
         order_id,
@@ -1593,6 +1644,7 @@ def compose_support_ticket(payload: ComposeTicketRequest, request: Request) -> d
             "role": payload.role,
             "base_comment": payload.comment,
             "chat_messages": chat_messages,
+            "ai_dispute": ai_dispute,
         },
     }
 
