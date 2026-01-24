@@ -638,6 +638,8 @@ const App: React.FC = () => {
   const [autoRaiseCategories, setAutoRaiseCategories] = useState<string>("");
   const [categoryOptions, setCategoryOptions] = useState<{ id: number; name: string }[]>([]);
   const [categorySearch, setCategorySearch] = useState("");
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [categoryMeta, setCategoryMeta] = useState<{ ts?: number; count?: number }>({});
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -2477,6 +2479,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!token) return;
     (async () => {
+      setCategoryLoading(true);
       try {
         const res = await apiFetch<{ enabled: boolean; categories?: number[] }>("/api/settings/auto-raise/config");
         setAutoRaise(res.enabled);
@@ -2495,11 +2498,29 @@ const App: React.FC = () => {
       try {
         const resCats = await apiFetch<{ items: { id: number; name: string }[] }>("/api/funpay/categories");
         setCategoryOptions(resCats.items || []);
+        setCategoryMeta({ ts: Date.now(), count: resCats.items?.length || 0 });
       } catch {
         setCategoryOptions([]);
+      } finally {
+        setCategoryLoading(false);
       }
     })();
   }, [token, apiFetch]);
+
+  const reloadCategories = useCallback(async () => {
+    if (!token) return;
+    setCategoryLoading(true);
+    try {
+        const resCats = await apiFetch<{ items: { id: number; name: string }[] }>("/api/funpay/categories");
+        setCategoryOptions(resCats.items || []);
+        setCategoryMeta({ ts: Date.now(), count: resCats.items?.length || 0 });
+    } catch (error) {
+        setCategoryOptions([]);
+        showToast((error as Error).message || "Failed to load categories.", "error");
+    } finally {
+        setCategoryLoading(false);
+    }
+  }, [apiFetch, token, showToast]);
 
   useEffect(() => {
     if (!token) return;
@@ -4744,6 +4765,21 @@ const App: React.FC = () => {
                           />
                           <div className="space-y-2 text-xs text-neutral-700">
                             <div className="font-semibold text-neutral-800">Raise categories</div>
+                            <div className="flex items-center gap-2 text-[11px] text-neutral-600">
+                              <button
+                                type="button"
+                                onClick={reloadCategories}
+                                disabled={categoryLoading}
+                                className="rounded border border-neutral-200 px-2 py-1 text-[11px] font-semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+                              >
+                                {categoryLoading ? "Reloading..." : "Reload from FunPay"}
+                              </button>
+                              {categoryMeta.ts && (
+                                <span>
+                                  Loaded {categoryMeta.count || 0} · {new Date(categoryMeta.ts).toLocaleTimeString()}
+                                </span>
+                              )}
+                            </div>
                             <input
                               value={categorySearch}
                               onChange={(e) => setCategorySearch(e.target.value)}
