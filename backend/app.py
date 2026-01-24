@@ -1556,7 +1556,9 @@ def _compose_ticket_comment(order_id: str, buyer: str | None, lot_number: int | 
 def _classify_dispute_texts(texts: list[str]) -> dict | None:
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        return None
+        return {"label": "unknown", "reason": "GROQ_API_KEY not set", "raw": ""}
+    if not texts:
+        return {"label": "unknown", "reason": "No chat messages to analyze", "raw": ""}
     try:
         payload = {
             "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
@@ -1609,7 +1611,7 @@ def _classify_dispute_texts(texts: list[str]) -> dict | None:
         return {"label": "unknown", "reason": content or "no reason provided", "raw": content}
     except Exception as exc:
         logger.warning(f"AI dispute classify failed: {exc}")
-        return None
+        return {"label": "unknown", "reason": f"AI error: {exc}", "raw": ""}
 
 
 class ComposeTicketRequest(BaseModel):
