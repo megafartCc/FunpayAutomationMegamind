@@ -1579,15 +1579,15 @@ def _classify_dispute_texts(texts: list[str]) -> dict | None:
         except Exception:
             pass
         if isinstance(parsed, dict) and parsed.get("label"):
-            label = str(parsed.get("label", "")).lower()
-            reason = str(parsed.get("reason", "")).strip()
-            return {"label": label, "reason": reason or content, "raw": content}
+            label = str(parsed.get("label", "")).lower() or "unknown"
+            reason = str(parsed.get("reason", "")).strip() or content or "no reason provided"
+            return {"label": label, "reason": reason, "raw": content}
         lower = content.lower()
         if "dispute" in lower:
-            return {"label": "dispute", "reason": content, "raw": content}
+            return {"label": "dispute", "reason": content or "dispute", "raw": content}
         if "clear" in lower:
-            return {"label": "clear", "reason": content, "raw": content}
-        return {"label": "unknown", "reason": content, "raw": content}
+            return {"label": "clear", "reason": content or "clear", "raw": content}
+        return {"label": "unknown", "reason": content or "no reason provided", "raw": content}
     except Exception as exc:
         logger.warning(f"AI dispute classify failed: {exc}")
         return None
@@ -1694,6 +1694,35 @@ def set_auto_raise_setting(payload: AutoRaiseSetting, request: Request) -> dict:
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update setting")
     return {"enabled": payload.enabled}
+
+
+@app.get("/api/settings/auto-raise/config", dependencies=[Depends(require_admin)])
+def get_auto_raise_config(request: Request) -> dict:
+    enabled = db.get_setting_bool("auto_raise_enabled", True)
+    raw = db.get_setting("auto_raise_categories", "")
+    cats = []
+    if raw:
+        try:
+            cats = [int(x) for x in str(raw).replace(" ", "").split(",") if x]
+        except Exception:
+            cats = []
+    return {"enabled": enabled, "categories": cats}
+
+
+class AutoRaiseConfig(BaseModel):
+    enabled: bool
+    categories: list[int] | None = None
+
+
+@app.post("/api/settings/auto-raise/config", dependencies=[Depends(require_admin)])
+def set_auto_raise_config(payload: AutoRaiseConfig, request: Request) -> dict:
+    ok1 = db.set_setting("auto_raise_enabled", "1" if payload.enabled else "0")
+    cats = payload.categories or []
+    cats_str = ",".join(str(c) for c in cats)
+    ok2 = db.set_setting("auto_raise_categories", cats_str)
+    if not (ok1 and ok2):
+        raise HTTPException(status_code=500, detail="Failed to update auto-raise config")
+    return {"enabled": payload.enabled, "categories": cats}
 
 
 @app.post("/api/keys", dependencies=[Depends(require_admin)])

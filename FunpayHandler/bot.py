@@ -224,6 +224,10 @@ class FunpayBot:
             if not self._acc:
                 time.sleep(15)
                 continue
+            if not self._proxy:
+                logger.info("Auto-raise skipped: proxy not configured.")
+                time.sleep(300)
+                continue
             min_wait = 7200
             try:
                 cats_attr = getattr(self._acc, "categories", None)
@@ -233,6 +237,15 @@ class FunpayBot:
                     categories = cats_attr or []
                 if not categories and hasattr(self._acc, "get_sorted_categories"):
                     categories = list(self._acc.get_sorted_categories().values())
+                allowed_ids_raw = self._db.get_setting("auto_raise_categories", None)
+                allowed_ids = None
+                if allowed_ids_raw:
+                    try:
+                        allowed_ids = {int(x) for x in str(allowed_ids_raw).replace(" ", "").split(",") if x}
+                    except Exception:
+                        allowed_ids = None
+                if allowed_ids is not None:
+                    categories = [c for c in categories if getattr(c, "id", None) in allowed_ids]
                 if not categories:
                     time.sleep(300)
                     continue

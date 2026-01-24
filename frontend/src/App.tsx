@@ -635,6 +635,7 @@ const App: React.FC = () => {
   const [ordersQuery, setOrdersQuery] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [autoRaise, setAutoRaise] = useState<boolean | null>(null);
+  const [autoRaiseCategories, setAutoRaiseCategories] = useState<string>("");
   const [autoOnline, setAutoOnline] = useState<boolean>(() => localStorage.getItem("autoOnline") === "1");
   const [autoTickets, setAutoTickets] = useState<boolean | null>(null);
   const [uiMode, setUiMode] = useState<"light" | "dark">(
@@ -1262,9 +1263,15 @@ const App: React.FC = () => {
     const prev = autoRaise;
     setAutoRaise(enabled);
     try {
-      await apiFetch("/api/settings/auto-raise", {
+      const cats = autoRaiseCategories
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((v) => Number(v))
+        .filter((v) => Number.isFinite(v));
+      await apiFetch("/api/settings/auto-raise/config", {
         method: "POST",
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, categories: cats }),
       });
       showToast(enabled ? "Auto-raise enabled." : "Auto-raise disabled.", "success");
     } catch (error) {
@@ -2469,8 +2476,11 @@ const App: React.FC = () => {
     if (!token) return;
     (async () => {
       try {
-        const res = await apiFetch<{ enabled: boolean }>("/api/settings/auto-raise");
+        const res = await apiFetch<{ enabled: boolean; categories?: number[] }>("/api/settings/auto-raise/config");
         setAutoRaise(res.enabled);
+        if (res.categories && Array.isArray(res.categories)) {
+          setAutoRaiseCategories(res.categories.join(","));
+        }
       } catch {
         setAutoRaise(true);
       }
@@ -4730,6 +4740,18 @@ const App: React.FC = () => {
                             onChange={(val) => handleToggleAutoRaise(val)}
                             disabled={autoRaise === null}
                           />
+                          <div className="space-y-1 text-xs text-neutral-600">
+                            <label className="font-semibold">Raise category IDs (comma separated)</label>
+                            <input
+                              value={autoRaiseCategories}
+                              onChange={(e) => setAutoRaiseCategories(e.target.value)}
+                              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                              placeholder="e.g. 128,129,130"
+                            />
+                            <p className="text-[11px] text-neutral-500">
+                              Leave empty to raise all categories for this workspace.
+                            </p>
+                          </div>
                           <ToggleRow label="Auto Online" enabled={autoOnline} onChange={setAutoOnline} />
                         </div>
                       </div>
