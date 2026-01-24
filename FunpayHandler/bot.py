@@ -104,12 +104,14 @@ class FunpayBot:
         user_id: Optional[int] = None,
         key_id: Optional[int] = None,
         proxy: Optional[dict] = None,
+        on_refresh: Optional[callable] = None,
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
         self._user_id = user_id
         self._key_id = key_id
         self._proxy = proxy
+        self._on_refresh = on_refresh
 
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
@@ -353,15 +355,33 @@ class FunpayBot:
             token = self._token
         if not token:
             logger.error("FunPay golden key is missing. FunPay automation stopped.")
+            if self._on_refresh:
+                try:
+                    self._on_refresh(False, "Golden key missing")
+                except Exception:
+                    pass
             return
-        self._acc = Account(token, proxy=self._proxy).get()
-        self._runner = Runner(self._acc)
-        logger.info(
-            "FunPay session refreshed successfully (user=%s key=%s proxy=%s)",
-            self._user_id,
-            self._key_id,
-            self._proxy.get("http") if isinstance(self._proxy, dict) else None,
-        )
+        try:
+            self._acc = Account(token, proxy=self._proxy).get()
+            self._runner = Runner(self._acc)
+            logger.info(
+                "FunPay session refreshed successfully (user=%s key=%s proxy=%s)",
+                self._user_id,
+                self._key_id,
+                self._proxy.get("http") if isinstance(self._proxy, dict) else None,
+            )
+            if self._on_refresh:
+                try:
+                    self._on_refresh(True, None)
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error(f"FunPay session refresh failed (user={self._user_id} key={self._key_id}): {exc}")
+            if self._on_refresh:
+                try:
+                    self._on_refresh(False, str(exc))
+                except Exception:
+                    pass
 
     def request_token_update(self, token: str) -> None:
         if not token:

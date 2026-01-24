@@ -55,6 +55,29 @@ from FunpayHandler.bot import FunpayBot
 
 PROXY_TEST_URL = "https://api.ipify.org"
 
+# In-memory workspace health
+_workspace_health: dict[tuple[int, int | None], dict] = {}
+_health_lock = Lock()
+
+
+def _set_health(user_id: int, key_id: int | None, **fields) -> None:
+    with _health_lock:
+        entry = _workspace_health.setdefault((user_id, key_id), {})
+        entry.update(fields)
+
+
+def _get_health_snapshot(user_id: int | None = None) -> list[dict]:
+    with _health_lock:
+        items = []
+        for (uid, kid), data in _workspace_health.items():
+            if user_id is not None and uid != user_id:
+                continue
+            payload = dict(data)
+            payload["user_id"] = uid
+            payload["key_id"] = kid
+            items.append(payload)
+        return items
+
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST_DIR = BASE_DIR.parent / "frontend" / "dist"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
@@ -411,12 +434,28 @@ class BotManager:
                 user_id,
                 key_id,
             )
+            _set_health(
+                user_id,
+                key_id,
+                proxy_ok=False,
+                session_ok=False,
+                last_error="Proxy missing",
+                last_refresh=None,
+            )
             return
         proxy = None
         try:
             proxy = build_proxy_config(proxy_url, proxy_username, proxy_password)
         except Exception as exc:
             logger.error(f"Invalid proxy for user {user_id} key {key_id}: {exc}")
+            _set_health(
+                user_id,
+                key_id,
+                proxy_ok=False,
+                session_ok=False,
+                last_error=str(exc),
+                last_refresh=None,
+            )
             return
         proxy_key = f"{proxy_url}|{proxy_username}"
         if proxy_key not in self._proxy_checked:
@@ -462,7 +501,24 @@ class BotManager:
                     )
                     return
             try:
-                bot = FunpayBot(token=golden_key, db=db, user_id=user_id, key_id=key_id, proxy=proxy)
+                def _on_refresh(ok: bool, error: Optional[str] = None) -> None:
+                    _set_health(
+                        user_id,
+                        key_id,
+                        proxy_ok=True,
+                        session_ok=ok,
+                        last_error=error if not ok else None,
+                        last_refresh=datetime.utcnow().isoformat(),
+                    )
+
+                bot = FunpayBot(
+                    token=golden_key,
+                    db=db,
+                    user_id=user_id,
+                    key_id=key_id,
+                    proxy=proxy,
+                    on_refresh=_on_refresh,
+                )
                 thread = Thread(target=bot.start, daemon=True)
                 thread.start()
                 self._bots[(user_id, key_id)] = {
@@ -1246,6 +1302,22 @@ def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
 def list_keys(request: Request) -> dict:
     user = getattr(request.state, "user", None) or {}
     items = db.list_user_keys(user.get("id"))
+    return {"items": items}
+
+
+@app.get("/api/keys/health", dependencies=[Depends(require_admin)])
+def keys_health(request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    user_id = user.get("id")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    items = _get_health_snapshot(user_id)
+    # include label for convenience
+    key_map = {k["id"]: k for k in db.list_user_keys(user_id)}
+    for item in items:
+        key_entry = key_map.get(item.get("key_id"))
+        if key_entry:
+            item["label"] = key_entry.get("label")
     return {"items": items}
 
 
