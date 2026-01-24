@@ -1519,7 +1519,7 @@ class ComposeTicketRequest(BaseModel):
     comment: str | None = None
 
 @app.post("/api/support/tickets/compose", dependencies=[Depends(require_admin)])
-def compose_support_ticket(payload: ComposeTicketRequest) -> dict:
+def compose_support_ticket(payload: ComposeTicketRequest, request: Request) -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
     order_id = payload.order_id or ""
