@@ -3542,7 +3542,8 @@ const App: React.FC = () => {
                           value={activeKeyId === "all" ? "all" : String(activeKeyId)}
                           onChange={(event) => {
                             const next = event.target.value;
-                            setActiveKeyId(next === "all" ? "all" : Number(next));
+                            const parsed = Number(next);
+                            setActiveKeyId(next === "all" || !Number.isFinite(parsed) ? "all" : parsed);
                           }}
                           className="bg-transparent text-sm font-semibold text-neutral-700 outline-none"
                           disabled={keysLoading}
@@ -4853,7 +4854,7 @@ const App: React.FC = () => {
                             </div>
                             <button
                               onClick={handleCreateLot}
-                              disabled={lotActionBusy}
+                              disabled={lotActionBusy || (activeKeyId === "all" && !lotKeyId)}
                               className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                             >
                               Save mapping
@@ -5000,15 +5001,36 @@ const App: React.FC = () => {
                               <h3 className="text-lg font-semibold text-neutral-900">Inventory</h3>
                               <p className="text-xs text-neutral-500">Select an account to manage rentals.</p>
                             </div>
-                            {selectedAccount ? (
-                              <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
-                                Selected ID {selectedAccount.id ?? "-"}
-                              </span>
-                            ) : (
-                              <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
-                                No account selected
-                              </span>
-                            )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] font-semibold text-neutral-600">
+                                <span className="uppercase tracking-wide text-neutral-500">Workspace</span>
+                                <select
+                                  value={activeKeyId === "all" ? "all" : String(activeKeyId)}
+                                  onChange={(event) => {
+                                    const next = event.target.value;
+                                    const parsed = Number(next);
+                                    setActiveKeyId(next === "all" || !Number.isFinite(parsed) ? "all" : parsed);
+                                  }}
+                                  className="bg-transparent text-xs font-semibold text-neutral-700 outline-none"
+                                >
+                                  <option value="all">All workspaces</option>
+                                  {userKeys.map((item) => (
+                                    <option key={item.id} value={item.id}>
+                                      {item.label || `Key ${item.id}`}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              {selectedAccount ? (
+                                <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                                  Selected ID {selectedAccount.id ?? "-"}
+                                </span>
+                              ) : (
+                                <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                                  No account selected
+                                </span>
+                              )}
+                            </div>
                           </div>
                           <div className="overflow-x-auto">
                             <div className="min-w-[1000px]">
