@@ -266,14 +266,14 @@ STATS_SERIES_DAYS = 370
 
 class BotManager:
     def __init__(self):
-        self._bots: dict[int, dict] = {}
+        self._bots: dict[tuple[int, int | None], dict] = {}
         self._lock = Lock()
 
-    def start_for_user(self, user_id: int, golden_key: str) -> None:
+    def start_for_user_key(self, user_id: int, key_id: int | None, golden_key: str) -> None:
         if not golden_key:
             return
         with self._lock:
-            existing = self._bots.get(user_id)
+            existing = self._bots.get((user_id, key_id))
             if existing and existing.get("thread") and existing["thread"].is_alive():
                 if existing.get("key") == golden_key:
                     return
@@ -283,26 +283,37 @@ class BotManager:
                 existing["key"] = golden_key
                 return
             try:
-                bot = FunpayBot(token=golden_key, db=db, user_id=user_id)
+                bot = FunpayBot(token=golden_key, db=db, user_id=user_id, key_id=key_id)
                 thread = Thread(target=bot.start, daemon=True)
                 thread.start()
-                self._bots[user_id] = {"bot": bot, "key": golden_key, "thread": thread}
-                logger.info(f"FunPay bot started for user {user_id}")
+                self._bots[(user_id, key_id)] = {"bot": bot, "key": golden_key, "thread": thread}
+                logger.info(f"FunPay bot started for user {user_id} key {key_id}")
             except Exception as exc:
-                logger.error(f"Failed to start FunPay bot for user {user_id}: {exc}")
+                logger.error(f"Failed to start FunPay bot for user {user_id} key {key_id}: {exc}")
 
     def start_all(self) -> None:
         for user in db.list_users_with_keys():
             try:
-                self.start_for_user(user["id"], user["golden_key"])
+                self.start_for_user_key(user["id"], user.get("key_id"), user["golden_key"])
             except Exception as exc:
                 logger.error(f"Failed to start bot for user {user.get('id')}: {exc}")
 
-    def send_message(self, user_id: int, owner: str, message: str) -> bool:
+    def stop_for_user_key(self, user_id: int, key_id: int | None) -> None:
+        with self._lock:
+            self._bots.pop((user_id, key_id), None)
+
+    def send_message(self, user_id: int, owner: str, message: str, key_id: int | None = None) -> bool:
         if not owner or not message:
             return False
         with self._lock:
-            entry = self._bots.get(user_id)
+            entry = None
+            if key_id is not None:
+                entry = self._bots.get((user_id, key_id))
+            if entry is None:
+                for (uid, _kid), bot in self._bots.items():
+                    if uid == user_id:
+                        entry = bot
+                        break
             bot = entry.get("bot") if entry else None
         if not bot:
             return False
@@ -320,21 +331,23 @@ bot_manager = BotManager()
 class ChatCache:
     def __init__(self) -> None:
         self._lock = Lock()
-        self._chats: dict[int, dict[str, Any]] = {}
-        self._histories: dict[int, dict[int, dict[str, Any]]] = {}
-        self._refreshing_chats: set[int] = set()
-        self._refreshing_histories: set[tuple[int, int]] = set()
+        self._chats: dict[tuple[int, int | None], dict[str, Any]] = {}
+        self._histories: dict[tuple[int, int | None], dict[int, dict[str, Any]]] = {}
+        self._refreshing_chats: set[tuple[int, int | None]] = set()
+        self._refreshing_histories: set[tuple[int, int, int | None]] = set()
 
-    def get_cached_chats(self, user_id: int) -> tuple[list[dict] | None, float | None]:
+    def get_cached_chats(self, user_id: int, key_id: int | None) -> tuple[list[dict] | None, float | None]:
+        cache_key = (user_id, key_id)
         with self._lock:
-            entry = self._chats.get(user_id)
+            entry = self._chats.get(cache_key)
             if not entry:
                 return None, None
             return list(entry["items"]), entry["ts"]
 
-    def get_cached_history(self, user_id: int, chat_id: int) -> tuple[list[dict] | None, float | None]:
+    def get_cached_history(self, user_id: int, key_id: int | None, chat_id: int) -> tuple[list[dict] | None, float | None]:
+        cache_key = (user_id, key_id)
         with self._lock:
-            user_hist = self._histories.get(user_id)
+            user_hist = self._histories.get(cache_key)
             if not user_hist:
                 return None, None
             entry = user_hist.get(chat_id)
@@ -342,9 +355,10 @@ class ChatCache:
                 return None, None
             return list(entry["items"]), entry["ts"]
 
-    def get_chat_summary(self, user_id: int, chat_id: int) -> dict | None:
+    def get_chat_summary(self, user_id: int, key_id: int | None, chat_id: int) -> dict | None:
+        cache_key = (user_id, key_id)
         with self._lock:
-            entry = self._chats.get(user_id)
+            entry = self._chats.get(cache_key)
             if not entry:
                 return None
             for chat in entry["items"]:
@@ -352,11 +366,12 @@ class ChatCache:
                     return dict(chat)
         return None
 
-    def get_chat_id_by_name(self, user_id: int, name: str) -> int | None:
+    def get_chat_id_by_name(self, user_id: int, key_id: int | None, name: str) -> int | None:
         if not name:
             return None
+        cache_key = (user_id, key_id)
         with self._lock:
-            entry = self._chats.get(user_id)
+            entry = self._chats.get(cache_key)
             if not entry:
                 return None
             for chat in entry["items"]:
@@ -364,12 +379,13 @@ class ChatCache:
                     return chat.get("id")
         return None
 
-    def set_chats(self, user_id: int, items: list[dict]) -> None:
-        self._set_chats(user_id, items)
+    def set_chats(self, user_id: int, key_id: int | None, items: list[dict]) -> None:
+        self._set_chats(user_id, key_id, items)
 
-    def _set_chats(self, user_id: int, items: list[dict]) -> None:
+    def _set_chats(self, user_id: int, key_id: int | None, items: list[dict]) -> None:
+        cache_key = (user_id, key_id)
         with self._lock:
-            existing = self._chats.get(user_id, {}).get("items") if self._chats.get(user_id) else []
+            existing = self._chats.get(cache_key, {}).get("items") if self._chats.get(cache_key) else []
             avatar_map = {
                 chat.get("id"): chat.get("avatar_url")
                 for chat in (existing or [])
@@ -380,18 +396,20 @@ class ChatCache:
                 if not item.get("avatar_url") and item.get("id") in avatar_map:
                     item["avatar_url"] = avatar_map.get(item.get("id"))
                 merged.append(item)
-            self._chats[user_id] = {"items": merged, "ts": time.time()}
+            self._chats[cache_key] = {"items": merged, "ts": time.time()}
 
-    def _set_history(self, user_id: int, chat_id: int, items: list[dict]) -> None:
+    def _set_history(self, user_id: int, key_id: int | None, chat_id: int, items: list[dict]) -> None:
+        cache_key = (user_id, key_id)
         with self._lock:
-            user_hist = self._histories.setdefault(user_id, {})
+            user_hist = self._histories.setdefault(cache_key, {})
             trimmed = list(items)[-CHAT_HISTORY_MAX:]
             user_hist[chat_id] = {"items": trimmed, "ts": time.time()}
 
-    def append_message(self, user_id: int, chat_id: int, item: dict, max_items: int = CHAT_HISTORY_MAX) -> None:
+    def append_message(self, user_id: int, key_id: int | None, chat_id: int, item: dict, max_items: int = CHAT_HISTORY_MAX) -> None:
         now = time.time()
+        cache_key = (user_id, key_id)
         with self._lock:
-            user_hist = self._histories.setdefault(user_id, {})
+            user_hist = self._histories.setdefault(cache_key, {})
             entry = user_hist.get(chat_id)
             if not entry:
                 entry = {"items": [], "ts": now}
@@ -402,7 +420,7 @@ class ChatCache:
                 del items[:-max_items]
             entry["ts"] = now
 
-            chats_entry = self._chats.get(user_id)
+            chats_entry = self._chats.get(cache_key)
             if chats_entry:
                 for chat in chats_entry["items"]:
                     if chat.get("id") == chat_id:
@@ -439,57 +457,58 @@ class ChatCache:
         messages = account.get_chat_history(chat_id) or []
         items = []
         for message in messages:
-                items.append(
-                    {
-                        "id": message.id,
-                        "text": message.text,
-                        "author": message.author,
-                        "author_id": message.author_id,
-                        "chat_id": message.chat_id,
-                        "chat_name": message.chat_name,
-                        "image_link": message.image_link,
-                        "by_bot": message.by_bot,
-                        "type": message.type.name if message.type else None,
-                        "sent_time": _extract_message_time(message.html),
-                    }
-                )
+            items.append(
+                {
+                    "id": message.id,
+                    "text": message.text,
+                    "author": message.author,
+                    "author_id": message.author_id,
+                    "chat_id": message.chat_id,
+                    "chat_name": message.chat_name,
+                    "image_link": message.image_link,
+                    "by_bot": message.by_bot,
+                    "type": message.type.name if message.type else None,
+                    "sent_time": _extract_message_time(message.html),
+                }
+            )
         return items
 
-    def refresh_chats_sync(self, user_id: int, token: str) -> list[dict]:
+    def refresh_chats_sync(self, user_id: int, key_id: int | None, token: str) -> list[dict]:
         items = self._fetch_chats(token)
-        self._set_chats(user_id, items)
+        self._set_chats(user_id, key_id, items)
         return items
 
-    def refresh_history_sync(self, user_id: int, chat_id: int, token: str) -> list[dict]:
+    def refresh_history_sync(self, user_id: int, key_id: int | None, chat_id: int, token: str) -> list[dict]:
         items = self._fetch_history(token, chat_id)
-        self._set_history(user_id, chat_id, items)
+        self._set_history(user_id, key_id, chat_id, items)
         return items
 
-    def refresh_chats_async(self, user_id: int, token: str, on_done=None) -> None:
+    def refresh_chats_async(self, user_id: int, key_id: int | None, token: str, on_done=None) -> None:
+        cache_key = (user_id, key_id)
         with self._lock:
-            if user_id in self._refreshing_chats:
+            if cache_key in self._refreshing_chats:
                 return
-            self._refreshing_chats.add(user_id)
+            self._refreshing_chats.add(cache_key)
 
         def runner() -> None:
             try:
                 items = self._fetch_chats(token)
-                self._set_chats(user_id, items)
+                self._set_chats(user_id, key_id, items)
                 if on_done:
                     try:
                         on_done(items)
                     except Exception as exc:
-                        logger.warning(f"chats_async on_done failed for user {user_id}: {exc}")
+                        logger.warning(f"chats_async on_done failed for user {user_id} key {key_id}: {exc}")
             except Exception as exc:
-                logger.warning(f"Failed to refresh chats cache for user {user_id}: {exc}")
+                logger.warning(f"Failed to refresh chats cache for user {user_id} key {key_id}: {exc}")
             finally:
                 with self._lock:
-                    self._refreshing_chats.discard(user_id)
+                    self._refreshing_chats.discard(cache_key)
 
         Thread(target=runner, daemon=True).start()
 
-    def refresh_history_async(self, user_id: int, chat_id: int, token: str, on_done=None) -> None:
-        key = (user_id, chat_id)
+    def refresh_history_async(self, user_id: int, key_id: int | None, chat_id: int, token: str, on_done=None) -> None:
+        key = (user_id, chat_id, key_id)
         with self._lock:
             if key in self._refreshing_histories:
                 return
@@ -498,14 +517,14 @@ class ChatCache:
         def runner() -> None:
             try:
                 items = self._fetch_history(token, chat_id)
-                self._set_history(user_id, chat_id, items)
+                self._set_history(user_id, key_id, chat_id, items)
                 if on_done:
                     try:
                         on_done(items)
                     except Exception as exc:
-                        logger.warning(f"history_async on_done failed for user {user_id}, chat {chat_id}: {exc}")
+                        logger.warning(f"history_async on_done failed for user {user_id} key {key_id}: {exc}")
             except Exception as exc:
-                logger.warning(f"Failed to refresh history cache for user {user_id}, chat {chat_id}: {exc}")
+                logger.warning(f"Failed to refresh chat history cache for user {user_id} key {key_id}: {exc}")
             finally:
                 with self._lock:
                     self._refreshing_histories.discard(key)
@@ -768,22 +787,45 @@ def current_user_id(request: Request) -> int | None:
     return user.get("id") if user else None
 
 
-def require_funpay_token(request: Request) -> tuple[int, str]:
+def _resolve_key_id(request: Request) -> int | None:
+    header = request.headers.get("x-key-id") or request.headers.get("x-fp-key-id")
+    if header:
+        try:
+            return int(header)
+        except Exception:
+            return None
+    param = request.query_params.get("key_id")
+    if param:
+        try:
+            return int(param)
+        except Exception:
+            return None
+    return None
+
+
+def require_funpay_token(request: Request) -> tuple[int, str, int | None]:
     user = getattr(request.state, "user", None) or {}
-    token = user.get("golden_key")
-    if not token:
-        raise HTTPException(status_code=503, detail="FunPay golden key not configured")
     user_id = user.get("id")
     if user_id is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return user_id, token
+    key_id = _resolve_key_id(request)
+    token = None
+    if key_id is not None:
+        key_entry = db.get_user_key(user_id, key_id)
+        token = (key_entry or {}).get("golden_key")
+    if not token:
+        default_key = db.get_default_key(user_id)
+        token = (default_key or {}).get("golden_key") or user.get("golden_key")
+        if default_key:
+            key_id = default_key.get("id")
+    if not token:
+        raise HTTPException(status_code=503, detail="FunPay golden key not configured")
+    return user_id, token, key_id
 
 
 def require_funpay_account(request: Request):
     user = getattr(request.state, "user", None)
-    token = (user or {}).get("golden_key")
-    if not token:
-        raise HTTPException(status_code=503, detail="FunPay golden key not configured")
+    _, token, _ = require_funpay_token(request)
     try:
         acc = FPAccount(token).get()
     except Exception:
@@ -800,6 +842,7 @@ class AccountCreate(BaseModel):
     rental_duration: int = Field(default=1, ge=0)
     rental_minutes: int = Field(default=0, ge=0, le=59)
     owner: Optional[str] = None
+    key_id: Optional[int] = None
 
 
 class AccountUpdate(BaseModel):
@@ -810,6 +853,7 @@ class AccountUpdate(BaseModel):
     mmr: Optional[int] = Field(default=None, ge=0)
     rental_duration: Optional[int] = Field(default=None, ge=0)
     rental_minutes: Optional[int] = Field(default=None, ge=0, le=59)
+    key_id: Optional[int] = None
 
 
 class AssignRequest(BaseModel):
@@ -833,6 +877,7 @@ class LotMapping(BaseModel):
     lot_number: int = Field(ge=1)
     account_id: int = Field(ge=1)
     lot_url: Optional[str] = None
+    key_id: Optional[int] = None
 
 
 class SteamPasswordRequest(BaseModel):
@@ -869,6 +914,18 @@ class BlacklistUpdate(BaseModel):
     reason: Optional[str] = None
 
 
+class KeyCreate(BaseModel):
+    label: str
+    golden_key: str
+    make_default: bool = False
+
+
+class KeyUpdate(BaseModel):
+    label: Optional[str] = None
+    golden_key: Optional[str] = None
+    make_default: Optional[bool] = None
+
+
 @app.get("/api/health")
 def health() -> dict:
     funpay_available = db.has_any_golden_key()
@@ -887,7 +944,7 @@ def auth_register(payload: AuthRegister, request: Request, response: Response) -
         raise HTTPException(status_code=400, detail="User already exists or invalid data")
     user = db.get_user_by_username(payload.username)
     if user:
-        bot_manager.start_for_user(user["id"], user["golden_key"])
+        bot_manager.start_for_user_key(user["id"], None, user["golden_key"])
         now = datetime.utcnow()
         expires_at = now + timedelta(days=SESSION_TTL_DAYS)
         session_id = db.create_session(user["id"], expires_at, now)
@@ -905,7 +962,7 @@ def auth_login(payload: AuthLogin, request: Request, response: Response) -> dict
     expires_at = now + timedelta(days=SESSION_TTL_DAYS)
     session_id = db.create_session(user["id"], expires_at, now)
     _set_session_cookie(response, request, session_id)
-    bot_manager.start_for_user(user["id"], user["golden_key"])
+    bot_manager.start_for_user_key(user["id"], None, user["golden_key"])
     return {"username": user["username"]}
 
 
@@ -936,14 +993,75 @@ def auth_update_golden(payload: GoldenKeyUpdate, request: Request) -> dict:
     ok = db.update_golden_key(user["id"], payload.golden_key)
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update golden key")
-    bot_manager.start_for_user(user["id"], payload.golden_key)
+    bot_manager.start_for_user_key(user["id"], None, payload.golden_key)
+    return {"success": True}
+
+
+@app.get("/api/keys", dependencies=[Depends(require_admin)])
+def list_keys(request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    items = db.list_user_keys(user.get("id"))
+    return {"items": items}
+
+
+@app.post("/api/keys", dependencies=[Depends(require_admin)])
+def create_key(payload: KeyCreate, request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    label = (payload.label or "").strip() or "Key"
+    golden_key = (payload.golden_key or "").strip()
+    if not golden_key:
+        raise HTTPException(status_code=400, detail="golden_key is required")
+    key_id = db.add_user_key(user.get("id"), label, golden_key, payload.make_default)
+    if key_id is None:
+        raise HTTPException(status_code=400, detail="Failed to create key")
+    bot_manager.start_for_user_key(user.get("id"), key_id, golden_key)
+    return {"id": key_id}
+
+
+@app.patch("/api/keys/{key_id}", dependencies=[Depends(require_admin)])
+def update_key(key_id: int, payload: KeyUpdate, request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    ok = db.update_user_key(
+        user.get("id"),
+        key_id,
+        label=payload.label,
+        golden_key=payload.golden_key,
+        make_default=payload.make_default,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to update key")
+    if payload.golden_key:
+        bot_manager.start_for_user_key(user.get("id"), key_id, payload.golden_key)
+    return {"success": True}
+
+
+@app.post("/api/keys/{key_id}/default", dependencies=[Depends(require_admin)])
+def set_default_key(key_id: int, request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    ok = db.update_user_key(user.get("id"), key_id, make_default=True)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to set default key")
+    key = db.get_user_key(user.get("id"), key_id)
+    if key and key.get("golden_key"):
+        bot_manager.start_for_user_key(user.get("id"), key_id, key.get("golden_key"))
+    return {"success": True}
+
+
+@app.delete("/api/keys/{key_id}", dependencies=[Depends(require_admin)])
+def delete_key(key_id: int, request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    ok = db.delete_user_key(user.get("id"), key_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to delete key")
+    bot_manager.stop_for_user_key(user.get("id"), key_id)
     return {"success": True}
 
 
 @app.get("/api/stats", dependencies=[Depends(require_admin)])
 def stats(request: Request) -> dict:
     uid = current_user_id(request)
-    return db.get_rental_statistics(uid)
+    key_id = _resolve_key_id(request)
+    return db.get_rental_statistics(uid, key_id=key_id)
 
 
 @app.get("/api/notifications", dependencies=[Depends(require_admin)])
@@ -953,9 +1071,9 @@ def notifications(limit: int = 50) -> dict:
 
 @app.get("/api/funpay/stats", dependencies=[Depends(require_admin)])
 def funpay_stats(request: Request, refresh: bool = False) -> dict:
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     now = datetime.utcnow()
-    latest = db.get_latest_balance_snapshot(user_id)
+    latest = db.get_latest_balance_snapshot(user_id, key_id=key_id)
 
     latest_dt = None
     if latest and latest.get("created_at"):
@@ -989,6 +1107,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
                     balance.get("available_rub"),
                     balance.get("total_usd"),
                     balance.get("total_eur"),
+                    key_id=key_id,
                 )
                 latest = {
                     **balance,
@@ -997,7 +1116,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
         except Exception as exc:
             logger.warning(f"Failed to refresh FunPay balance: {exc}")
 
-    snapshots = db.get_balance_snapshots(user_id, BALANCE_SERIES_DAYS)
+    snapshots = db.get_balance_snapshots(user_id, BALANCE_SERIES_DAYS, key_id=key_id)
     if not snapshots and latest and latest.get("total_rub") is not None:
         snapshots = [
             {
@@ -1014,6 +1133,7 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
         user_id,
         actions=["issued", "extended"],
         days=STATS_SERIES_DAYS,
+        key_id=key_id,
     )
     review_counts = db.get_review_counts_by_day(user_id, STATS_SERIES_DAYS)
 
@@ -1038,10 +1158,11 @@ def funpay_stats(request: Request, refresh: bool = False) -> dict:
 @app.get("/api/orders/resolve", dependencies=[Depends(require_admin)])
 def resolve_order_owner(request: Request, order_id: str) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     order_key = (order_id or "").strip()
     if not order_key:
         raise HTTPException(status_code=400, detail="order_id is required")
-    items = db.search_order_history(query=order_key, limit=5, user_id=uid)
+    items = db.search_order_history(query=order_key, limit=5, user_id=uid, key_id=key_id)
     if not items:
         raise HTTPException(status_code=404, detail="Order not found")
     order_key_lower = order_key.lower()
@@ -1070,6 +1191,7 @@ def orders_history(
     include_chat: bool = True,
 ) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     q = (query or "").strip()
     limit_value = max(1, min(int(limit or 200), 500))
     steamid_query = q if re.fullmatch(r"7656119\d{10}", q) else None
@@ -1079,7 +1201,7 @@ def orders_history(
     account_names: list[str] | None = None
 
     if steamid_query:
-        accounts = db.get_all_accounts(uid)
+        accounts = db.get_all_accounts(uid, key_id=key_id)
         account_ids = []
         account_names = []
         for acc in accounts:
@@ -1100,16 +1222,18 @@ def orders_history(
             user_id=uid,
             account_ids=account_ids,
             account_names=account_names,
+            key_id=key_id,
         )
     else:
         items = db.search_order_history(
             query=q or None,
             limit=limit_value,
             user_id=uid,
+            key_id=key_id,
         )
 
     if accounts is None:
-        accounts = db.get_all_accounts(uid)
+        accounts = db.get_all_accounts(uid, key_id=key_id)
 
     account_by_id = {}
     account_by_name = {}
@@ -1133,9 +1257,15 @@ def orders_history(
                 steam_map[login] = steam_value
 
     chat_map = {}
-    token = (getattr(request.state, "user", None) or {}).get("golden_key")
+    token = None
+    if include_chat:
+        try:
+            _, token, resolved_key_id = require_funpay_token(request)
+            key_id = resolved_key_id
+        except HTTPException:
+            token = None
     if include_chat and token:
-        cached_chats, ts = chat_cache.get_cached_chats(uid)
+        cached_chats, ts = chat_cache.get_cached_chats(uid, key_id)
         if cached_chats:
             chat_map = {
                 chat.get("name"): chat.get("id")
@@ -1143,13 +1273,13 @@ def orders_history(
                 if chat.get("name")
             }
             if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
-                chat_cache.refresh_chats_async(uid, token)
+                chat_cache.refresh_chats_async(uid, key_id, token)
         else:
             if fast:
-                chat_cache.refresh_chats_async(uid, token)
+                chat_cache.refresh_chats_async(uid, key_id, token)
             else:
                 try:
-                    chats = chat_cache.refresh_chats_sync(uid, token)
+                    chats = chat_cache.refresh_chats_sync(uid, key_id, token)
                     chat_map = {
                         chat.get("name"): chat.get("id")
                         for chat in chats
@@ -1235,17 +1365,19 @@ def orders_history(
 @app.get("/api/blacklist", dependencies=[Depends(require_admin)])
 def blacklist_list(request: Request, query: str = "") -> dict:
     uid = current_user_id(request)
-    items = db.list_blacklist(uid, query=query or None)
+    key_id = _resolve_key_id(request)
+    items = db.list_blacklist(uid, query=query or None, key_id=key_id)
     return {"items": items}
 
 
 @app.post("/api/blacklist", dependencies=[Depends(require_admin)])
 def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     owner = (payload.owner or "").strip()
     order_id = (payload.order_id or "").strip()
     if not owner and order_id:
-        items = db.search_order_history(query=order_id, limit=5, user_id=uid)
+        items = db.search_order_history(query=order_id, limit=5, user_id=uid, key_id=key_id)
         if not items:
             raise HTTPException(status_code=404, detail="Order not found")
         order_key = order_id.lower()
@@ -1257,7 +1389,7 @@ def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
         owner = str(item.get("owner") or "").strip()
     if not owner:
         raise HTTPException(status_code=400, detail="Owner is required")
-    success = db.add_blacklist_entry(owner, payload.reason, uid)
+    success = db.add_blacklist_entry(owner, payload.reason, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="User already blacklisted")
     return {"success": True}
@@ -1266,10 +1398,11 @@ def blacklist_add(payload: BlacklistCreate, request: Request) -> dict:
 @app.patch("/api/blacklist/{entry_id}", dependencies=[Depends(require_admin)])
 def blacklist_update(entry_id: int, payload: BlacklistUpdate, request: Request) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     owner = (payload.owner or "").strip()
     if not owner:
         raise HTTPException(status_code=400, detail="Owner is required")
-    updated = db.update_blacklist_entry(entry_id, owner, payload.reason, uid)
+    updated = db.update_blacklist_entry(entry_id, owner, payload.reason, uid, key_id=key_id)
     if not updated:
         raise HTTPException(status_code=400, detail="Failed to update blacklist entry")
     return {"success": True}
@@ -1278,14 +1411,16 @@ def blacklist_update(entry_id: int, payload: BlacklistUpdate, request: Request) 
 @app.post("/api/blacklist/remove", dependencies=[Depends(require_admin)])
 def blacklist_remove(payload: BlacklistRemove, request: Request) -> dict:
     uid = current_user_id(request)
-    removed = db.remove_blacklist_entries(payload.owners, uid)
+    key_id = _resolve_key_id(request)
+    removed = db.remove_blacklist_entries(payload.owners, uid, key_id=key_id)
     return {"removed": removed}
 
 
 @app.post("/api/blacklist/clear", dependencies=[Depends(require_admin)])
 def blacklist_clear(request: Request) -> dict:
     uid = current_user_id(request)
-    removed = db.clear_blacklist(uid)
+    key_id = _resolve_key_id(request)
+    removed = db.clear_blacklist(uid, key_id=key_id)
     return {"removed": removed}
 
 
@@ -1331,8 +1466,10 @@ def _annotate_admin_calls(items: list[dict]) -> list[dict]:
     return annotated
 
 
-def _attach_admin_call_counts(items: list[dict], user_id: int) -> list[dict]:
-    counts = db.get_admin_call_counts(user_id)
+def _attach_admin_call_counts(
+    items: list[dict], user_id: int, key_id: int | None = None
+) -> list[dict]:
+    counts = db.get_admin_call_counts(user_id, key_id=key_id)
     merged: list[dict] = []
     for item in items:
         entry = dict(item)
@@ -1597,7 +1734,8 @@ def _presence_for_steamid_cached(
 @app.get("/api/accounts", dependencies=[Depends(require_admin)])
 async def accounts(request: Request, include_steamid: bool = False) -> dict:
     uid = current_user_id(request)
-    items = db.get_all_accounts(uid)
+    key_id = _resolve_key_id(request)
+    items = db.get_all_accounts(uid, key_id=key_id)
     if not items:
         return {"items": items}
 
@@ -1612,13 +1750,15 @@ async def accounts(request: Request, include_steamid: bool = False) -> dict:
 @app.get("/api/lots", dependencies=[Depends(require_admin)])
 def lots(request: Request) -> dict:
     uid = current_user_id(request)
-    return {"items": db.list_lot_mappings(uid)}
+    key_id = _resolve_key_id(request)
+    return {"items": db.list_lot_mappings(uid, key_id=key_id)}
 
 
 @app.post("/api/lots", dependencies=[Depends(require_admin)])
 def create_lot_mapping(payload: LotMapping, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.set_lot_mapping(payload.lot_number, payload.account_id, payload.lot_url, uid)
+    key_id = payload.key_id if payload.key_id is not None else _resolve_key_id(request)
+    success = db.set_lot_mapping(payload.lot_number, payload.account_id, payload.lot_url, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True}
@@ -1627,14 +1767,16 @@ def create_lot_mapping(payload: LotMapping, request: Request) -> dict:
 @app.delete("/api/lots/{lot_number}", dependencies=[Depends(require_admin)])
 def delete_lot_mapping(lot_number: int, request: Request) -> dict:
     uid = current_user_id(request)
-    db.delete_lot_mapping(lot_number, uid)
+    key_id = _resolve_key_id(request)
+    db.delete_lot_mapping(lot_number, uid, key_id=key_id)
     return {"success": True}
 
 
 @app.get("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
 def account_detail(account_id: int, request: Request) -> dict:
     uid = current_user_id(request)
-    account = db.get_account_by_id(account_id, uid)
+    key_id = _resolve_key_id(request)
+    account = db.get_account_by_id(account_id, uid, key_id=key_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
@@ -1648,6 +1790,7 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
     if total_minutes <= 0:
         raise HTTPException(status_code=400, detail="Rental duration must be greater than 0")
     uid = current_user_id(request)
+    key_id = payload.key_id if payload.key_id is not None else _resolve_key_id(request)
     success = db.add_account(
         payload.account_name,
         "",
@@ -1659,6 +1802,7 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
         user_id=uid,
         duration_minutes=total_minutes,
         mmr=payload.mmr,
+        key_id=key_id,
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to create account")
@@ -1668,12 +1812,13 @@ def create_account(payload: AccountCreate, request: Request) -> dict:
 @app.patch("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
 def update_account(account_id: int, payload: AccountUpdate, request: Request) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     fields = payload.dict(exclude_none=True)
     duration_hours = fields.pop("rental_duration", None)
     duration_minutes = fields.pop("rental_minutes", None)
     if duration_hours is not None or duration_minutes is not None:
         if duration_hours is None or duration_minutes is None:
-            existing = db.get_account_by_id(account_id, uid)
+            existing = db.get_account_by_id(account_id, uid, key_id=key_id)
             if not existing:
                 raise HTTPException(status_code=404, detail="Account not found")
             if duration_hours is None:
@@ -1688,7 +1833,7 @@ def update_account(account_id: int, payload: AccountUpdate, request: Request) ->
             raise HTTPException(status_code=400, detail="Rental duration must be greater than 0")
         fields["rental_duration"] = int(duration_hours)
         fields["rental_duration_minutes"] = total_minutes
-    success = db.update_account(account_id, fields, uid)
+    success = db.update_account(account_id, fields, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update account")
     return {"status": "ok"}
@@ -1697,7 +1842,8 @@ def update_account(account_id: int, payload: AccountUpdate, request: Request) ->
 @app.delete("/api/accounts/{account_id}", dependencies=[Depends(require_admin)])
 def delete_account(account_id: int, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.delete_account_by_id(account_id, uid)
+    key_id = _resolve_key_id(request)
+    success = db.delete_account_by_id(account_id, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"status": "ok"}
@@ -1706,7 +1852,8 @@ def delete_account(account_id: int, request: Request) -> dict:
 @app.post("/api/accounts/{account_id}/assign", dependencies=[Depends(require_admin)])
 def assign_account(account_id: int, payload: AssignRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.set_account_owner(account_id, payload.owner, uid)
+    key_id = _resolve_key_id(request)
+    success = db.set_account_owner(account_id, payload.owner, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="Account already assigned")
     return {"status": "ok"}
@@ -1715,7 +1862,8 @@ def assign_account(account_id: int, payload: AssignRequest, request: Request) ->
 @app.post("/api/accounts/{account_id}/release", dependencies=[Depends(require_admin)])
 def release_account(account_id: int, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.release_account(account_id, uid)
+    key_id = _resolve_key_id(request)
+    success = db.release_account(account_id, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"status": "ok"}
@@ -1724,10 +1872,11 @@ def release_account(account_id: int, request: Request) -> dict:
 @app.post("/api/accounts/{account_id}/extend", dependencies=[Depends(require_admin)])
 def extend_account(account_id: int, payload: ExtendRequest, request: Request) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     total_minutes = payload.hours * 60 + payload.minutes
     if total_minutes <= 0:
         raise HTTPException(status_code=400, detail="Extension must be greater than 0")
-    success = db.extend_rental_duration(account_id, payload.hours, payload.minutes, uid)
+    success = db.extend_rental_duration(account_id, payload.hours, payload.minutes, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rental")
     return {"status": "ok"}
@@ -1736,7 +1885,8 @@ def extend_account(account_id: int, payload: ExtendRequest, request: Request) ->
 @app.post("/api/accounts/{account_id}/freeze", dependencies=[Depends(require_admin)])
 def freeze_account(account_id: int, payload: FreezeRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    success = db.set_account_frozen(account_id, payload.frozen, uid)
+    key_id = _resolve_key_id(request)
+    success = db.set_account_frozen(account_id, payload.frozen, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True, "frozen": payload.frozen}
@@ -1745,7 +1895,8 @@ def freeze_account(account_id: int, payload: FreezeRequest, request: Request) ->
 @app.post("/api/rentals/{account_id}/freeze", dependencies=[Depends(require_admin)])
 async def freeze_rental(account_id: int, payload: FreezeRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    account = db.get_account_by_id(account_id, uid)
+    key_id = _resolve_key_id(request)
+    account = db.get_account_by_id(account_id, uid, key_id=key_id)
     if not account or not account.get("owner") or account.get("owner") == "OTHER_ACCOUNT":
         raise HTTPException(status_code=404, detail="Rental not found")
 
@@ -1754,7 +1905,7 @@ async def freeze_rental(account_id: int, payload: FreezeRequest, request: Reques
     if payload.frozen:
         if account.get("rental_frozen"):
             return {"success": True, "frozen": True}
-        ok = db.set_rental_freeze_state(account_id, True, frozen_at=now, user_id=uid)
+        ok = db.set_rental_freeze_state(account_id, True, frozen_at=now, user_id=uid, key_id=key_id)
         if not ok:
             raise HTTPException(status_code=400, detail="Failed to freeze rental")
         try:
@@ -1773,6 +1924,7 @@ async def freeze_rental(account_id: int, payload: FreezeRequest, request: Reques
                 owner,
                 "Администратор заморозил вашу аренду. Вход и Steam Guard временно отключены. "
                 "Если нужна помощь — !админ.",
+                key_id=key_id,
             )
         return {"success": True, "frozen": True}
 
@@ -1798,7 +1950,7 @@ async def freeze_rental(account_id: int, payload: FreezeRequest, request: Reques
             logger.warning(f"Failed to adjust rental_start for account {account_id}: {exc}")
             new_start = None
 
-    ok = db.set_rental_freeze_state(account_id, False, rental_start=new_start, user_id=uid)
+    ok = db.set_rental_freeze_state(account_id, False, rental_start=new_start, user_id=uid, key_id=key_id)
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to unfreeze rental")
     return {"success": True, "frozen": False}
@@ -1807,7 +1959,8 @@ async def freeze_rental(account_id: int, payload: FreezeRequest, request: Reques
 @app.post("/api/accounts/{account_id}/steam/deauthorize", dependencies=[Depends(require_admin)])
 async def steam_deauthorize(account_id: int, request: Request) -> dict:
     uid = current_user_id(request)
-    account = db.get_account_by_id(account_id, uid)
+    key_id = _resolve_key_id(request)
+    account = db.get_account_by_id(account_id, uid, key_id=key_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     mafile_json = account.get("mafile_json")
@@ -1845,7 +1998,8 @@ async def steam_deauthorize(account_id: int, request: Request) -> dict:
 @app.post("/api/accounts/{account_id}/steam/password", dependencies=[Depends(require_admin)])
 async def steam_change_password(account_id: int, payload: SteamPasswordRequest, request: Request) -> dict:
     uid = current_user_id(request)
-    account = db.get_account_by_id(account_id, uid)
+    key_id = _resolve_key_id(request)
+    account = db.get_account_by_id(account_id, uid, key_id=key_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     mafile_json = account.get("mafile_json")
@@ -1873,7 +2027,7 @@ async def steam_change_password(account_id: int, payload: SteamPasswordRequest, 
     if login:
         db.update_password_by_login(login, updated_password)
     else:
-        db.update_account(account_id, {"password": updated_password})
+        db.update_account(account_id, {"password": updated_password}, uid, key_id=key_id)
 
     return {"success": True, "new_password": updated_password}
 
@@ -1887,19 +2041,26 @@ def active_rentals(
     include_steamid: bool = False,
 ) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     expand_set = {part.strip().lower() for part in (expand or "").split(",") if part.strip()}
     include_presence = "presence" in expand_set or "all" in expand_set or not expand_set
     include_chat = "chat" in expand_set or "all" in expand_set
     max_age = max(0.0, float(max_age))
 
     include_mafile = include_presence or include_steamid
-    items = db.get_active_users(uid, include_mafile=include_mafile)
-    token = (getattr(request.state, "user", None) or {}).get("golden_key")
-    admin_calls_by_owner = db.get_admin_call_counts_by_owner(uid)
+    items = db.get_active_users(uid, include_mafile=include_mafile, key_id=key_id)
+    token = None
+    if include_chat:
+        try:
+            _, token, resolved_key_id = require_funpay_token(request)
+            key_id = resolved_key_id
+        except HTTPException:
+            token = None
+    admin_calls_by_owner = db.get_admin_call_counts_by_owner(uid, key_id=key_id)
 
     chat_map = {}
     if include_chat and token:
-        cached_chats, ts = chat_cache.get_cached_chats(uid)
+        cached_chats, ts = chat_cache.get_cached_chats(uid, key_id)
         if cached_chats:
             chat_map = {
                 chat.get("name"): chat.get("id")
@@ -1907,13 +2068,13 @@ def active_rentals(
                 if chat.get("name")
             }
             if fast and (ts is None or time.time() - ts > CHAT_LIST_TTL):
-                chat_cache.refresh_chats_async(uid, token)
+                chat_cache.refresh_chats_async(uid, key_id, token)
         else:
             if fast:
-                chat_cache.refresh_chats_async(uid, token)
+                chat_cache.refresh_chats_async(uid, key_id, token)
             else:
                 try:
-                    chats = chat_cache.refresh_chats_sync(uid, token)
+                    chats = chat_cache.refresh_chats_sync(uid, key_id, token)
                     chat_map = {
                         chat.get("name"): chat.get("id")
                         for chat in chats
@@ -1956,16 +2117,18 @@ def active_rentals(
 @app.get("/api/rentals/user/{owner}", dependencies=[Depends(require_admin)])
 def user_rentals(owner: str, request: Request) -> dict:
     uid = current_user_id(request)
-    return {"items": db.get_user_active_accounts(owner, uid)}
+    key_id = _resolve_key_id(request)
+    return {"items": db.get_user_active_accounts(owner, uid, key_id=key_id)}
 
 
 @app.post("/api/rentals/user/{owner}/extend", dependencies=[Depends(require_admin)])
 def extend_owner(owner: str, payload: ExtendRequest, request: Request) -> dict:
     uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
     total_minutes = payload.hours * 60 + payload.minutes
     if total_minutes <= 0:
         raise HTTPException(status_code=400, detail="Extension must be greater than 0")
-    success = db.add_time_to_owner_accounts(owner, payload.hours, payload.minutes, uid)
+    success = db.add_time_to_owner_accounts(owner, payload.hours, payload.minutes, uid, key_id=key_id)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to extend rentals")
     return {"status": "ok"}
@@ -1978,24 +2141,24 @@ def chats(
     refresh: bool = False,
     max_age: float = CHAT_LIST_TTL,
 ) -> dict:
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
-    cached, ts = chat_cache.get_cached_chats(user_id)
+    cached, ts = chat_cache.get_cached_chats(user_id, key_id)
     now = time.time()
 
     if fast and cached is not None:
         if refresh or ts is None or now - ts > max_age:
-            chat_cache.refresh_chats_async(user_id, token)
-        items_with_calls = _attach_admin_call_counts(cached, user_id)
+            chat_cache.refresh_chats_async(user_id, key_id, token)
+        items_with_calls = _attach_admin_call_counts(cached, user_id, key_id)
         return _etag_response(request, {"items": items_with_calls})
 
     try:
-        items = chat_cache.refresh_chats_sync(user_id, token)
-        items_with_calls = _attach_admin_call_counts(items, user_id)
+        items = chat_cache.refresh_chats_sync(user_id, key_id, token)
+        items_with_calls = _attach_admin_call_counts(items, user_id, key_id)
         return _etag_response(request, {"items": items_with_calls})
     except Exception as exc:
         if cached is not None:
-            items_with_calls = _attach_admin_call_counts(cached, user_id)
+            items_with_calls = _attach_admin_call_counts(cached, user_id, key_id)
             return _etag_response(request, {"items": items_with_calls})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -2006,7 +2169,7 @@ async def stream_chats(
     max_age: float = CHAT_LIST_TTL,
     interval: float = 2.5,
 ) -> Response:
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     interval = max(1.0, float(interval))
 
@@ -2016,15 +2179,15 @@ async def stream_chats(
         while True:
             if await request.is_disconnected():
                 break
-            cached, ts = chat_cache.get_cached_chats(user_id)
+            cached, ts = chat_cache.get_cached_chats(user_id, key_id)
             now = time.time()
             items = cached
             if cached is None or ts is None or now - ts > max_age:
                 try:
-                    items = chat_cache.refresh_chats_sync(user_id, token)
+                    items = chat_cache.refresh_chats_sync(user_id, key_id, token)
                 except Exception:
                     items = cached or []
-            merged = _attach_admin_call_counts(items or [], user_id)
+            merged = _attach_admin_call_counts(items or [], user_id, key_id)
             payload = {"items": merged}
             encoded = jsonable_encoder(payload)
             etag = _payload_etag({"user_id": user_id, "payload": encoded})
@@ -2045,7 +2208,8 @@ async def stream_chats(
 @app.post("/api/admin-calls/{chat_id}/clear", dependencies=[Depends(require_admin)])
 def clear_admin_call(chat_id: int, request: Request) -> dict:
     uid = current_user_id(request)
-    cleared = db.clear_admin_call(chat_id, uid)
+    key_id = _resolve_key_id(request)
+    cleared = db.clear_admin_call(chat_id, uid, key_id=key_id)
     return {"cleared": bool(cleared)}
 
 
@@ -2058,28 +2222,28 @@ def chat_history(
     refresh: bool = False,
     max_age: float = CHAT_HISTORY_TTL,
 ) -> dict:
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
 
-    cached, ts = chat_cache.get_cached_history(user_id, chat_id)
+    cached, ts = chat_cache.get_cached_history(user_id, key_id, chat_id)
     now = time.time()
     if fast and cached is not None:
         if refresh:
             try:
-                items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+                items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
                 items = _annotate_admin_calls(items[-limit:])
                 return _etag_response(request, {"items": items})
             except Exception:
                 items = _annotate_admin_calls(cached[-limit:])
                 return _etag_response(request, {"items": items})
         if ts is None or now - ts > max_age:
-            chat_cache.refresh_history_async(user_id, chat_id, token)
+            chat_cache.refresh_history_async(user_id, key_id, chat_id, token)
         items = _annotate_admin_calls(cached[-limit:])
         return _etag_response(request, {"items": items})
 
     try:
-        items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+        items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
         items = _annotate_admin_calls(items[-limit:])
         return _etag_response(request, {"items": items})
     except Exception as exc:
@@ -2097,7 +2261,7 @@ async def stream_chat_history(
     max_age: float = CHAT_HISTORY_TTL,
     interval: float = 2.0,
 ) -> Response:
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     max_age = max(0.0, float(max_age))
     interval = max(1.0, float(interval))
     limit = max(1, min(int(limit), CHAT_HISTORY_MAX))
@@ -2108,12 +2272,12 @@ async def stream_chat_history(
         while True:
             if await request.is_disconnected():
                 break
-            cached, ts = chat_cache.get_cached_history(user_id, chat_id)
+            cached, ts = chat_cache.get_cached_history(user_id, key_id, chat_id)
             now = time.time()
             items = cached
             if cached is None or ts is None or now - ts > max_age:
                 try:
-                    items = chat_cache.refresh_history_sync(user_id, chat_id, token)
+                    items = chat_cache.refresh_history_sync(user_id, key_id, chat_id, token)
                 except Exception:
                     items = cached or []
             payload = {"items": _annotate_admin_calls((items or [])[-limit:])}
@@ -2143,18 +2307,38 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         return
     await websocket.accept()
     user_id = session.get("user_id")
-    token = session.get("golden_key") or ""
     if user_id is None:
         await websocket.close(code=4401)
         return
-    await realtime_manager.connect(websocket, int(user_id))
+    raw_key_id = (
+        websocket.query_params.get("key_id")
+        or websocket.query_params.get("keyId")
+        or websocket.query_params.get("key")
+    )
+    key_id: int | None = None
+    if raw_key_id:
+        try:
+            key_id = int(raw_key_id)
+        except Exception:
+            key_id = None
+    token = ""
+    if key_id is not None:
+        key_entry = db.get_user_key(int(user_id), key_id)
+        token = (key_entry or {}).get("golden_key") or ""
+    if not token:
+        default_key = db.get_default_key(int(user_id))
+        token = (default_key or {}).get("golden_key") or session.get("golden_key") or ""
+        if default_key:
+            key_id = default_key.get("id")
+
+    await realtime_manager.connect(websocket, int(user_id), key_id)
 
     try:
-        await websocket.send_json({"type": "hello", "user_id": int(user_id)})
+        await websocket.send_json({"type": "hello", "user_id": int(user_id), "key_id": key_id})
 
         items: list[dict] = []
         if token:
-            cached, ts = chat_cache.get_cached_chats(int(user_id))
+            cached, ts = chat_cache.get_cached_chats(int(user_id), key_id)
             now = time.time()
             fresh = cached is not None and ts is not None and now - ts <= CHAT_LIST_TTL
             if fresh:
@@ -2164,13 +2348,15 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 items = cached or []
                 chat_cache.refresh_chats_async(
                     int(user_id),
+                    key_id,
                     token,
                     on_done=lambda updated: broadcast_to_user(
                         int(user_id),
-                        {"type": "chats:list", "items": _attach_admin_call_counts(updated, int(user_id))},
+                        {"type": "chats:list", "items": _attach_admin_call_counts(updated, int(user_id), key_id)},
+                        key_id,
                     ),
                 )
-            items = _attach_admin_call_counts(items, int(user_id))
+            items = _attach_admin_call_counts(items, int(user_id), key_id)
         await websocket.send_json({"type": "chats:list", "items": items})
 
         while True:
@@ -2199,7 +2385,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await realtime_manager.subscribe(websocket, chat_id)
                 history_items: list[dict] = []
                 if token:
-                    cached, ts = chat_cache.get_cached_history(int(user_id), chat_id)
+                    cached, ts = chat_cache.get_cached_history(int(user_id), key_id, chat_id)
                     now = time.time()
                     fresh = cached is not None and ts is not None and now - ts <= CHAT_HISTORY_TTL
                     if fresh:
@@ -2208,6 +2394,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         history_items = cached or []
                         chat_cache.refresh_history_async(
                             int(user_id),
+                            key_id,
                             chat_id,
                             token,
                             on_done=lambda updated: broadcast_to_user_chat(
@@ -2218,6 +2405,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                                     "chat_id": chat_id,
                                     "items": _annotate_admin_calls(updated[-CHAT_HISTORY_MAX:]),
                                 },
+                                key_id,
                             ),
                         )
                 history_items = _annotate_admin_calls(history_items[-CHAT_HISTORY_MAX:])
@@ -2251,7 +2439,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     continue
                 try:
                     account = FPAccount(token).get()
-                    cached_chat = chat_cache.get_chat_summary(int(user_id), chat_id)
+                    cached_chat = chat_cache.get_chat_summary(int(user_id), key_id, chat_id)
                     chat_name = cached_chat.get("name") if cached_chat else None
                     message = account.send_message(chat_id, text, chat_name)
                     sent_time = _extract_message_time(getattr(message, "html", None))
@@ -2269,7 +2457,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "type": message.type.name if message.type else None,
                         "sent_time": sent_time,
                     }
-                    publish_chat_message(int(user_id), chat_id, item)
+                    publish_chat_message(int(user_id), key_id, chat_id, item)
                     await websocket.send_json(
                         {"type": "send:ok", "chat_id": chat_id, "message_id": message.id}
                     )
@@ -2284,10 +2472,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Message text is required")
-    user_id, token = require_funpay_token(request)
+    user_id, token, key_id = require_funpay_token(request)
     try:
         account = FPAccount(token).get()
-        cached_chat = chat_cache.get_chat_summary(user_id, chat_id)
+        cached_chat = chat_cache.get_chat_summary(user_id, key_id, chat_id)
         chat_name = cached_chat.get("name") if cached_chat else None
         message = account.send_message(chat_id, payload.text, chat_name)
         sent_time = _extract_message_time(getattr(message, "html", None))
@@ -2305,7 +2493,7 @@ def chat_send(chat_id: int, payload: ChatMessage, request: Request) -> dict:
             "type": message.type.name if message.type else None,
             "sent_time": sent_time,
         }
-        chat_cache.append_message(user_id, chat_id, item)
+        chat_cache.append_message(user_id, key_id, chat_id, item)
         return {"status": "ok", "message_id": message.id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

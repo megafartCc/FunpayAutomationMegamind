@@ -102,10 +102,12 @@ class FunpayBot:
         token: Optional[str] = None,
         db: Optional[MySQLDB] = None,
         user_id: Optional[int] = None,
+        key_id: Optional[int] = None,
     ) -> None:
         self._token = token
         self._db = db or MySQLDB()
         self._user_id = user_id
+        self._key_id = key_id
 
         self._acc: Optional[Account] = None
         self._runner: Optional[Runner] = None
@@ -179,7 +181,7 @@ class FunpayBot:
             return "\n".join(lines)
 
         candidates = self._db.get_lot_accounts_by_mmr_range(
-            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id
+            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id, key_id=self._key_id
         )
         candidates = [item for item in candidates if item.get("id") != account.get("id")]
         available = [item for item in candidates if not item.get("owner")]
@@ -245,7 +247,7 @@ class FunpayBot:
             return None
 
         candidates = self._db.get_lot_accounts_by_mmr_range(
-            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id
+            int(target_mmr), MMR_RANGE_DEFAULT, self._user_id, key_id=self._key_id
         )
         available: list[dict] = []
         for item in candidates:
@@ -413,10 +415,10 @@ class FunpayBot:
         self._last_refresh_ts = now
 
     def _get_active_accounts_for_owner(self, owner: str) -> list[dict]:
-        return self._db.get_user_active_accounts(owner, self._user_id) or []
+        return self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id) or []
 
     def _get_available_lots(self) -> list[dict]:
-        return self._db.get_available_lot_accounts(self._user_id) or []
+        return self._db.get_available_lot_accounts(self._user_id, key_id=self._key_id) or []
 
     def _clean_account_label(self, text: Optional[str]) -> str:
         if not text:
@@ -484,6 +486,7 @@ class FunpayBot:
             amount=amount,
             price=price,
             user_id=self._user_id,
+            key_id=self._key_id,
         )
 
         send_message_to_admin(
@@ -525,7 +528,7 @@ class FunpayBot:
             logger.warning(f"Skipping order {order_id}: chat id not found")
             return
 
-        if self._db.is_blacklisted(buyer, self._user_id):
+        if self._db.is_blacklisted(buyer, self._user_id, key_id=self._key_id):
             acc.send_message(
                 chat_id,
                 "Вы находитесь в черном списке. Вы можете оплатить компенсацию за нарушения правил аренды "
@@ -549,6 +552,7 @@ class FunpayBot:
                 amount=getattr(order, "amount", None),
                 price=getattr(order, "price", None),
                 user_id=self._user_id,
+                key_id=self._key_id,
             )
             self._mark_order_processed(event)
             return
@@ -572,7 +576,7 @@ class FunpayBot:
         lot_number: int,
         amount: int,
     ) -> None:
-        mapping = self._db.get_lot_mapping(lot_number, self._user_id)
+        mapping = self._db.get_lot_mapping(lot_number, self._user_id, key_id=self._key_id)
         if not mapping:
             acc.send_message(chat_id, "Лот не привязан к аккаунту. Вызовите администратора командой !админ.")
             send_message_to_admin(
@@ -583,7 +587,7 @@ class FunpayBot:
             )
             return
 
-        account = self._db.get_account_by_lot_number(lot_number, self._user_id)
+        account = self._db.get_account_by_lot_number(lot_number, self._user_id, key_id=self._key_id)
         if not account:
             acc.send_message(chat_id, "Ошибка: лот привязан к аккаунту, но аккаунт не найден. Напишите !админ.")
             send_message_to_admin(
@@ -616,7 +620,7 @@ class FunpayBot:
                 acc.send_message(chat_id, USER.extend_failed)
                 return
 
-            refreshed = self._db.get_account_by_id(account["id"])
+            refreshed = self._db.get_account_by_id(account["id"], self._user_id, key_id=self._key_id)
             current_time = datetime.now(tz=MOSCOW_TZ)
             expiry_str, remaining_str = self._format_rental_status(refreshed, current_time)
             duration_label = format_duration_minutes(unit_minutes * amount)
@@ -653,6 +657,7 @@ class FunpayBot:
                 rental_minutes=rental_minutes,
                 steam_id=steam_id,
                 user_id=self._user_id,
+                key_id=self._key_id,
             )
             acc.confirm(event.order.id)
             self._mark_order_processed(event)
@@ -678,7 +683,7 @@ class FunpayBot:
         order_name: str,
         amount: int,
     ) -> None:
-        all_accounts = self._db.get_all_account_names()
+        all_accounts = self._db.get_all_account_names(self._user_id, key_id=self._key_id)
         matched_account = match_account_name(order_name, all_accounts)
         if matched_account is None:
             logger.warning(f"No matching account found for order: {order_name}")
@@ -690,7 +695,9 @@ class FunpayBot:
             logger.info(f"Item '{account_name}' not found in rentals; skipping.")
             return
 
-        specific_account = self._db.get_account_by_name(account_name)
+        specific_account = self._db.get_account_by_name(
+            account_name, user_id=self._user_id, key_id=self._key_id
+        )
         if not specific_account:
             logger.error(f"Account with name '{account_name}' not found in database")
             acc.send_message(
@@ -718,7 +725,9 @@ class FunpayBot:
                 "Если нужен другой вариант — напишите !админ.",
             )
 
-        existing_rentals = self._db.get_user_accounts_by_name(buyer, account_name)
+        existing_rentals = self._db.get_user_accounts_by_name(
+            buyer, account_name, user_id=self._user_id, key_id=self._key_id
+        )
         if existing_rentals:
             self._extend_existing_rental(acc, chat_id, event, existing_rentals[0], account_name, amount)
             self._mark_order_processed(event)
@@ -761,7 +770,7 @@ class FunpayBot:
             "Данные аккаунта ниже.",
         )
 
-        account = self._db.get_account_by_id(rental["id"])
+        account = self._db.get_account_by_id(rental["id"], self._user_id, key_id=self._key_id)
         if account:
             current_time = datetime.now(tz=MOSCOW_TZ)
             expiry_str, remaining_str = self._format_rental_status(account, current_time)
@@ -800,6 +809,7 @@ class FunpayBot:
             rental_minutes=rental_minutes,
             steam_id=steam_id,
             user_id=self._user_id,
+            key_id=self._key_id,
         )
         acc.confirm(event.order.id)
 
@@ -814,7 +824,13 @@ class FunpayBot:
         note: str | None = None,
     ) -> None:
         logger.info(f"Assigning specific account '{account['account_name']}' to user {event.order.buyer_username}")
-        self._db.set_account_owner(account["id"], event.order.buyer_username, self._user_id, start_rental=False)
+        self._db.set_account_owner(
+            account["id"],
+            event.order.buyer_username,
+            self._user_id,
+            start_rental=False,
+            key_id=self._key_id,
+        )
         unit_minutes = self._get_unit_minutes(account)
         duration_label = format_duration_minutes(unit_minutes * units)
         self._set_rental_duration_for_order(account["id"], units, unit_minutes)
@@ -862,6 +878,7 @@ class FunpayBot:
             rental_minutes=rental_minutes,
             steam_id=steam_id,
             user_id=self._user_id,
+            key_id=self._key_id,
         )
         acc.confirm(event.order.id)
 
@@ -895,7 +912,7 @@ class FunpayBot:
                 "type": event.message.type.name if event.message.type else None,
                 "sent_time": sent_time,
             }
-            publish_chat_message(self._user_id, chat_id, item)
+            publish_chat_message(self._user_id, self._key_id, chat_id, item)
 
         if event.message.type in (
             types.MessageTypes.NEW_FEEDBACK,
@@ -1032,7 +1049,7 @@ class FunpayBot:
             return
         if reward and reward.get("revoked_at"):
             return
-        accounts = self._db.get_user_active_accounts(owner, self._user_id)
+        accounts = self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id)
         if not accounts:
             send_message_to_admin(
                 "BONUS SKIPPED\n\n"
@@ -1044,7 +1061,9 @@ class FunpayBot:
 
         target = accounts[0]
         account_id = target["id"]
-        if not self._db.extend_rental_duration_for_owner(account_id, owner, HOURS_FOR_REVIEW, 0):
+        if not self._db.extend_rental_duration_for_owner(
+            account_id, owner, HOURS_FOR_REVIEW, 0, key_id=self._key_id
+        ):
             send_message_to_admin(
                 "BONUS APPLY FAILED\n\n"
                 f"Order: {order_id}\n"
@@ -1056,7 +1075,7 @@ class FunpayBot:
         if not self._db.mark_feedback_reward_claimed(order_id, account_id, self._user_id):
             logger.warning(f"Failed to mark feedback reward claimed for order {order_id}.")
 
-        updated = self._db.get_account_by_id(account_id, self._user_id)
+        updated = self._db.get_account_by_id(account_id, self._user_id, key_id=self._key_id)
         total_minutes = get_duration_minutes(updated or {})
         if total_minutes <= 0:
             total_minutes = get_duration_minutes(target) + HOURS_FOR_REVIEW * 60
@@ -1095,11 +1114,15 @@ class FunpayBot:
         target_account = None
         claimed_account_id = reward.get("account_id")
         if claimed_account_id:
-            candidate = self._db.get_account_by_id(int(claimed_account_id), self._user_id)
+            candidate = self._db.get_account_by_id(
+                int(claimed_account_id), self._user_id, key_id=self._key_id
+            )
             if candidate and candidate.get("owner") == reward_owner:
                 target_account = candidate
         if target_account is None:
-            accounts = self._db.get_user_active_accounts(reward_owner, self._user_id)
+            accounts = self._db.get_user_active_accounts(
+                reward_owner, self._user_id, key_id=self._key_id
+            )
             if accounts:
                 target_account = accounts[0]
 
@@ -1114,7 +1137,7 @@ class FunpayBot:
             return
 
         if not self._db.reduce_rental_duration_for_owner(
-            target_account["id"], reward_owner, HOURS_FOR_REVIEW, 0
+            target_account["id"], reward_owner, HOURS_FOR_REVIEW, 0, key_id=self._key_id
         ):
             send_message_to_admin(
                 "BONUS REVOKE FAILED\n\n"
@@ -1125,7 +1148,9 @@ class FunpayBot:
             return
 
         self._db.mark_feedback_reward_revoked(order_id, self._user_id)
-        updated = self._db.get_account_by_id(target_account["id"], self._user_id)
+        updated = self._db.get_account_by_id(
+            target_account["id"], self._user_id, key_id=self._key_id
+        )
         total_minutes = get_duration_minutes(updated or {})
         if total_minutes <= 0:
             total_minutes = get_duration_minutes(target_account) - HOURS_FOR_REVIEW * 60
@@ -1176,8 +1201,8 @@ class FunpayBot:
 
     def _handle_code(self, acc: Account, chat_id: int, owner: str) -> None:
         try:
-            started = self._db.start_rental_for_owner(owner, self._user_id)
-            owner_data = self._db.get_owner_mafile(owner)
+            started = self._db.start_rental_for_owner(owner, self._user_id, key_id=self._key_id)
+            owner_data = self._db.get_owner_mafile(owner, self._user_id, key_id=self._key_id)
             if owner_data:
                 lines = ["Коды Steam Guard:"]
                 for account in owner_data:
@@ -1200,7 +1225,7 @@ class FunpayBot:
                     lines.append("⏱️ Аренда началась сейчас (с момента получения кода).")
                 acc.send_message(chat_id, "\n".join(lines))
             else:
-                if self._db.owner_has_frozen_rental(owner, self._user_id):
+                if self._db.owner_has_frozen_rental(owner, self._user_id, key_id=self._key_id):
                     acc.send_message(
                         chat_id,
                         "Администратор заморозил вашу аренду. Коды временно недоступны. Если нужна помощь — !админ.",
@@ -1212,7 +1237,7 @@ class FunpayBot:
 
     def _handle_acc(self, acc: Account, chat_id: int, owner: str) -> None:
         try:
-            accounts = self._db.get_user_active_accounts(owner)
+            accounts = self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id)
             if not accounts:
                 acc.send_message(chat_id, USER.active_rentals_empty)
                 return
@@ -1251,7 +1276,9 @@ class FunpayBot:
     def _handle_extend(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
             parts = raw_text.split()
-            accounts = self._db.get_user_active_lot_accounts(owner, self._user_id)
+            accounts = self._db.get_user_active_lot_accounts(
+                owner, self._user_id, key_id=self._key_id
+            )
             if not accounts:
                 acc.send_message(chat_id, USER.active_rentals_empty)
                 return
@@ -1365,7 +1392,7 @@ class FunpayBot:
 
     def _handle_admin_call(self, acc: Account, chat_id: int, owner: str) -> None:
         try:
-            self._db.log_admin_call(owner, chat_id, self._user_id)
+            self._db.log_admin_call(owner, chat_id, self._user_id, key_id=self._key_id)
             acc.send_message(
                 chat_id,
                 "Админ вызван. Мы ответим как можно скорее. "
@@ -1384,7 +1411,7 @@ class FunpayBot:
 
     def _handle_lp_exchange(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
-            accounts = self._db.get_user_active_accounts(owner, self._user_id)
+            accounts = self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id)
             if not accounts:
                 acc.send_message(chat_id, USER.active_rentals_empty)
                 return
@@ -1417,7 +1444,9 @@ class FunpayBot:
                 acc.send_message(chat_id, "\n".join(lines))
                 return
 
-            full_target = self._db.get_account_by_id(int(target_account.get("id")), self._user_id)
+            full_target = self._db.get_account_by_id(
+                int(target_account.get("id")), self._user_id, key_id=self._key_id
+            )
             if full_target:
                 target_account = full_target
 
@@ -1459,7 +1488,11 @@ class FunpayBot:
                 return
 
             if not self._db.set_account_owner(
-                replacement["id"], owner, self._user_id, start_rental=False
+                replacement["id"],
+                owner,
+                self._user_id,
+                start_rental=False,
+                key_id=self._key_id,
             ):
                 acc.send_message(chat_id, "Свободных замен нет. Попробуйте чуть позже.")
                 return
@@ -1504,14 +1537,18 @@ class FunpayBot:
                 cursor.close()
                 conn.close()
 
-            self._db.release_account(int(target_account["id"]), self._user_id)
+            self._db.release_account(int(target_account["id"]), self._user_id, key_id=self._key_id)
             self._db.update_account(
                 int(target_account["id"]),
                 {"rental_duration": 1, "rental_duration_minutes": 60},
                 self._user_id,
+                key_id=self._key_id,
             )
 
-            refreshed = self._db.get_account_by_id(int(replacement["id"]), self._user_id) or replacement
+            refreshed = (
+                self._db.get_account_by_id(int(replacement["id"]), self._user_id, key_id=self._key_id)
+                or replacement
+            )
             expiry_str, remaining_str = self._format_rental_status(refreshed, now)
             display_name = self._display_account_name(refreshed.get("account_name"))
 
@@ -1540,7 +1577,7 @@ class FunpayBot:
             acc.send_message(chat_id, "Не удалось выполнить замену. Попробуйте позже.")
 
     def _build_stock_message(self) -> str:
-        all_lots = self._db.get_all_lot_accounts(self._user_id)
+        all_lots = self._db.get_all_lot_accounts(self._user_id, key_id=self._key_id)
         if not all_lots:
             return USER.stock_no_lots_configured
 
@@ -1561,7 +1598,7 @@ class FunpayBot:
 
     def _handle_cancel(self, acc: Account, chat_id: int, owner: str, raw_text: str) -> None:
         try:
-            accounts = self._db.get_user_active_accounts(owner)
+            accounts = self._db.get_user_active_accounts(owner, self._user_id, key_id=self._key_id)
             if not accounts:
                 acc.send_message(chat_id, USER.active_rentals_empty)
                 return
@@ -1605,10 +1642,12 @@ class FunpayBot:
             except Exception as exc:
                 logger.warning(f"Failed to deauthorize Steam sessions for account {account_id}: {exc}")
 
-            self._db.release_account(account_id)
+            self._db.release_account(account_id, self._user_id, key_id=self._key_id)
             self._db.update_account(
                 account_id,
                 {"rental_duration": 1, "rental_duration_minutes": 60},
+                self._user_id,
+                key_id=self._key_id,
             )
 
             send_message_to_admin(
@@ -1785,7 +1824,11 @@ class FunpayBot:
                     account_id = int(account_id)
                 except (TypeError, ValueError):
                     account_id = None
-                full = self._db.get_account_by_id(account_id) if account_id is not None else None
+                full = (
+                    self._db.get_account_by_id(account_id, self._user_id, key_id=self._key_id)
+                    if account_id is not None
+                    else None
+                )
                 if full:
                     mafile_json = full.get("mafile_json")
         steamid64 = self._steamid64_from_mafile(mafile_json)
@@ -2014,9 +2057,9 @@ class FunpayBot:
 
         update_fields = {"rental_duration": 1, "rental_duration_minutes": 60}
 
-        if not self._db.update_account(account_id, update_fields):
+        if not self._db.update_account(account_id, update_fields, self._user_id, key_id=self._key_id):
             logger.error(f"Failed to update expired account state for account {account_id}")
             invalid_accs.append(account_id)
-        if not self._db.release_account(account_id):
+        if not self._db.release_account(account_id, self._user_id, key_id=self._key_id):
             logger.error(f"Failed to release expired account {account_id}")
             invalid_accs.append(account_id)

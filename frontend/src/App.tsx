@@ -36,6 +36,7 @@ type AccountRow = {
   accountFrozen?: boolean;
   rentalFrozen?: boolean;
   rentalFrozenAt?: string | null;
+  keyId?: number | null;
 };
 
 type RentalRow = {
@@ -56,6 +57,7 @@ type RentalRow = {
   adminLastCalledAt?: string | null;
   rentalFrozen?: boolean;
   rentalFrozenAt?: string | null;
+  keyId?: number | null;
 };
 
 type NotificationItem = {
@@ -126,6 +128,24 @@ type OrderHistoryItem = {
   chatUrl?: string | null;
   lotNumber?: number | null;
 };
+
+type UserKey = {
+  id: number;
+  label: string;
+  is_default?: boolean;
+  created_at?: string | null;
+};
+
+type LotRow = {
+  lotNumber: number;
+  accountId: number;
+  accountName?: string;
+  lotUrl?: string | null;
+  owner?: string | null;
+  keyId?: number | null;
+};
+
+type KeyScope = "all" | number;
 
 type BlacklistEntry = {
   id?: string | number;
@@ -466,6 +486,8 @@ const ORDERS_GRID =
   "minmax(120px,0.9fr) minmax(160px,1fr) minmax(180px,1.2fr) minmax(180px,1.2fr) minmax(120px,0.8fr) minmax(110px,0.7fr) minmax(110px,0.7fr) minmax(160px,1fr) minmax(110px,0.7fr)";
 const BLACKLIST_GRID =
   "minmax(48px,0.4fr) minmax(200px,1.1fr) minmax(240px,1.6fr) minmax(160px,0.9fr) minmax(120px,0.6fr)";
+const LOTS_GRID =
+  "minmax(80px,0.6fr) minmax(220px,1.4fr) minmax(160px,0.9fr) minmax(160px,1fr) minmax(180px,1.2fr) minmax(110px,0.6fr)";
 const CACHE_PREFIX = "fpa_cache:";
 const createEmptyOverview = (): OverviewData => ({
   totalAccounts: null,
@@ -483,6 +505,7 @@ const STATS_CACHE_KEY = `${CACHE_PREFIX}funpay_stats`;
 const CHAT_LIST_CACHE_KEY = `${CACHE_PREFIX}chat_list`;
 const CHAT_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}chat_history:`;
 const ORDERS_HISTORY_CACHE_PREFIX = `${CACHE_PREFIX}orders_history:`;
+const LOTS_CACHE_KEY = `${CACHE_PREFIX}lots`;
 type CacheEntry<T> = { data: T; ts: number; etag?: string };
 const memoryCache = new Map<string, CacheEntry<any>>();
 const inflightRequests = new Map<string, Promise<CacheEntry<any> | null>>();
@@ -494,6 +517,7 @@ const CACHE_TTLS = {
   chatHistory: 8 * 1000,
   orders: 5 * 60 * 1000,
   blacklist: 2 * 60 * 1000,
+  lots: 2 * 60 * 1000,
 };
 
 const readCache = <T,>(key: string, maxAgeMs?: number) => {
@@ -544,6 +568,14 @@ const App: React.FC = () => {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
+  const [userKeys, setUserKeys] = useState<UserKey[]>([]);
+  const [activeKeyId, setActiveKeyId] = useState<KeyScope>(() => {
+    const raw = localStorage.getItem("fpa_active_key_id");
+    if (!raw || raw === "all") return "all";
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : "all";
+  });
+  const [keysLoading, setKeysLoading] = useState(false);
   const [overview, setOverview] = useState<OverviewData>(createEmptyOverview);
   const [funpayStats, setFunpayStats] = useState<FunpayStatsPayload>(createEmptyFunpayStats);
   const [funpayStatsLoading, setFunpayStatsLoading] = useState(false);
@@ -554,6 +586,7 @@ const App: React.FC = () => {
   const [accountEditLogin, setAccountEditLogin] = useState("");
   const [accountEditPassword, setAccountEditPassword] = useState("");
   const [accountEditMmr, setAccountEditMmr] = useState("");
+  const [accountEditKeyId, setAccountEditKeyId] = useState("");
   const [accountActionBusy, setAccountActionBusy] = useState(false);
   const [reviewRange, setReviewRange] = useState<"daily" | "weekly" | "monthly">("weekly");
   const [orderRange, setOrderRange] = useState<"daily" | "weekly" | "monthly">("weekly");
@@ -596,11 +629,33 @@ const App: React.FC = () => {
   const [blacklistEditOwner, setBlacklistEditOwner] = useState("");
   const [blacklistEditReason, setBlacklistEditReason] = useState("");
   const [blacklistResolving, setBlacklistResolving] = useState(false);
+  const [lots, setLots] = useState<LotRow[]>([]);
+  const [lotsLoading, setLotsLoading] = useState(false);
+  const [lotsQuery, setLotsQuery] = useState("");
+  const [lotNumber, setLotNumber] = useState("");
+  const [lotAccountId, setLotAccountId] = useState("");
+  const [lotUrl, setLotUrl] = useState("");
+  const [lotKeyId, setLotKeyId] = useState("");
+  const [lotActionBusy, setLotActionBusy] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState("");
+  const [newKeyValue, setNewKeyValue] = useState("");
+  const [newKeyDefault, setNewKeyDefault] = useState(false);
+  const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
+  const [editKeyLabel, setEditKeyLabel] = useState("");
+  const [editKeyValue, setEditKeyValue] = useState("");
+  const [keyActionBusy, setKeyActionBusy] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [tick, setTick] = useState(0);
   const now = useMemo(() => Date.now(), [tick]);
   const { toast, showToast } = useToast();
-  const sessionKey = useMemo(() => (token ? profileName || "session" : ""), [token, profileName]);
+  const activeKeyScope = useMemo(
+    () => (activeKeyId === "all" ? "all" : String(activeKeyId)),
+    [activeKeyId]
+  );
+  const sessionKey = useMemo(
+    () => (token ? `${profileName || "session"}:${activeKeyScope}` : ""),
+    [token, profileName, activeKeyScope]
+  );
   const lastSessionRef = useRef<string>("");
   const presenceWarmupRef = useRef<number>(0);
   const scopedKey = useCallback(
@@ -654,6 +709,57 @@ const App: React.FC = () => {
 
   const { apiFetch, apiFetchWithMeta } = api;
 
+  const keyLabelMap = useMemo(() => {
+    const map = new Map<number, string>();
+    userKeys.forEach((item) => {
+      if (typeof item.id === "number") {
+        map.set(item.id, item.label || `Key ${item.id}`);
+      }
+    });
+    return map;
+  }, [userKeys]);
+
+  const defaultKeyLabel = useMemo(() => {
+    const fallback = userKeys.find((item) => item.is_default);
+    return fallback?.label || "Default";
+  }, [userKeys]);
+
+  const resolveKeyLabel = useCallback(
+    (keyId?: number | string | null) => {
+      if (keyId === null || keyId === undefined || keyId === "") {
+        return defaultKeyLabel;
+      }
+      const numeric = Number(keyId);
+      if (!Number.isFinite(numeric)) return defaultKeyLabel;
+      return keyLabelMap.get(numeric) || `Key ${numeric}`;
+    },
+    [defaultKeyLabel, keyLabelMap]
+  );
+
+  const buildKeyHeader = useCallback(
+    (keyId?: number | string | null) => {
+      if (activeKeyId !== "all") return undefined;
+      const numeric = Number(keyId);
+      if (!Number.isFinite(numeric)) return undefined;
+      return { "x-key-id": String(numeric) };
+    },
+    [activeKeyId]
+  );
+
+  const loadKeys = useCallback(async () => {
+    if (!token) return;
+    setKeysLoading(true);
+    try {
+      const data = await apiFetch<{ items: UserKey[] }>("/api/keys");
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setUserKeys(items);
+    } catch {
+      setUserKeys([]);
+    } finally {
+      setKeysLoading(false);
+    }
+  }, [token, apiFetch]);
+
   const applyAdminCallOverrides = useCallback((items: ChatItem[]) => {
     const cleared = clearedAdminCallsRef.current;
     return items.map((chat) => {
@@ -672,6 +778,37 @@ const App: React.FC = () => {
       return { ...chat, adminCalls: 0, adminLastCalledAt: null };
     });
   }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setUserKeys([]);
+      return;
+    }
+    loadKeys();
+  }, [token, loadKeys]);
+
+  useEffect(() => {
+    if (!token || !userKeys.length) return;
+    setActiveKeyId((prev) => {
+      if (prev === "all") return prev;
+      if (userKeys.some((item) => item.id === prev)) return prev;
+      const fallback = userKeys.find((item) => item.is_default) ?? userKeys[0];
+      return fallback ? fallback.id : "all";
+    });
+  }, [token, userKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("fpa_active_key_id", activeKeyId === "all" ? "all" : String(activeKeyId));
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeKeyId]);
+
+  useEffect(() => {
+    if (activeKeyId === "all") return;
+    setLotKeyId((prev) => prev || String(activeKeyId));
+  }, [activeKeyId]);
 
   const clearAdminCall = useCallback(
     async (chatId: string | number | null) => {
@@ -854,6 +991,7 @@ const App: React.FC = () => {
       setAccountEditLogin("");
       setAccountEditPassword("");
       setAccountEditMmr("");
+      setAccountEditKeyId("");
       return;
     }
     const owner =
@@ -866,6 +1004,9 @@ const App: React.FC = () => {
     setAccountEditPassword(selectedAccount.password || "");
     setAccountEditMmr(
       selectedAccount.mmr !== null && selectedAccount.mmr !== undefined ? String(selectedAccount.mmr) : ""
+    );
+    setAccountEditKeyId(
+      selectedAccount.keyId !== null && selectedAccount.keyId !== undefined ? String(selectedAccount.keyId) : ""
     );
   }, [selectedAccount]);
 
@@ -1026,6 +1167,115 @@ const App: React.FC = () => {
     setProfileName("");
   };
 
+  const handleCreateKey = async () => {
+    if (keyActionBusy) return;
+    const label = newKeyLabel.trim() || "Key";
+    const goldenKey = newKeyValue.trim();
+    if (!goldenKey) {
+      showToast("Golden key is required.", "error");
+      return;
+    }
+    setKeyActionBusy(true);
+    try {
+      const result = await apiFetch<{ id: number }>("/api/keys", {
+        method: "POST",
+        body: JSON.stringify({
+          label,
+          golden_key: goldenKey,
+          make_default: newKeyDefault,
+        }),
+      });
+      showToast("Workspace added.");
+      setNewKeyLabel("");
+      setNewKeyValue("");
+      setNewKeyDefault(false);
+      await loadKeys();
+      if (newKeyDefault && result?.id) {
+        setActiveKeyId(result.id);
+      }
+    } catch (error) {
+      showToast((error as Error).message || "Failed to add workspace.", "error");
+    } finally {
+      setKeyActionBusy(false);
+    }
+  };
+
+  const startEditKey = (item: UserKey) => {
+    setEditingKeyId(item.id);
+    setEditKeyLabel(item.label || "");
+    setEditKeyValue("");
+  };
+
+  const cancelEditKey = () => {
+    setEditingKeyId(null);
+    setEditKeyLabel("");
+    setEditKeyValue("");
+  };
+
+  const handleSaveKeyEdit = async () => {
+    if (editingKeyId === null || keyActionBusy) return;
+    const current = userKeys.find((item) => item.id === editingKeyId);
+    if (!current) {
+      cancelEditKey();
+      return;
+    }
+    const nextLabel = editKeyLabel.trim();
+    const nextKey = editKeyValue.trim();
+    const payload: Record<string, unknown> = {};
+    if (nextLabel && nextLabel !== current.label) payload.label = nextLabel;
+    if (nextKey) payload.golden_key = nextKey;
+    if (!Object.keys(payload).length) {
+      showToast("No changes to save.", "error");
+      return;
+    }
+    setKeyActionBusy(true);
+    try {
+      await apiFetch(`/api/keys/${editingKeyId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      showToast("Workspace updated.");
+      cancelEditKey();
+      await loadKeys();
+    } catch (error) {
+      showToast((error as Error).message || "Failed to update workspace.", "error");
+    } finally {
+      setKeyActionBusy(false);
+    }
+  };
+
+  const handleSetDefaultKey = async (keyId: number) => {
+    if (keyActionBusy) return;
+    setKeyActionBusy(true);
+    try {
+      await apiFetch(`/api/keys/${keyId}/default`, { method: "POST" });
+      showToast("Default workspace updated.");
+      await loadKeys();
+      setActiveKeyId(keyId);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to set default workspace.", "error");
+    } finally {
+      setKeyActionBusy(false);
+    }
+  };
+
+  const handleDeleteKey = async (keyId: number) => {
+    if (keyActionBusy) return;
+    if (!window.confirm("Delete this workspace? Accounts and lots stay, but it can no longer sync with FunPay.")) {
+      return;
+    }
+    setKeyActionBusy(true);
+    try {
+      await apiFetch(`/api/keys/${keyId}`, { method: "DELETE" });
+      showToast("Workspace removed.");
+      await loadKeys();
+    } catch (error) {
+      showToast((error as Error).message || "Failed to delete workspace.", "error");
+    } finally {
+      setKeyActionBusy(false);
+    }
+  };
+
   const mapChatItems = useCallback(
     (payload: any): ChatItem[] =>
       (payload.items || []).map((c: any, idx: number) => ({
@@ -1129,6 +1379,7 @@ const App: React.FC = () => {
             accountFrozen: !!(a.account_frozen ?? a.accountFrozen),
             rentalFrozen: !!(a.rental_frozen ?? a.rentalFrozen),
             rentalFrozenAt: a.rental_frozen_at ?? a.rentalFrozenAt ?? null,
+            keyId: a.key_id ?? a.keyId ?? null,
           };
         });
         setAccountsTable(mappedAccounts);
@@ -1201,6 +1452,7 @@ const App: React.FC = () => {
               adminLastCalledAt: r.admin_last_called_at ?? r.adminLastCalledAt ?? null,
               rentalFrozen: !!(r.rental_frozen ?? r.rentalFrozen),
               rentalFrozenAt: r.rental_frozen_at ?? r.rentalFrozenAt ?? null,
+              keyId: r.key_id ?? r.keyId ?? null,
             };
           })
         );
@@ -1291,9 +1543,35 @@ const App: React.FC = () => {
     [swrFetch, scopedKey]
   );
 
-  const loadChats = useCallback(
+  const loadLots = useCallback(
     async (revalidate = false) => {
       if (!token) return;
+      await swrFetch<LotRow[]>({
+        key: scopedKey(LOTS_CACHE_KEY),
+        url: "/api/lots",
+        ttl: CACHE_TTLS.lots,
+        revalidate,
+        onLoading: setLotsLoading,
+        onData: setLots,
+        map: (payload) =>
+          (payload.items || [])
+            .map((item: any) => ({
+              lotNumber: Number(item.lot_number ?? item.lotNumber ?? 0),
+              accountId: Number(item.account_id ?? item.accountId ?? 0),
+              accountName: item.account_name ?? item.accountName ?? "",
+              lotUrl: item.lot_url ?? item.lotUrl ?? null,
+              owner: item.owner ?? null,
+              keyId: item.key_id ?? item.keyId ?? null,
+            }))
+            .filter((item: LotRow) => Number.isFinite(item.lotNumber) && Number.isFinite(item.accountId)),
+      });
+    },
+    [token, swrFetch, scopedKey]
+  );
+
+  const loadChats = useCallback(
+    async (revalidate = false) => {
+      if (!token || activeKeyId === "all") return;
       await swrFetch<ChatItem[]>({
         key: scopedKey(CHAT_LIST_CACHE_KEY),
         url: "/api/chats?fast=1",
@@ -1310,12 +1588,12 @@ const App: React.FC = () => {
         map: mapChatItems,
       });
     },
-    [token, selectedChat, swrFetch, mapChatItems, scopedKey, applyAdminCallOverrides]
+    [token, activeKeyId, selectedChat, swrFetch, mapChatItems, scopedKey, applyAdminCallOverrides]
   );
 
   const loadChatHistory = useCallback(
     async (chatId: string | number | null, revalidate = false, force = false) => {
-      if (!token || chatId === null || chatId === undefined) return;
+      if (!token || activeKeyId === "all" || chatId === null || chatId === undefined) return;
       const requestId = ++chatHistoryRequestRef.current;
       const chatKey = String(chatId);
       const cacheKey = scopedKey(`${CHAT_HISTORY_CACHE_PREFIX}${chatKey}`);
@@ -1341,7 +1619,7 @@ const App: React.FC = () => {
         map: mapChatMessages,
       });
     },
-    [token, swrFetch, mapChatMessages, scopedKey]
+    [token, activeKeyId, swrFetch, mapChatMessages, scopedKey]
   );
 
   const loadBlacklist = useCallback(
@@ -1403,13 +1681,13 @@ const App: React.FC = () => {
 
   // load chat list when on chats tab
   useEffect(() => {
-    if (!token || activeNav !== "chats") return;
+    if (!token || activeNav !== "chats" || activeKeyId === "all") return;
     loadChats(true);
-  }, [token, sessionKey, activeNav, loadChats]);
+  }, [token, sessionKey, activeNav, activeKeyId, loadChats]);
 
   // load chat history when selection changes
   useEffect(() => {
-    if (!token || activeNav !== "chats") return;
+    if (!token || activeNav !== "chats" || activeKeyId === "all") return;
     if (selectedChat === null || selectedChat === undefined) {
       setChatMessages([]);
       setChatLoading(false);
@@ -1426,10 +1704,10 @@ const App: React.FC = () => {
       setChatLoading(true);
     }
     loadChatHistory(selectedChat, true, true);
-  }, [token, sessionKey, activeNav, selectedChat, loadChatHistory, scopedKey]);
+  }, [token, sessionKey, activeNav, activeKeyId, selectedChat, loadChatHistory, scopedKey]);
 
   useEffect(() => {
-    if (!token || activeNav !== "chats") {
+    if (!token || activeNav !== "chats" || activeKeyId === "all") {
       if (chatWsRef.current) {
         chatWsRef.current.close();
         chatWsRef.current = null;
@@ -1444,7 +1722,8 @@ const App: React.FC = () => {
     }
     if (chatWsRef.current) return;
 
-    const ws = connectChatWS({
+    const ws = connectChatWS(
+      {
       onOpen: () => {
         setChatWsConnected(true);
         if (chatWsHeartbeatRef.current) {
@@ -1537,7 +1816,9 @@ const App: React.FC = () => {
       onError: () => {
         setChatWsConnected(false);
       },
-    });
+    },
+      activeKeyId
+    );
 
     chatWsRef.current = ws;
     return () => {
@@ -1546,6 +1827,7 @@ const App: React.FC = () => {
   }, [
     token,
     activeNav,
+    activeKeyId,
     selectedChat,
     mapChatItems,
     mapChatMessages,
@@ -1575,7 +1857,7 @@ const App: React.FC = () => {
       setChatStreamActive(false);
       return;
     }
-    if (!token) {
+    if (!token || activeKeyId === "all") {
       if (chatListStreamRef.current) {
         chatListStreamRef.current.close();
         chatListStreamRef.current = null;
@@ -1590,7 +1872,9 @@ const App: React.FC = () => {
 
     let source: EventSource;
     try {
-      source = new EventSource("/api/stream/chats");
+      const streamUrl =
+        activeKeyId === "all" ? "/api/stream/chats" : `/api/stream/chats?key_id=${encodeURIComponent(String(activeKeyId))}`;
+      source = new EventSource(streamUrl);
     } catch {
       setChatStreamActive(false);
       return;
@@ -1657,6 +1941,7 @@ const App: React.FC = () => {
     token,
     sessionKey,
     activeNav,
+    activeKeyId,
     mapChatItems,
     scopedKey,
     showToast,
@@ -1672,7 +1957,7 @@ const App: React.FC = () => {
       }
       return;
     }
-    if (!token || activeNav !== "chats" || !selectedChat) {
+    if (!token || activeNav !== "chats" || !selectedChat || activeKeyId === "all") {
       if (chatHistoryStreamRef.current) {
         chatHistoryStreamRef.current.close();
         chatHistoryStreamRef.current = null;
@@ -1685,7 +1970,10 @@ const App: React.FC = () => {
 
     let source: EventSource;
     try {
-      source = new EventSource(`/api/stream/chats/${selectedChat}/history`);
+      const streamUrl = `/api/stream/chats/${selectedChat}/history?key_id=${encodeURIComponent(
+        String(activeKeyId)
+      )}`;
+      source = new EventSource(streamUrl);
     } catch {
       return;
     }
@@ -1724,7 +2012,7 @@ const App: React.FC = () => {
         chatHistoryStreamRef.current = null;
       }
     };
-  }, [token, sessionKey, activeNav, selectedChat, mapChatMessages, scopedKey, chatWsConnected]);
+  }, [token, sessionKey, activeNav, activeKeyId, selectedChat, mapChatMessages, scopedKey, chatWsConnected]);
 
   useEffect(() => {
     if (activeNav !== "chats") return;
@@ -1738,9 +2026,10 @@ const App: React.FC = () => {
   }, [activeNav, selectedChat, chatMessages]);
 
   useEffect(() => {
-    if (!token || activeNav !== "chats" || selectedChat === null || selectedChat === undefined) return;
+    if (!token || activeNav !== "chats" || activeKeyId === "all" || selectedChat === null || selectedChat === undefined)
+      return;
     clearAdminCall(selectedChat);
-  }, [token, activeNav, selectedChat, clearAdminCall]);
+  }, [token, activeNav, activeKeyId, selectedChat, clearAdminCall]);
 
   useEffect(() => {
     if (!token || activeNav !== "blacklist") return;
@@ -1751,9 +2040,14 @@ const App: React.FC = () => {
   }, [token, sessionKey, activeNav, blacklistQuery, loadBlacklist]);
 
   useEffect(() => {
-    if (!token || activeNav !== "funpay-stats") return;
+    if (!token || activeNav !== "funpay-stats" || activeKeyId === "all") return;
     loadFunpayStats(false, true);
-  }, [token, sessionKey, activeNav, loadFunpayStats]);
+  }, [token, sessionKey, activeNav, activeKeyId, loadFunpayStats]);
+
+  useEffect(() => {
+    if (!token || activeNav !== "lots") return;
+    loadLots(true);
+  }, [token, sessionKey, activeNav, loadLots]);
 
   useEffect(() => {
     if (!token || activeNav !== "orders") return;
@@ -1770,7 +2064,13 @@ const App: React.FC = () => {
       return;
     }
     if (activeNav === "funpay-stats") {
-      loadFunpayStats(false, true);
+      if (activeKeyId !== "all") {
+        loadFunpayStats(false, true);
+      }
+      return;
+    }
+    if (activeNav === "lots") {
+      loadLots(true);
       return;
     }
     if (activeNav === "chats") {
@@ -1793,6 +2093,7 @@ const App: React.FC = () => {
     loadChatHistory,
     loadOrdersHistory,
     chatWsConnected,
+    loadLots,
   ]);
 
   useEffect(() => {
@@ -1827,9 +2128,15 @@ const App: React.FC = () => {
       intervalId = window.setInterval(() => {
         loadOrdersHistory(ordersQuery.trim(), true);
       }, 60000);
+    } else if (activeNav === "lots") {
+      intervalId = window.setInterval(() => {
+        loadLots(true);
+      }, 60000);
     } else if (activeNav === "funpay-stats") {
       intervalId = window.setInterval(() => {
-        loadFunpayStats(false, true);
+        if (activeKeyId !== "all") {
+          loadFunpayStats(false, true);
+        }
       }, 120000);
     }
     return () => {
@@ -1846,7 +2153,9 @@ const App: React.FC = () => {
     loadChats,
     loadChatHistory,
     loadOrdersHistory,
+    loadLots,
     loadFunpayStats,
+    activeKeyId,
   ]);
 
   useEffect(() => {
@@ -2186,6 +2495,7 @@ const App: React.FC = () => {
             const editLogin = accountEditLogin.trim();
             const editPassword = accountEditPassword.trim();
             const editMmrRaw = accountEditMmr.trim();
+            const editKeyRaw = accountEditKeyId.trim();
             const editMmrValue = editMmrRaw ? Number(editMmrRaw) : null;
             const editMmrValid = editMmrRaw === "" || (Number.isFinite(editMmrValue) && editMmrValue >= 0);
             const nameChanged = editName && editName !== (selectedAccount.name || "");
@@ -2195,7 +2505,12 @@ const App: React.FC = () => {
               editMmrRaw &&
               Number.isFinite(editMmrValue) &&
               String(editMmrValue) !== String(selectedAccount.mmr ?? "");
-            const hasChanges = nameChanged || loginChanged || passwordChanged || mmrChanged;
+            const currentKeyId =
+              selectedAccount.keyId !== null && selectedAccount.keyId !== undefined
+                ? String(selectedAccount.keyId)
+                : "";
+            const keyChanged = editKeyRaw !== currentKeyId;
+            const hasChanges = nameChanged || loginChanged || passwordChanged || mmrChanged || keyChanged;
             return (
               <div className="space-y-4">
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
@@ -2214,6 +2529,7 @@ const App: React.FC = () => {
                     <span>Login: {selectedAccount.login || "-"}</span>
                     <span>Steam ID: {selectedAccount.steamId || "-"}</span>
                     <span>Owner: {ownerLabel}</span>
+                    <span>Workspace: {resolveKeyLabel(selectedAccount.keyId)}</span>
                     <span>Rental start: {startLabel}</span>
                     <span>Duration: {hoursLabel}</span>
                   </div>
@@ -2265,6 +2581,27 @@ const App: React.FC = () => {
                         className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                       />
                     </div>
+                    {userKeys.length > 0 && (
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                          Workspace
+                        </label>
+                        <select
+                          value={accountEditKeyId}
+                          onChange={(e) => setAccountEditKeyId(e.target.value)}
+                          className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                        >
+                          <option value="">
+                            Default workspace ({defaultKeyLabel})
+                          </option>
+                          {userKeys.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label || `Key ${item.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <input
                       value={accountEditMmr}
                       onChange={(e) => setAccountEditMmr(e.target.value)}
@@ -2348,6 +2685,7 @@ const App: React.FC = () => {
                     <span>Time left: {timeLeft}</span>
                     <span>Match time: {matchTime}</span>
                     <span>Hero: {heroLabel}</span>
+                    <span>Workspace: {resolveKeyLabel(selectedRental.keyId)}</span>
                     <span>
                       Started: {selectedRental.startedAt ? formatStartTime(selectedRental.startedAt) : "-"}
                     </span>
@@ -2511,7 +2849,15 @@ const App: React.FC = () => {
     if (!token) throw new Error("Not authorized");
     setSubmittingAccount(true);
     try {
-      await apiFetch("/api/accounts", { method: "POST", body: JSON.stringify(payload) });
+      const nextPayload: Record<string, unknown> = { ...payload };
+      if (nextPayload.key_id === undefined && activeKeyId !== "all") {
+        nextPayload.key_id = activeKeyId;
+      }
+      if (activeKeyId === "all" && (nextPayload.key_id === undefined || nextPayload.key_id === null)) {
+        showToast("Select a workspace for this account.", "error");
+        return;
+      }
+      await apiFetch("/api/accounts", { method: "POST", body: JSON.stringify(nextPayload) });
       await Promise.all([loadOverview()]);
     } finally {
       setSubmittingAccount(false);
@@ -2542,6 +2888,7 @@ const App: React.FC = () => {
     try {
       await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/assign`, {
         method: "POST",
+        headers: buildKeyHeader(selectedAccount.keyId),
         body: JSON.stringify({ owner }),
       });
       showToast("Rental assigned.");
@@ -2569,6 +2916,7 @@ const App: React.FC = () => {
     const login = accountEditLogin.trim();
     const password = accountEditPassword.trim();
     const mmrRaw = accountEditMmr.trim();
+    const keyRaw = accountEditKeyId.trim();
 
     if (name && name !== (selectedAccount.name || "")) payload.account_name = name;
     if (login && login !== (selectedAccount.login || "")) payload.login = login;
@@ -2581,6 +2929,20 @@ const App: React.FC = () => {
       }
       if (String(mmr) !== String(selectedAccount.mmr ?? "")) payload.mmr = mmr;
     }
+    if (!keyRaw) {
+      if (selectedAccount.keyId !== null && selectedAccount.keyId !== undefined) {
+        payload.key_id = null;
+      }
+    } else {
+      const keyValue = Number(keyRaw);
+      if (!Number.isFinite(keyValue)) {
+        showToast("Select a workspace.", "error");
+        return;
+      }
+      if (String(keyValue) !== String(selectedAccount.keyId ?? "")) {
+        payload.key_id = keyValue;
+      }
+    }
     if (!Object.keys(payload).length) {
       showToast("No changes to save.", "error");
       return;
@@ -2589,6 +2951,7 @@ const App: React.FC = () => {
     try {
       await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}`, {
         method: "PATCH",
+        headers: buildKeyHeader(selectedAccount.keyId),
         body: JSON.stringify(payload),
       });
       showToast("Account updated.");
@@ -2615,6 +2978,7 @@ const App: React.FC = () => {
     try {
       await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/freeze`, {
         method: "POST",
+        headers: buildKeyHeader(selectedAccount.keyId),
         body: JSON.stringify({ frozen: nextFrozen }),
       });
       showToast(nextFrozen ? "Account frozen." : "Account unfrozen.");
@@ -2641,7 +3005,10 @@ const App: React.FC = () => {
     if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
     setAccountActionBusy(true);
     try {
-      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}`, { method: "DELETE" });
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}`, {
+        method: "DELETE",
+        headers: buildKeyHeader(selectedAccount.keyId),
+      });
       showToast("Account deleted.");
       setSelectedAccountId(null);
       await Promise.all([loadOverview()]);
@@ -2675,6 +3042,7 @@ const App: React.FC = () => {
     try {
       await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/extend`, {
         method: "POST",
+        headers: buildKeyHeader(selectedRental.keyId),
         body: JSON.stringify({ hours, minutes }),
       });
       showToast("Rental extended.");
@@ -2701,7 +3069,10 @@ const App: React.FC = () => {
     }
     setRentalActionBusy(true);
     try {
-      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/release`, { method: "POST" });
+      await apiFetch(`/api/accounts/${encodeURIComponent(String(accountId))}/release`, {
+        method: "POST",
+        headers: buildKeyHeader(selectedRental.keyId),
+      });
       showToast("Rental released.");
       await Promise.all([loadOverview()]);
     } catch (error) {
@@ -2726,6 +3097,7 @@ const App: React.FC = () => {
     try {
       await apiFetch(`/api/rentals/${encodeURIComponent(String(accountId))}/freeze`, {
         method: "POST",
+        headers: buildKeyHeader(selectedRental.keyId),
         body: JSON.stringify({ frozen: nextFrozen }),
       });
       showToast(nextFrozen ? "Rental frozen." : "Rental unfrozen.");
@@ -2749,6 +3121,10 @@ const App: React.FC = () => {
   };
 
   const handleAddBlacklist = async () => {
+    if (activeKeyId === "all") {
+      showToast("Select a workspace to manage the blacklist.", "error");
+      return;
+    }
     let owner = blacklistOwner.trim();
     const orderId = blacklistOrderId.trim();
     try {
@@ -2786,6 +3162,10 @@ const App: React.FC = () => {
   };
 
   const handleResolveBlacklistOrder = async () => {
+    if (activeKeyId === "all") {
+      showToast("Select a workspace to manage the blacklist.", "error");
+      return;
+    }
     const orderId = blacklistOrderId.trim();
     if (!orderId) {
       showToast("Enter an order ID.", "error");
@@ -2824,6 +3204,10 @@ const App: React.FC = () => {
 
   const handleSaveBlacklistEdit = async () => {
     if (blacklistEditingId === null || blacklistEditingId === undefined) return;
+    if (activeKeyId === "all") {
+      showToast("Select a workspace to manage the blacklist.", "error");
+      return;
+    }
     const owner = blacklistEditOwner.trim();
     if (!owner) {
       showToast("Owner is required.", "error");
@@ -2847,6 +3231,10 @@ const App: React.FC = () => {
       showToast("Select users to unblacklist.", "error");
       return;
     }
+    if (activeKeyId === "all") {
+      showToast("Select a workspace to manage the blacklist.", "error");
+      return;
+    }
     try {
       await apiFetch("/api/blacklist/remove", {
         method: "POST",
@@ -2865,6 +3253,10 @@ const App: React.FC = () => {
       showToast("Blacklist is already empty.", "error");
       return;
     }
+    if (activeKeyId === "all") {
+      showToast("Select a workspace to manage the blacklist.", "error");
+      return;
+    }
     if (!window.confirm("Remove everyone from the blacklist...")) return;
     try {
       await apiFetch("/api/blacklist/clear", { method: "POST" });
@@ -2873,6 +3265,68 @@ const App: React.FC = () => {
       loadBlacklist(blacklistQuery, true);
     } catch (error) {
       showToast((error as Error).message || "Failed to clear blacklist", "error");
+    }
+  };
+
+  const handleCreateLot = async () => {
+    if (lotActionBusy) return;
+    const numberValue = Number(lotNumber);
+    const accountValue = Number(lotAccountId);
+    if (!Number.isFinite(numberValue) || numberValue <= 0) {
+      showToast("Enter a valid lot number.", "error");
+      return;
+    }
+    if (!Number.isFinite(accountValue) || accountValue <= 0) {
+      showToast("Select an account for this lot.", "error");
+      return;
+    }
+    const targetKey = targetLotKeyId;
+    if (activeKeyId === "all" && !targetKey) {
+      showToast("Select a workspace for this lot.", "error");
+      return;
+    }
+    const payload: Record<string, unknown> = {
+      lot_number: numberValue,
+      account_id: accountValue,
+      lot_url: lotUrl.trim() || null,
+    };
+    if (targetKey !== null) {
+      payload.key_id = targetKey;
+    }
+    setLotActionBusy(true);
+    try {
+      await apiFetch("/api/lots", {
+        method: "POST",
+        headers: buildKeyHeader(targetKey),
+        body: JSON.stringify(payload),
+      });
+      showToast("Lot mapping saved.");
+      setLotNumber("");
+      setLotAccountId("");
+      setLotUrl("");
+      loadLots(true);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to save lot.", "error");
+    } finally {
+      setLotActionBusy(false);
+    }
+  };
+
+  const handleDeleteLot = async (item: LotRow) => {
+    if (lotActionBusy) return;
+    if (!window.confirm(`Delete lot #${item.lotNumber}?`)) return;
+    setLotActionBusy(true);
+    try {
+      await apiFetch(`/api/lots/${encodeURIComponent(String(item.lotNumber))}`, {
+        method: "DELETE",
+        headers: buildKeyHeader(item.keyId),
+      });
+      showToast("Lot mapping removed.");
+      loadLots(true);
+    } catch (error) {
+      showToast((error as Error).message || "Failed to remove lot.", "error");
+    } finally {
+      setLotActionBusy(false);
     }
   };
 
@@ -2922,6 +3376,35 @@ const App: React.FC = () => {
     () => chats.reduce((sum, chat) => sum + (chat.adminCalls || 0), 0),
     [chats]
   );
+  const targetLotKeyId = useMemo(() => {
+    if (activeKeyId !== "all") return activeKeyId;
+    const raw = lotKeyId.trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [activeKeyId, lotKeyId]);
+  const filteredLots = useMemo(() => {
+    const query = lotsQuery.trim().toLowerCase();
+    if (!query) return lots;
+    return lots.filter((item) => {
+      const accountName = (item.accountName || "").toLowerCase();
+      const owner = (item.owner || "").toLowerCase();
+      return (
+        String(item.lotNumber).includes(query) ||
+        String(item.accountId).includes(query) ||
+        accountName.includes(query) ||
+        owner.includes(query)
+      );
+    });
+  }, [lots, lotsQuery]);
+  const lotAccounts = useMemo(() => {
+    if (activeKeyId !== "all") return accountsTable;
+    if (!targetLotKeyId) return accountsTable;
+    return accountsTable.filter((acc) => {
+      const keyValue = acc.keyId ?? null;
+      return keyValue === targetLotKeyId || keyValue === null;
+    });
+  }, [accountsTable, activeKeyId, targetLotKeyId]);
 
   if (!sessionChecked) {
     return null;
@@ -3051,6 +3534,40 @@ const App: React.FC = () => {
                       <h1 className="text-2xl font-semibold text-neutral-900">{activeLabel}</h1>
                     </div>
                     <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-600 shadow-sm shadow-neutral-200">
+                        <span className="hidden sm:inline text-[11px] uppercase tracking-wide text-neutral-500">
+                          Workspace
+                        </span>
+                        <select
+                          value={activeKeyId === "all" ? "all" : String(activeKeyId)}
+                          onChange={(event) => {
+                            const next = event.target.value;
+                            setActiveKeyId(next === "all" ? "all" : Number(next));
+                          }}
+                          className="bg-transparent text-sm font-semibold text-neutral-700 outline-none"
+                          disabled={keysLoading}
+                        >
+                          <option value="all">All workspaces</option>
+                          {userKeys.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label || `Key ${item.id}`}
+                              {item.is_default ? " (Default)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveNav("settings");
+                            const nextPath = navIdToPath.settings || "/settings";
+                            window.history.replaceState(null, "", nextPath);
+                            setPathname(nextPath);
+                          }}
+                          className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-semibold text-neutral-600 transition hover:bg-neutral-100"
+                        >
+                          Manage
+                        </button>
+                      </div>
                       <label className="relative flex h-11 w-72 items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 shadow-sm shadow-neutral-200">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path
@@ -3118,7 +3635,18 @@ const App: React.FC = () => {
                     </div>
                   )}
                   {activeNav === "funpay-stats" && (
-                    <div className="mt-6 space-y-6">
+                    activeKeyId === "all" ? (
+                      <div className="mt-6 rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 p-6">
+                        <div className="text-sm font-semibold text-neutral-900">
+                          Select a workspace to view FunPay stats
+                        </div>
+                        <p className="mt-2 text-xs text-neutral-500">
+                          FunPay statistics are tied to a specific golden key. Choose a workspace from the top bar to
+                          see balance, orders, and reviews.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mt-6 space-y-6">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <div className="text-lg font-semibold text-neutral-800">Funpay Statistics</div>
@@ -3258,8 +3786,20 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </div>
+                    )
                   )}
                   {activeNav === "funpay-stats" ? null : activeNav === "chats" ? (
+                    activeKeyId === "all" ? (
+                      <div className="mt-8 rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 p-6">
+                        <div className="text-sm font-semibold text-neutral-900">
+                          Select a workspace to open chats
+                        </div>
+                        <p className="mt-2 text-xs text-neutral-500">
+                          Chats are tied to a specific golden key. Choose a workspace from the top bar to see its chat
+                          list and history.
+                        </p>
+                      </div>
+                    ) : (
                     <motion.div
                       key="chats"
                       initial={{ opacity: 0, y: 12 }}
@@ -3440,6 +3980,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </motion.div>
+                    )
                   ) : activeNav === "profile" ? (
                     <motion.div
                       key="profile"
@@ -3512,6 +4053,134 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         </div>
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-4">
+                            <h3 className="text-lg font-semibold text-neutral-900">Workspaces</h3>
+                            <p className="text-xs text-neutral-500">
+                              Connect multiple FunPay golden keys and switch between them without leaving the dashboard.
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                            <div className="mb-3 text-sm font-semibold text-neutral-800">Add workspace</div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <input
+                                value={newKeyLabel}
+                                onChange={(e) => setNewKeyLabel(e.target.value)}
+                                placeholder="Workspace name (e.g. Seller A)"
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              />
+                              <input
+                                value={newKeyValue}
+                                onChange={(e) => setNewKeyValue(e.target.value)}
+                                placeholder="FunPay golden key"
+                                type="password"
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                              />
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                              <label className="flex items-center gap-2 text-xs font-semibold text-neutral-600">
+                                <input
+                                  type="checkbox"
+                                  checked={newKeyDefault}
+                                  onChange={(e) => setNewKeyDefault(e.target.checked)}
+                                  className="h-4 w-4 rounded border-neutral-300 text-neutral-900"
+                                />
+                                Make default
+                              </label>
+                              <button
+                                onClick={handleCreateKey}
+                                disabled={keyActionBusy || !newKeyValue.trim()}
+                                className="rounded-lg bg-neutral-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                              >
+                                Add workspace
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-4 space-y-3">
+                            {keysLoading ? (
+                              <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                Loading workspaces...
+                              </div>
+                            ) : userKeys.length ? (
+                              userKeys.map((item) => {
+                                const isEditing = editingKeyId === item.id;
+                                return (
+                                  <div
+                                    key={item.id}
+                                    className="rounded-xl border border-neutral-200 bg-white p-4"
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-sm font-semibold text-neutral-900">{item.label}</div>
+                                        <div className="text-xs text-neutral-500">
+                                          {item.is_default ? "Default workspace" : "Workspace"}
+                                          {item.created_at ? ` · Added ${new Date(item.created_at).toLocaleDateString()}` : ""}
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {!item.is_default && (
+                                          <button
+                                            onClick={() => handleSetDefaultKey(item.id)}
+                                            className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                          >
+                                            Set default
+                                          </button>
+                                        )}
+                                        <button
+                                          onClick={() => (isEditing ? cancelEditKey() : startEditKey(item))}
+                                          className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                        >
+                                          {isEditing ? "Close" : "Edit"}
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteKey(item.id)}
+                                          className="rounded-lg border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {isEditing && (
+                                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <input
+                                          value={editKeyLabel}
+                                          onChange={(e) => setEditKeyLabel(e.target.value)}
+                                          placeholder="Workspace name"
+                                          className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                        />
+                                        <input
+                                          value={editKeyValue}
+                                          onChange={(e) => setEditKeyValue(e.target.value)}
+                                          placeholder="New golden key (optional)"
+                                          type="password"
+                                          className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                        />
+                                        <div className="md:col-span-2 flex flex-wrap items-center gap-2">
+                                          <button
+                                            onClick={handleSaveKeyEdit}
+                                            className="rounded-lg bg-neutral-900 px-3 py-2 text-xs font-semibold text-white"
+                                          >
+                                            Save changes
+                                          </button>
+                                          <button
+                                            onClick={cancelEditKey}
+                                            className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-600"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                No workspaces connected yet.
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </motion.div>
                   ) : activeNav === "add" ? (
@@ -3534,6 +4203,8 @@ const App: React.FC = () => {
                         <AddAccountForm
                           onToast={(msg, err) => showToast(msg, err ? "error" : "success")}
                           onSubmit={handleCreateAccount}
+                          keys={userKeys}
+                          defaultKeyId={activeKeyId}
                         />
                         {submittingAccount && (
                           <div className="mt-3 text-sm text-neutral-500">Creating account...</div>
@@ -3636,7 +4307,12 @@ const App: React.FC = () => {
                                 style={{ gridTemplateColumns: RENTALS_GRID }}
                               >
                                 <span className="min-w-0 truncate font-semibold text-neutral-900">{rowId}</span>
-                                <span className="min-w-0 truncate text-neutral-800">{r.accountName || ""}</span>
+                                <div className="min-w-0">
+                                  <div className="truncate text-neutral-800">{r.accountName || ""}</div>
+                                  <span className="mt-1 inline-flex w-fit rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
+                                    {resolveKeyLabel(r.keyId)}
+                                  </span>
+                                </div>
                                 {r.buyer ? (
                                   r.chatUrl ? (
                                     <a
@@ -3723,17 +4399,23 @@ const App: React.FC = () => {
                         <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
                           <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                             <div className="mb-2 text-sm font-semibold text-neutral-800">Add to blacklist</div>
+                            {activeKeyId === "all" && (
+                              <div className="mb-3 rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
+                                Select a workspace to add or edit blacklist entries.
+                              </div>
+                            )}
                             <div className="space-y-3">
                               <div className="grid gap-3 md:grid-cols-[1fr_auto]">
                                 <input
                                   value={blacklistOrderId}
                                   onChange={(e) => setBlacklistOrderId(e.target.value)}
                                   placeholder="Order ID (optional)"
+                                  disabled={activeKeyId === "all" || blacklistResolving}
                                   className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                                 />
                                 <button
                                   onClick={handleResolveBlacklistOrder}
-                                  disabled={blacklistResolving}
+                                  disabled={activeKeyId === "all" || blacklistResolving}
                                   className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
                                 >
                                   Find buyer
@@ -3743,17 +4425,23 @@ const App: React.FC = () => {
                                 value={blacklistOwner}
                                 onChange={(e) => setBlacklistOwner(e.target.value)}
                                 placeholder="Buyer username"
+                                disabled={activeKeyId === "all"}
                                 className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                               />
                               <input
                                 value={blacklistReason}
                                 onChange={(e) => setBlacklistReason(e.target.value)}
                                 placeholder="Reason (optional)"
+                                disabled={activeKeyId === "all"}
                                 className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                               />
                               <button
                                 onClick={handleAddBlacklist}
-                                disabled={blacklistResolving || (!blacklistOwner.trim() && !blacklistOrderId.trim())}
+                                disabled={
+                                  activeKeyId === "all" ||
+                                  blacklistResolving ||
+                                  (!blacklistOwner.trim() && !blacklistOrderId.trim())
+                                }
                                 className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
                               >
                                 {blacklistResolving ? "Resolving..." : "Add user"}
@@ -3767,19 +4455,20 @@ const App: React.FC = () => {
                               onChange={(e) => setBlacklistQuery(e.target.value)}
                               placeholder="Search by buyer"
                               type="search"
+                              disabled={activeKeyId === "all"}
                               className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
                             />
                             <div className="mt-3 flex flex-wrap gap-2">
                               <button
                                 onClick={handleRemoveSelected}
-                                disabled={!blacklistSelected.length}
+                                disabled={activeKeyId === "all" || !blacklistSelected.length}
                                 className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
                               >
                                 Unblacklist selected
                               </button>
                               <button
                                 onClick={handleClearBlacklist}
-                                disabled={!blacklistEntries.length}
+                                disabled={activeKeyId === "all" || !blacklistEntries.length}
                                 className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400"
                               >
                                 Unblacklist all
@@ -4049,6 +4738,214 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </motion.div>
+                  ) : activeNav === "lots" ? (
+                    <motion.div
+                      key="lots"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE } }}
+                      className="mt-8 space-y-6"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <h3 className="text-lg font-semibold text-neutral-900">Lots</h3>
+                          <p className="text-sm text-neutral-500">
+                            Map FunPay lot numbers to Steam accounts. Each workspace has its own lots.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs rounded-full bg-neutral-100 px-3 py-1 font-semibold text-neutral-600">
+                            {filteredLots.length} mapped
+                          </span>
+                          <button
+                            onClick={() => loadLots(true)}
+                            className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid gap-6 lg:grid-cols-[1.05fr_1.5fr]">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-4">
+                            <h4 className="text-base font-semibold text-neutral-900">Lot setup</h4>
+                            <p className="text-xs text-neutral-500">
+                              Choose a workspace, link the lot number, and pick the account to deliver.
+                            </p>
+                          </div>
+                          <div className="space-y-4">
+                            {activeKeyId === "all" && (
+                              <div className="rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-4 py-3 text-xs text-neutral-500">
+                                Select a workspace to save a lot mapping.
+                              </div>
+                            )}
+                            {userKeys.length > 0 && (
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                  Workspace
+                                </label>
+                                <select
+                                  value={activeKeyId === "all" ? lotKeyId : String(activeKeyId)}
+                                  onChange={(e) => setLotKeyId(e.target.value)}
+                                  disabled={activeKeyId !== "all"}
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none disabled:bg-neutral-100"
+                                >
+                                  <option value="">Select workspace</option>
+                                  {userKeys.map((item) => (
+                                    <option key={item.id} value={item.id}>
+                                      {item.label || `Key ${item.id}`}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                  Lot number
+                                </label>
+                                <input
+                                  value={lotNumber}
+                                  onChange={(e) => setLotNumber(e.target.value)}
+                                  type="number"
+                                  min="1"
+                                  placeholder="e.g. 128392"
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                  Account
+                                </label>
+                                <select
+                                  value={lotAccountId}
+                                  onChange={(e) => setLotAccountId(e.target.value)}
+                                  disabled={activeKeyId === "all" && !lotKeyId}
+                                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none disabled:bg-neutral-100"
+                                >
+                                  <option value="">
+                                    {activeKeyId === "all" && !lotKeyId
+                                      ? "Select workspace first"
+                                      : "Select account"}
+                                  </option>
+                                  {lotAccounts.map((acc, idx) => {
+                                    const label = acc.name || acc.login || `ID ${acc.id ?? idx}`;
+                                    const rented = isAccountRented(acc);
+                                    return (
+                                      <option key={acc.id ?? idx} value={acc.id ?? idx}>
+                                        {label} {rented ? "• rented" : "• available"}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                Lot URL (optional)
+                              </label>
+                              <input
+                                value={lotUrl}
+                                onChange={(e) => setLotUrl(e.target.value)}
+                                type="url"
+                                placeholder="https://funpay.com/lots/..."
+                                className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                              />
+                            </div>
+                            <button
+                              onClick={handleCreateLot}
+                              disabled={lotActionBusy}
+                              className="w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                            >
+                              Save mapping
+                            </button>
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-sm font-semibold text-neutral-900">Mapped lots</div>
+                            <div className="text-xs text-neutral-500">
+                              Showing {filteredLots.length} {filteredLots.length === 1 ? "lot" : "lots"}
+                            </div>
+                          </div>
+                          <div className="mb-3">
+                            <input
+                              value={lotsQuery}
+                              onChange={(e) => setLotsQuery(e.target.value)}
+                              placeholder="Search by lot number, account, or owner"
+                              type="search"
+                              className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 outline-none placeholder:text-neutral-400"
+                            />
+                          </div>
+                          <div className="overflow-x-auto">
+                            <div className="min-w-[980px]">
+                              <div
+                                className="grid gap-3 px-6 text-xs font-semibold text-neutral-500"
+                                style={{ gridTemplateColumns: LOTS_GRID }}
+                              >
+                                <span>Lot</span>
+                                <span>Account</span>
+                                <span>Workspace</span>
+                                <span>Owner</span>
+                                <span>URL</span>
+                                <span className="text-right">Actions</span>
+                              </div>
+                              <div className="mt-3 space-y-3">
+                                {lotsLoading && (
+                                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                    Loading lots...
+                                  </div>
+                                )}
+                                {!lotsLoading &&
+                                  filteredLots.map((item) => (
+                                    <div
+                                      key={`${item.lotNumber}-${item.accountId}`}
+                                      className="grid items-center gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-6 py-4 text-sm shadow-[0_4px_18px_-14px_rgba(0,0,0,0.18)]"
+                                      style={{ gridTemplateColumns: LOTS_GRID }}
+                                    >
+                                      <span className="font-semibold text-neutral-900">#{item.lotNumber}</span>
+                                      <div className="min-w-0">
+                                        <div className="truncate font-semibold text-neutral-900">
+                                          {item.accountName || `ID ${item.accountId}`}
+                                        </div>
+                                        <div className="text-xs text-neutral-400">ID {item.accountId}</div>
+                                      </div>
+                                      <span className="text-xs font-semibold text-neutral-600">
+                                        {resolveKeyLabel(item.keyId)}
+                                      </span>
+                                      <span className="text-xs text-neutral-500">{item.owner || "-"}</span>
+                                      {item.lotUrl ? (
+                                        <a
+                                          href={item.lotUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="min-w-0 truncate text-xs font-semibold text-neutral-700 hover:underline"
+                                        >
+                                          Open
+                                        </a>
+                                      ) : (
+                                        <span className="text-xs text-neutral-400">-</span>
+                                      )}
+                                      <div className="flex justify-end">
+                                        <button
+                                          onClick={() => handleDeleteLot(item)}
+                                          className="rounded-lg border border-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-600"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                {!lotsLoading && filteredLots.length === 0 && (
+                                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                                    No lots mapped yet.
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
                   ) : activeNav === "notifications" ? (
                     <motion.div
                       key="notifications"
@@ -4174,12 +5071,17 @@ const App: React.FC = () => {
                                       <span className="min-w-0 font-semibold text-neutral-900" title={String(rowId)}>
                                         {rowId}
                                       </span>
-                                      <span
-                                        className="min-w-0 truncate font-semibold leading-tight text-neutral-900"
-                                        title={acc.name || "Account"}
-                                      >
-                                        {acc.name || "Account"}
-                                      </span>
+                                      <div className="min-w-0">
+                                        <div
+                                          className="truncate font-semibold leading-tight text-neutral-900"
+                                          title={acc.name || "Account"}
+                                        >
+                                          {acc.name || "Account"}
+                                        </div>
+                                        <span className="mt-1 inline-flex w-fit rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
+                                          {resolveKeyLabel(acc.keyId)}
+                                        </span>
+                                      </div>
                                       <span className="min-w-0 truncate text-neutral-700" title={acc.login || ""}>
                                         {acc.login || ""}
                                       </span>

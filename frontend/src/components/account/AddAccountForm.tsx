@@ -1,15 +1,39 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+
+type WorkspaceOption = {
+  id: number;
+  label: string;
+  is_default?: boolean;
+};
 
 type AddAccountFormProps = {
   onSubmit: (payload: Record<string, unknown>) => Promise<void>;
   onToast: (message: string, isError?: boolean) => void;
+  keys?: WorkspaceOption[];
+  defaultKeyId?: number | "all" | null;
 };
 
-const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) => {
+const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast, keys = [], defaultKeyId }) => {
   const [accountName, setAccountName] = useState("");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [mafileJson, setMafileJson] = useState("");
+  const initialKey = useMemo(() => {
+    if (defaultKeyId && defaultKeyId !== "all") return String(defaultKeyId);
+    if (keys.length === 1) return String(keys[0].id);
+    return "";
+  }, [defaultKeyId, keys]);
+  const [keyId, setKeyId] = useState(initialKey);
+
+  useEffect(() => {
+    if (!keys.length) return;
+    if (defaultKeyId && defaultKeyId !== "all") {
+      setKeyId(String(defaultKeyId));
+      return;
+    }
+    if (keyId && keys.some((item) => String(item.id) === keyId)) return;
+    if (keys.length === 1) setKeyId(String(keys[0].id));
+  }, [keys, defaultKeyId, keyId]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -19,6 +43,10 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
     }
     if (!mafileJson.trim()) {
       onToast("maFile JSON is required.", true);
+      return;
+    }
+    if (keys.length > 0 && !keyId) {
+      onToast("Select a workspace for this account.", true);
       return;
     }
 
@@ -32,6 +60,9 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
       rental_minutes: 0,
       mmr: 0,
     };
+    if (keyId) {
+      payload.key_id = Number(keyId);
+    }
 
     try {
       await onSubmit(payload);
@@ -40,6 +71,9 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
       setLogin("");
       setPassword("");
       setMafileJson("");
+      if (keys.length > 1 && !(defaultKeyId && defaultKeyId !== "all")) {
+        setKeyId("");
+      }
     } catch (error) {
       onToast((error as Error).message || "Failed to create account.", true);
     }
@@ -48,6 +82,25 @@ const AddAccountForm: React.FC<AddAccountFormProps> = ({ onSubmit, onToast }) =>
   return (
     <form className="space-y-5" onSubmit={handleSubmit}>
       <div className="grid gap-4 md:grid-cols-2">
+        {keys.length > 0 && (
+          <div className="space-y-2 md:col-span-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Workspace</label>
+            <select
+              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-900 shadow-sm outline-none focus:border-neutral-400"
+              value={keyId}
+              onChange={(event) => setKeyId(event.target.value)}
+              required
+            >
+              <option value="">Select workspace</option>
+              {keys.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label || `Key ${item.id}`}
+                  {item.is_default ? " (Default)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="space-y-2">
           <label className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Account name</label>
           <input

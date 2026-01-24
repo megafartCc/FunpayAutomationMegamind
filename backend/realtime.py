@@ -9,9 +9,10 @@ from backend.logger import logger
 
 
 class ConnectionState:
-    def __init__(self, websocket: WebSocket, user_id: int) -> None:
+    def __init__(self, websocket: WebSocket, user_id: int, key_id: int | None) -> None:
         self.websocket = websocket
         self.user_id = user_id
+        self.key_id = key_id
         self.subscriptions: Set[int] = set()
 
 
@@ -19,24 +20,24 @@ class ConnectionManager:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._connections: Dict[WebSocket, ConnectionState] = {}
-        self._user_index: Dict[int, Set[WebSocket]] = {}
+        self._user_index: Dict[tuple[int, int | None], Set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, user_id: int) -> None:
+    async def connect(self, websocket: WebSocket, user_id: int, key_id: int | None) -> None:
         async with self._lock:
-            state = ConnectionState(websocket, user_id)
+            state = ConnectionState(websocket, user_id, key_id)
             self._connections[websocket] = state
-            self._user_index.setdefault(user_id, set()).add(websocket)
+            self._user_index.setdefault((user_id, key_id), set()).add(websocket)
 
     async def disconnect(self, websocket: WebSocket) -> None:
         async with self._lock:
             state = self._connections.pop(websocket, None)
             if not state:
                 return
-            user_set = self._user_index.get(state.user_id)
+            user_set = self._user_index.get((state.user_id, state.key_id))
             if user_set:
                 user_set.discard(websocket)
                 if not user_set:
-                    self._user_index.pop(state.user_id, None)
+                    self._user_index.pop((state.user_id, state.key_id), None)
 
     async def subscribe(self, websocket: WebSocket, chat_id: int) -> None:
         async with self._lock:
@@ -52,14 +53,26 @@ class ConnectionManager:
                 return
             state.subscriptions.discard(int(chat_id))
 
-    async def _targets_for_user(self, user_id: int) -> list[ConnectionState]:
+    async def _targets_for_user(self, user_id: int, key_id: int | None) -> list[ConnectionState]:
         async with self._lock:
-            sockets = list(self._user_index.get(user_id, set()))
+            sockets: list[WebSocket] = []
+            if key_id is None:
+                for (uid, _kid), subset in self._user_index.items():
+                    if uid == user_id:
+                        sockets.extend(subset)
+            else:
+                sockets = list(self._user_index.get((user_id, key_id), set()))
             return [self._connections[socket] for socket in sockets if socket in self._connections]
 
-    async def _targets_for_chat(self, user_id: int, chat_id: int) -> list[ConnectionState]:
+    async def _targets_for_chat(self, user_id: int, chat_id: int, key_id: int | None) -> list[ConnectionState]:
         async with self._lock:
-            sockets = list(self._user_index.get(user_id, set()))
+            sockets: list[WebSocket] = []
+            if key_id is None:
+                for (uid, _kid), subset in self._user_index.items():
+                    if uid == user_id:
+                        sockets.extend(subset)
+            else:
+                sockets = list(self._user_index.get((user_id, key_id), set()))
             states = []
             for socket in sockets:
                 state = self._connections.get(socket)
@@ -69,12 +82,18 @@ class ConnectionManager:
                     states.append(state)
             return states
 
-    async def broadcast_user(self, user_id: int, event: Dict[str, Any]) -> None:
-        targets = await self._targets_for_user(user_id)
+    async def broadcast_user(self, user_id: int, event: Dict[str, Any], key_id: int | None = None) -> None:
+        targets = await self._targets_for_user(user_id, key_id)
         await self._send_to_targets(targets, event)
 
-    async def broadcast_user_chat(self, user_id: int, chat_id: int, event: Dict[str, Any]) -> None:
-        targets = await self._targets_for_chat(user_id, chat_id)
+    async def broadcast_user_chat(
+        self,
+        user_id: int,
+        chat_id: int,
+        event: Dict[str, Any],
+        key_id: int | None = None,
+    ) -> None:
+        targets = await self._targets_for_chat(user_id, chat_id, key_id)
         await self._send_to_targets(targets, event)
 
     async def _send_to_targets(self, targets: list[ConnectionState], event: Dict[str, Any]) -> None:
@@ -134,29 +153,36 @@ def _run_async(coro: Any) -> None:
     asyncio.run(coro)
 
 
-def broadcast_to_user(user_id: int, event_dict: Dict[str, Any]) -> None:
-    _run_async(manager.broadcast_user(user_id, event_dict))
+def broadcast_to_user(user_id: int, event_dict: Dict[str, Any], key_id: int | None = None) -> None:
+    _run_async(manager.broadcast_user(user_id, event_dict, key_id))
 
 
-def broadcast_to_user_chat(user_id: int, chat_id: int, event_dict: Dict[str, Any]) -> None:
-    _run_async(manager.broadcast_user_chat(user_id, chat_id, event_dict))
+def broadcast_to_user_chat(
+    user_id: int, chat_id: int, event_dict: Dict[str, Any], key_id: int | None = None
+) -> None:
+    _run_async(manager.broadcast_user_chat(user_id, chat_id, event_dict, key_id))
 
 
-def publish_chat_message(user_id: int, chat_id: int, item: Dict[str, Any]) -> None:
+def publish_chat_message(user_id: int, key_id: int | None, chat_id: int, item: Dict[str, Any]) -> None:
     if _chat_cache:
         try:
-            _chat_cache.append_message(user_id, chat_id, dict(item))
+            _chat_cache.append_message(user_id, key_id, chat_id, dict(item))
         except Exception as exc:
             logger.warning(f"Failed to append chat message to cache: {exc}")
     broadcast_to_user_chat(
         user_id,
         chat_id,
         {"type": "chat:message", "chat_id": chat_id, "item": item},
+        key_id,
     )
     if _chat_cache:
         try:
-            summary = _chat_cache.get_chat_summary(user_id, chat_id)
+            summary = _chat_cache.get_chat_summary(user_id, key_id, chat_id)
         except Exception:
             summary = None
         if summary:
-            broadcast_to_user(user_id, {"type": "chats:update", "chat_id": chat_id, "item": summary})
+            broadcast_to_user(
+                user_id,
+                {"type": "chats:update", "chat_id": chat_id, "item": summary},
+                key_id,
+            )

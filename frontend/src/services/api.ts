@@ -11,6 +11,20 @@ export const createApiClient = ({ onUnauthorized }: ApiClientOptions) => {
       "Content-Type": "application/json",
       ...(options.headers as Record<string, string> | undefined),
     };
+    try {
+      const hasKeyHeader = Object.keys(headers).some((key) => {
+        const normalized = key.toLowerCase();
+        return normalized === "x-key-id" || normalized === "x-fp-key-id";
+      });
+      if (!hasKeyHeader && typeof window !== "undefined") {
+        const keyId = window.localStorage.getItem("fpa_active_key_id");
+        if (keyId && keyId !== "all") {
+          headers["x-key-id"] = keyId;
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
     const response = await fetch(path, { ...options, headers, credentials: "include" });
     if (!response.ok && response.status !== 304) {
       if (response.status === 401) {
