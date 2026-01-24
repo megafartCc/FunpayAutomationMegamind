@@ -1533,6 +1533,16 @@ def compose_support_ticket(payload: ComposeTicketRequest, request: Request) -> d
     if buyer:
         chat_messages = db.get_chat_messages(str(buyer), uid, limit=200)
 
+    # Add order history lines if chat is empty
+    history_lines = []
+    if order_id:
+        order_events = db.search_order_history(query=order_id, limit=10, user_id=uid, key_id=key_id) or []
+        for ev in order_events:
+            line = f"{ev.get('action') or 'order'}: {ev.get('order_id')} {ev.get('account_name') or ''}".strip()
+            history_lines.append(line)
+    if not chat_messages and history_lines:
+        chat_messages = [{"role": "system", "message": line, "created_at": None} for line in history_lines]
+
     # Build a short chat transcript for AI context
     chat_snippets = []
     for msg in chat_messages[:20]:

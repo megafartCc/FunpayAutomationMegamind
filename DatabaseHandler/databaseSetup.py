@@ -3093,8 +3093,21 @@ class MySQLDB:
 
             rows = fetch(int(user_id or 0))
             # Fallback to global user_id=0 if none found
-            if not rows and user_id not in (None, 0):
+            if not rows:
                 rows = fetch(0)
+            # As a last resort, fetch any user (could be another workspace) to surface context
+            if not rows:
+                cursor.execute(
+                    """
+                    SELECT role, message, created_at
+                    FROM chat_messages
+                    WHERE LOWER(owner) = LOWER(?)
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (str(owner).strip(), int(limit)),
+                )
+                rows = cursor.fetchall()
 
             return [
                 {
