@@ -4275,7 +4275,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                  )}
+                  ))}
                   {activeNav === "tickets" ? (
                     <motion.div
                       key="tickets"
