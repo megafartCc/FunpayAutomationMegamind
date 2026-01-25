@@ -30,6 +30,7 @@ const getMatchSecondsForItem = (item: Rental) => {
 const ActiveRentalsTable: React.FC<ActiveRentalsTableProps> = ({ rentals, tick, matchStartCache }) => {
   void tick;
   void matchStartCache;
+  const now = Date.now();
 
   if (!rentals.length) {
     return (
