@@ -2029,16 +2029,14 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
-    if (token) {
-      loadNotifications();
-      loadChats(false);
-      return;
-    }
+    if (authState !== "authed") return;
+    loadNotifications();
+    loadChats(false);
     return undefined;
-  }, [token, sessionKey, loadNotifications, loadChats]);
+  }, [authState, loadNotifications, loadChats]);
 
   useEffect(() => {
-    if (!token) return;
+    if (authState === "guest") return;
     if (!(activeNav === "overview" || activeNav === "rentals" || activeNav === "inventory")) return;
     loadOverview("fast");
     if (hydrateTimeoutRef.current) {
@@ -2054,16 +2052,16 @@ const App: React.FC = () => {
         hydrateTimeoutRef.current = null;
       }
     };
-  }, [token, sessionKey, activeNav, loadOverview]);
+  }, [authState, activeNav, loadOverview]);
 
   useEffect(() => {
-    if (!token) return;
+    if (authState === "guest") return;
     if (!(activeNav === "overview" || activeNav === "rentals" || activeNav === "inventory")) return;
     const handle = window.setInterval(() => {
       loadOverview("fast");
     }, 30_000);
     return () => window.clearInterval(handle);
-  }, [token, sessionKey, activeNav, loadOverview]);
+  }, [authState, activeNav, loadOverview]);
 
   useEffect(() => {
     if (!token || activeKeyId === "all") return;
