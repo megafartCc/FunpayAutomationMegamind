@@ -604,6 +604,7 @@ const readCache = <T,>(key: string, maxAgeMs?: number) => {
 const App: React.FC = () => {
   const [token, setToken] = useState("");
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [authState, setAuthState] = useState<"unknown" | "authed" | "guest">("unknown");
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
   const [userKeys, setUserKeys] = useState<UserKey[]>([]);
@@ -775,15 +776,26 @@ const App: React.FC = () => {
     () => (token ? `${profileName || "session"}:${activeKeyScope}` : ""),
     [token, profileName, activeKeyScope]
   );
+  const cachedSessionKey = useMemo(() => {
+    try {
+      return localStorage.getItem("fpa_last_session_key") || "";
+    } catch {
+      return "";
+    }
+  }, [activeKeyScope]);
+  const effectiveSessionKey = useMemo(() => {
+    if (authState === "unknown" && cachedSessionKey) return cachedSessionKey;
+    return sessionKey;
+  }, [authState, cachedSessionKey, sessionKey]);
   const lastSessionRef = useRef<string>("");
-  const sessionKeyRef = useRef<string>(sessionKey);
-  sessionKeyRef.current = sessionKey;
+  const sessionKeyRef = useRef<string>(effectiveSessionKey);
+  sessionKeyRef.current = effectiveSessionKey;
   const presenceWarmupRef = useRef<number>(0);
   const presenceCacheRef = useRef<Map<string, { data: PresenceData; fetchedAt: number }>>(new Map());
   const overviewRequestRef = useRef<number>(0);
   const scopedKey = useCallback(
-    (key: string) => `${key}:u:${sessionKey || "anon"}`,
-    [sessionKey]
+    (key: string) => `${key}:u:${effectiveSessionKey || "anon"}`,
+    [effectiveSessionKey]
   );
   const adminCallCountsRef = useRef<Record<string, number>>({});
   const adminCallToastRef = useRef<number>(0);
@@ -792,6 +804,16 @@ const App: React.FC = () => {
   const lastClearedChatRef = useRef<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const clearedAdminCallsRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    if (authState !== "authed") return;
+    if (!sessionKey) return;
+    try {
+      localStorage.setItem("fpa_last_session_key", sessionKey);
+    } catch {
+      // ignore storage failures
+    }
+  }, [authState, sessionKey]);
 
   const clearAppCaches = useCallback(() => {
     memoryCache.clear();
@@ -802,10 +824,18 @@ const App: React.FC = () => {
           localStorage.removeItem(key);
         }
       }
+      localStorage.removeItem("fpa_last_session_key");
     } catch {
       // ignore cache cleanup errors
     }
   }, []);
+
+  useEffect(() => {
+    if (authState === "authed" && !token) {
+      setAuthState("guest");
+      clearAppCaches();
+    }
+  }, [authState, token, clearAppCaches]);
 
   const parseAdminCallTimestamp = (value?: string | null) => {
     if (!value) return null;
@@ -839,10 +869,12 @@ const App: React.FC = () => {
         onUnauthorized: () => {
           setToken("");
           setProfileName("");
+          setAuthState("guest");
+          clearAppCaches();
         },
         getKeyId: () => activeKeyRef.current,
       }),
-    []
+    [clearAppCaches]
   );
 
   const { apiFetch, apiFetchWithMeta } = api;
@@ -1047,7 +1079,7 @@ const App: React.FC = () => {
       onLoading?: (loading: boolean) => void;
       map?: (payload: any) => T;
     }) => {
-      const guardKey = sessionKey;
+      const guardKey = effectiveSessionKey;
       const isActive = () => sessionKeyRef.current === guardKey;
       const cached = readCache<T>(key, ttl);
       if (cached?.data && isActive()) {
@@ -1111,7 +1143,7 @@ const App: React.FC = () => {
         if (onLoading && isActive()) onLoading(false);
       }
     },
-    [apiFetchWithMeta, sessionKey]
+    [apiFetchWithMeta, effectiveSessionKey]
   );
 
   const selectedAccount = useMemo(() => {
@@ -1161,19 +1193,39 @@ const App: React.FC = () => {
     let active = true;
     const checkSession = async () => {
       try {
-        const data = await apiFetch<{ username?: string }>("/api/auth/me");
+        const response = await fetch("/api/auth/me", { credentials: "include" });
         if (!active) return;
-        if (data?.username) {
-          setToken("session");
-          setProfileName(data.username);
-        } else {
+        if (response.ok) {
+          const data = (await response.json()) as { username?: string };
+          if (data?.username) {
+            setToken("session");
+            setProfileName(data.username);
+            setAuthState("authed");
+          } else {
+            setToken("");
+            setProfileName("");
+            setAuthState("guest");
+            clearAppCaches();
+          }
+          return;
+        }
+        if (response.status === 401) {
           setToken("");
           setProfileName("");
+          setAuthState("guest");
+          clearAppCaches();
+          return;
         }
+        setToken("");
+        setProfileName("");
+        setAuthState("guest");
+        clearAppCaches();
       } catch {
         if (!active) return;
         setToken("");
         setProfileName("");
+        setAuthState("guest");
+        clearAppCaches();
       } finally {
         if (active) setSessionChecked(true);
       }
@@ -1182,7 +1234,7 @@ const App: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [apiFetch]);
+  }, [clearAppCaches]);
 
   const rentedAccountLookup = useMemo(() => {
     const ids = new Set<string>();
@@ -1217,23 +1269,57 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!sessionChecked) return;
     const targetNav = pathToNavId(pathname);
     setActiveNav(targetNav);
-    const desired = token
-      ? navIdToPath[targetNav]
-      : pathname === "/login" || pathname === "/authentication" || pathname === "/authencation"
-        ? pathname
-        : "/authencation";
+    if (authState === "unknown") return;
+    const desired =
+      authState === "guest"
+        ? pathname === "/login" || pathname === "/authentication" || pathname === "/authencation"
+          ? pathname
+          : "/authencation"
+        : navIdToPath[targetNav] || "/dashboard";
     if (pathname !== desired) {
       window.history.replaceState(null, "", desired);
       setPathname(desired);
     }
-  }, [token, pathname, sessionChecked]);
+  }, [authState, pathname]);
 
   useEffect(() => {
-    if (!sessionChecked) return;
-    if (sessionKey === lastSessionRef.current) return;
+    if (authState === "guest") {
+      setOverview(createEmptyOverview());
+      setAccountsTable([]);
+      setRentalsTable([]);
+      setFunpayStats(createEmptyFunpayStats());
+      setNotifications([]);
+      setChats([]);
+      setChatMessages([]);
+      setOrdersHistory([]);
+      setSelectedAccountId(null);
+      setSelectedRentalId(null);
+      setSelectedChat(null);
+      setChatStreamActive(false);
+      if (chatListStreamRef.current) {
+        chatListStreamRef.current.close();
+        chatListStreamRef.current = null;
+      }
+      if (chatHistoryStreamRef.current) {
+        chatHistoryStreamRef.current.close();
+        chatHistoryStreamRef.current = null;
+      }
+      if (chatWsRef.current) {
+        chatWsRef.current.close();
+        chatWsRef.current = null;
+      }
+      if (chatWsHeartbeatRef.current) {
+        window.clearInterval(chatWsHeartbeatRef.current);
+        chatWsHeartbeatRef.current = null;
+      }
+      chatWsSubscribedRef.current = null;
+      setChatWsConnected(false);
+      lastSessionRef.current = "";
+      return;
+    }
+    if (effectiveSessionKey === lastSessionRef.current && authState !== "unknown") return;
     const overviewCache = readCache<OverviewCachePayload>(scopedKey(OVERVIEW_CACHE_KEY), CACHE_TTLS.overview);
     if (overviewCache?.data && !overviewCache.isStale && !isHardReload) {
       setOverview(overviewCache.data.overview || createEmptyOverview());
@@ -1257,22 +1343,22 @@ const App: React.FC = () => {
       chatListStreamRef.current.close();
       chatListStreamRef.current = null;
     }
-      if (chatHistoryStreamRef.current) {
-        chatHistoryStreamRef.current.close();
-        chatHistoryStreamRef.current = null;
-      }
-      if (chatWsRef.current) {
-        chatWsRef.current.close();
-        chatWsRef.current = null;
-      }
-      if (chatWsHeartbeatRef.current) {
-        window.clearInterval(chatWsHeartbeatRef.current);
-        chatWsHeartbeatRef.current = null;
-      }
-      chatWsSubscribedRef.current = null;
-      setChatWsConnected(false);
-      lastSessionRef.current = sessionKey;
-    }, [sessionChecked, sessionKey, isHardReload]);
+    if (chatHistoryStreamRef.current) {
+      chatHistoryStreamRef.current.close();
+      chatHistoryStreamRef.current = null;
+    }
+    if (chatWsRef.current) {
+      chatWsRef.current.close();
+      chatWsRef.current = null;
+    }
+    if (chatWsHeartbeatRef.current) {
+      window.clearInterval(chatWsHeartbeatRef.current);
+      chatWsHeartbeatRef.current = null;
+    }
+    chatWsSubscribedRef.current = null;
+    setChatWsConnected(false);
+    lastSessionRef.current = effectiveSessionKey;
+  }, [authState, effectiveSessionKey, isHardReload, scopedKey]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
@@ -1282,6 +1368,7 @@ const App: React.FC = () => {
       });
       setToken("session");
       setProfileName(data.username || payload.username);
+      setAuthState("authed");
       setSessionChecked(true);
       showToast("Registration complete. You're logged in.");
     } catch (error) {
@@ -1297,6 +1384,7 @@ const App: React.FC = () => {
       });
       setToken("session");
       setProfileName(data.username || payload.username);
+      setAuthState("authed");
       setSessionChecked(true);
       showToast("Login successful.");
     } catch (error) {
@@ -1312,6 +1400,8 @@ const App: React.FC = () => {
     }
     setToken("");
     setProfileName("");
+    setAuthState("guest");
+    clearAppCaches();
   };
 
   const handleToggleAutoTickets = async (enabled: boolean) => {
@@ -1524,7 +1614,7 @@ const App: React.FC = () => {
 
   const loadOverview = useCallback(async (mode: "fast" | "full" = "full") => {
     const requestId = ++overviewRequestRef.current;
-    const guardKey = sessionKey;
+    const guardKey = effectiveSessionKey;
     const cacheKey = scopedKey(OVERVIEW_CACHE_KEY);
     const cached = readCache<OverviewCachePayload>(cacheKey, CACHE_TTLS.overview);
     if (cached?.data && !cached.isStale && !isHardReload && sessionKeyRef.current === guardKey) {
@@ -1708,7 +1798,7 @@ const App: React.FC = () => {
     } catch {
       // ignore overview load errors
     }
-  }, [apiFetch, scopedKey, sessionKey, isHardReload]);
+  }, [apiFetch, scopedKey, effectiveSessionKey, isHardReload]);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -3945,14 +4035,10 @@ const App: React.FC = () => {
     });
   }, [accountsTable, activeKeyId, targetLotKeyId]);
 
-  if (!sessionChecked) {
-    return null;
-  }
-
   return (
     <>
       <AnimatePresence mode="wait">
-        {!token ? (
+        {authState === "guest" ? (
           <motion.div
             key="login"
             initial={{ opacity: 0, x: 40 }}
@@ -5381,8 +5467,12 @@ const App: React.FC = () => {
                             );
                           })}
                           {rentalsTable.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              No active rentals yet.
+                            <div
+                              className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
+                                authState === "unknown" ? "animate-pulse" : ""
+                              }`}
+                            >
+                              {authState === "unknown" ? "Loading rentals..." : "No active rentals yet."}
                             </div>
                           )}
                             </div>
@@ -6293,8 +6383,12 @@ const App: React.FC = () => {
                                   );
                                 })}
                                 {accountsTable.length === 0 && (
-                                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                                    No accounts loaded yet.
+                                  <div
+                                    className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
+                                      authState === "unknown" ? "animate-pulse" : ""
+                                    }`}
+                                  >
+                                    {authState === "unknown" ? "Loading accounts..." : "No accounts loaded yet."}
                                   </div>
                                 )}
                               </div>
@@ -6393,8 +6487,12 @@ const App: React.FC = () => {
                             );
                           })}
                           {accountsTable.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              No accounts loaded yet.
+                            <div
+                              className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
+                                authState === "unknown" ? "animate-pulse" : ""
+                              }`}
+                            >
+                              {authState === "unknown" ? "Loading accounts..." : "No accounts loaded yet."}
                             </div>
                           )}
                             </div>
@@ -6541,8 +6639,12 @@ const App: React.FC = () => {
                             );
                           })}
                           {rentalsTable.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
-                              No active rentals yet.
+                            <div
+                              className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
+                                authState === "unknown" ? "animate-pulse" : ""
+                              }`}
+                            >
+                              {authState === "unknown" ? "Loading rentals..." : "No active rentals yet."}
                             </div>
                           )}
                             </div>
