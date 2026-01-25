@@ -3599,6 +3599,23 @@ npm run build</pre>
 </html>"""
     return HTMLResponse(message, status_code=503)
 
+
+_SW_FALLBACK_SCRIPT = """const CACHE_NAME="fp-static-v3";
+self.addEventListener("install",e=>{self.skipWaiting();e.waitUntil(Promise.resolve())});
+self.addEventListener("activate",e=>{e.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.map(k=>caches.delete(k)));await self.clients.claim()})())});
+self.addEventListener("fetch",()=>{});
+"""
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker() -> Response:
+    sw_path = FRONTEND_DIST_DIR / "sw.js"
+    headers = {"Cache-Control": "no-store"}
+    if sw_path.exists():
+        return FileResponse(sw_path, media_type="application/javascript", headers=headers)
+    return PlainTextResponse(_SW_FALLBACK_SCRIPT, media_type="application/javascript", headers=headers)
+
+
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
     index_path = FRONTEND_DIST_DIR / "index.html"
