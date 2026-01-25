@@ -3205,16 +3205,17 @@ def active_rentals(
     return {"items": items}
 
 
-def _dashboard_cache_key(user_id: int | None, key_id: int | None) -> str:
+def _dashboard_cache_key(user_id: int | None, key_id: int | None, variant: str) -> str:
     key_label = key_id if key_id is not None else "all"
-    return f"fp:dashboard:{user_id}:{key_label}"
+    return f"fp:dashboard:{variant}:{user_id}:{key_label}"
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_admin)])
 async def dashboard(request: Request, fast: bool = True, refresh: bool = False) -> dict:
     uid = current_user_id(request)
     key_id = _resolve_key_id(request)
-    cache_key = _dashboard_cache_key(uid, key_id)
+    variant = "fast" if fast else "full"
+    cache_key = _dashboard_cache_key(uid, key_id, variant)
 
     cached = None
     if not refresh:
@@ -3224,13 +3225,31 @@ async def dashboard(request: Request, fast: bool = True, refresh: bool = False) 
         return cached
 
     stats = db.get_rental_statistics(uid, key_id=key_id) or {}
-    rentals_payload = active_rentals(
-        request,
-        expand="presence,chat",
-        fast=fast,
-        include_steamid=True,
-    )
-    accounts_payload = await accounts(request, include_steamid=True, lite=False)
+
+    if fast:
+        rentals_payload = active_rentals(
+            request,
+            expand="lite",
+            fast=True,
+            include_steamid=False,
+        )
+        accounts_payload = await accounts(
+            request,
+            include_steamid=False,
+            lite=True,
+        )
+    else:
+        rentals_payload = active_rentals(
+            request,
+            expand="presence,chat",
+            fast=False,
+            include_steamid=True,
+        )
+        accounts_payload = await accounts(
+            request,
+            include_steamid=True,
+            lite=False,
+        )
 
     payload = {
         "stats": stats,

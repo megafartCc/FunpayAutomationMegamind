@@ -645,6 +645,7 @@ const App: React.FC = () => {
   const [chatWsConnected, setChatWsConnected] = useState(false);
   const chatWsSubscribedRef = useRef<string | null>(null);
   const chatWsHeartbeatRef = useRef<number | null>(null);
+  const hydrateTimeoutRef = useRef<number | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [ordersHistory, setOrdersHistory] = useState<OrderHistoryItem[]>([]);
@@ -1940,13 +1941,31 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (token) {
-      loadOverview("fast");
       loadNotifications();
       loadChats(false);
       return;
     }
     return undefined;
-  }, [token, sessionKey, loadOverview, loadNotifications, loadChats]);
+  }, [token, sessionKey, loadNotifications, loadChats]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!(activeNav === "overview" || activeNav === "rentals" || activeNav === "inventory")) return;
+    loadOverview("fast");
+    if (hydrateTimeoutRef.current) {
+      window.clearTimeout(hydrateTimeoutRef.current);
+      hydrateTimeoutRef.current = null;
+    }
+    hydrateTimeoutRef.current = window.setTimeout(() => {
+      loadOverview("full");
+    }, 700);
+    return () => {
+      if (hydrateTimeoutRef.current) {
+        window.clearTimeout(hydrateTimeoutRef.current);
+        hydrateTimeoutRef.current = null;
+      }
+    };
+  }, [token, sessionKey, activeNav, loadOverview]);
 
   useEffect(() => {
     if (!token) return;
