@@ -710,8 +710,23 @@ const App: React.FC = () => {
   const groupedCategories = useMemo(() => {
     const term = categorySearch.trim().toLowerCase();
     const idTerm = categoryIdSearch.trim();
-    const filtered = (categoryOptions || []).filter((c) => {
-      const haystack = `${c.name || ""} ${c.game || ""} ${c.category || ""}`.toLowerCase();
+    const normalized = (categoryOptions || []).map((c) => {
+      const name = (c.name || "").trim();
+      let game = (c.game || "").trim();
+      let category = (c.category || "").trim();
+      if ((!game || !category) && name.includes(" - ")) {
+        const parts = name.split(" - ", 2).map((p) => p.trim());
+        if (!game) game = parts[0] || game;
+        if (!category) category = parts[1] || category;
+      }
+      return { ...c, game, category };
+    });
+    const filtered = normalized.filter((c) => {
+      const game = (c.game || "").trim();
+      const category = (c.category || "").trim();
+      if (!game || !category) return false;
+      if (game === category) return false;
+      const haystack = `${c.name || ""} ${game} ${category}`.toLowerCase();
       if (term && !haystack.includes(term)) return false;
       if (idTerm && !String(c.id).includes(idTerm)) return false;
       return true;
