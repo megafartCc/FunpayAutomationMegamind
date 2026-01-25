@@ -51,6 +51,11 @@ from SteamHandler.deauthorize import logout_all_steam_sessions
 from SteamHandler.presence_bot import get_presence_bot, init_presence_bot
 from SteamHandler.steampassword.exceptions import ErrorSteamPasswordChange
 import requests
+
+try:
+    import redis
+except Exception:  # pragma: no cover - optional dependency
+    redis = None
 from FunpayHandler.bot import FunpayBot
 
 PROXY_TEST_URL = "https://api.ipify.org"
@@ -130,6 +135,10 @@ SESSION_COOKIE_NAME = "sessionId"
 SESSION_TTL_DAYS = 7
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_REFRESH_WINDOW_SECONDS = 24 * 60 * 60
+DASHBOARD_CACHE_SECONDS = 30
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+_redis_client = None
+_redis_failed = False
 
 # Simple in-memory rate limits (per-IP) for auth endpoints
 RATE_LIMIT_RULES = {
@@ -138,6 +147,56 @@ RATE_LIMIT_RULES = {
 }
 _rate_buckets: dict[tuple[str, str], deque] = defaultdict(deque)
 _rate_lock = Lock()
+
+
+def _get_redis_client():
+    global _redis_client, _redis_failed
+    if _redis_failed:
+        return None
+    if not REDIS_URL or redis is None:
+        return None
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        _redis_client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        _redis_client.ping()
+        return _redis_client
+    except Exception as exc:
+        _redis_failed = True
+        logger.warning(f"Redis disabled: {exc}")
+        return None
+
+
+def _redis_get_json(key: str):
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(key)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _redis_set_json(key: str, payload: dict, ttl_seconds: int) -> None:
+    client = _get_redis_client()
+    if client is None:
+        return
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, default=str)
+        client.setex(key, int(ttl_seconds), raw)
+    except Exception:
+        return
 
 
 def _normalize_time_label(time_text: str) -> str:
@@ -3144,6 +3203,43 @@ def active_rentals(
             item["admin_last_called_at"] = None
 
     return {"items": items}
+
+
+def _dashboard_cache_key(user_id: int | None, key_id: int | None) -> str:
+    key_label = key_id if key_id is not None else "all"
+    return f"fp:dashboard:{user_id}:{key_label}"
+
+
+@app.get("/api/dashboard", dependencies=[Depends(require_admin)])
+async def dashboard(request: Request, fast: bool = True, refresh: bool = False) -> dict:
+    uid = current_user_id(request)
+    key_id = _resolve_key_id(request)
+    cache_key = _dashboard_cache_key(uid, key_id)
+
+    cached = None
+    if not refresh:
+        cached = _redis_get_json(cache_key)
+    if cached and fast:
+        cached["cached"] = True
+        return cached
+
+    stats = db.get_rental_statistics(uid, key_id=key_id) or {}
+    rentals_payload = active_rentals(
+        request,
+        expand="presence,chat",
+        fast=fast,
+        include_steamid=True,
+    )
+    accounts_payload = await accounts(request, include_steamid=True, lite=False)
+
+    payload = {
+        "stats": stats,
+        "rentals": rentals_payload.get("items", []),
+        "accounts": accounts_payload.get("items", []),
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    _redis_set_json(cache_key, payload, DASHBOARD_CACHE_SECONDS)
+    return payload
 
 
 @app.get("/api/rentals/user/{owner}", dependencies=[Depends(require_admin)])

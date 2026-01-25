@@ -136,6 +136,14 @@ type OverviewCachePayload = {
   rentals: RentalRow[];
 };
 
+type DashboardPayload = {
+  stats?: Record<string, number>;
+  accounts?: any[];
+  rentals?: any[];
+  generated_at?: string;
+  cached?: boolean;
+};
+
 type UserKey = {
   id: number;
   label: string;
@@ -1524,35 +1532,37 @@ const App: React.FC = () => {
       setRentalsTable(cached.data.rentals || []);
     }
     try {
-      const useLite = mode === "fast";
-      const [stats, activeRentals, accounts] = await Promise.all([
-        apiFetch<Record<string, number>>("/api/stats").catch(() => null),
-        apiFetch<{ items: unknown[] }>(
-          useLite ? "/api/rentals/active?fast=1&expand=lite" : "/api/rentals/active?fast=1&expand=presence,chat"
-        ).catch(() => ({ items: [] })),
-        apiFetch<{ items: unknown[] }>(
-          useLite
-            ? "/api/accounts?fast=1&lite=1"
-            : "/api/accounts?fast=1&include_steamid=1&include_mafile=1"
-        ).catch(() => ({ items: [] })),
-      ]);
+      const useFast = mode === "fast";
+      const qs = new URLSearchParams();
+      if (useFast) {
+        qs.set("fast", "1");
+      } else {
+        qs.set("fast", "0");
+        qs.set("refresh", "1");
+      }
+      const url = qs.toString() ? `/api/dashboard?${qs.toString()}` : "/api/dashboard";
+      const payload = await apiFetch<DashboardPayload>(url).catch(() => ({} as DashboardPayload));
       if (overviewRequestRef.current !== requestId || sessionKeyRef.current !== guardKey) {
         return;
       }
 
+      const stats = payload?.stats || {};
+      const accountsList = Array.isArray(payload?.accounts) ? (payload.accounts as any[]) : [];
+      const rentalsList = Array.isArray(payload?.rentals) ? (payload.rentals as any[]) : [];
+
       const totalAccounts =
-        stats?.accounts_total ??
-        (Array.isArray(accounts?.items) ? accounts.items.length : null);
+        (stats as any)?.accounts_total ??
+        (Array.isArray(payload?.accounts) ? accountsList.length : null);
 
       const active =
-        stats?.active_rentals ??
-        (Array.isArray(activeRentals?.items) ? activeRentals.items.length : null);
+        (stats as any)?.active_rentals ??
+        (Array.isArray(payload?.rentals) ? rentalsList.length : null);
 
-      const past24 = stats?.rentals_last24 ?? stats?.recent_rentals ?? null;
-      const totalHours = stats?.total_hours ?? null;
+      const past24 = (stats as any)?.rentals_last24 ?? (stats as any)?.recent_rentals ?? null;
+      const totalHours = (stats as any)?.total_hours ?? null;
 
       const freeAccounts =
-        stats?.free_accounts ??
+        (stats as any)?.free_accounts ??
         (totalAccounts != null && active != null ? Math.max(totalAccounts - active, 0) : null);
 
       const nextOverview = {
@@ -1564,7 +1574,6 @@ const App: React.FC = () => {
       };
       setOverview(nextOverview);
 
-      const accountsList = Array.isArray(accounts?.items) ? (accounts.items as any[]) : [];
       const accountSteamMap = new Map<string, string>();
       let mappedAccounts: AccountRow[] = [];
 
@@ -1617,8 +1626,8 @@ const App: React.FC = () => {
 
       let mappedRentals: RentalRow[] = [];
       // rentals table
-      if (Array.isArray(activeRentals?.items)) {
-        mappedRentals = (activeRentals.items as any[]).map((r, idx) => {
+      if (rentalsList.length) {
+        mappedRentals = rentalsList.map((r, idx) => {
             const matchTimeRaw = r.match_time ?? r.matchTime ?? null;
             const matchTime = matchTimeRaw ? String(matchTimeRaw) : null;
             const matchSecondsRaw = Number(r.match_seconds ?? r.matchSeconds ?? r.matchtime);
@@ -1689,13 +1698,12 @@ const App: React.FC = () => {
       } else {
         setRentalsTable([]);
       }
-      if (!useLite) {
-        writeCache(cacheKey, {
-          overview: nextOverview,
-          accounts: mappedAccounts,
-          rentals: mappedRentals,
-        });
-      }
+
+      writeCache(cacheKey, {
+        overview: nextOverview,
+        accounts: mappedAccounts,
+        rentals: mappedRentals,
+      });
     } catch {
       // ignore overview load errors
     }
@@ -1935,13 +1943,19 @@ const App: React.FC = () => {
       loadOverview("fast");
       loadNotifications();
       loadChats(false);
-      const handle = window.setTimeout(() => {
-        loadOverview();
-      }, 250);
-      return () => window.clearTimeout(handle);
+      return;
     }
     return undefined;
   }, [token, sessionKey, loadOverview, loadNotifications, loadChats]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!(activeNav === "overview" || activeNav === "rentals" || activeNav === "inventory")) return;
+    const handle = window.setInterval(() => {
+      loadOverview("fast");
+    }, 30_000);
+    return () => window.clearInterval(handle);
+  }, [token, sessionKey, activeNav, loadOverview]);
 
   useEffect(() => {
     if (!token || activeKeyId === "all") return;

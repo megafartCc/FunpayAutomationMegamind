@@ -36,6 +36,7 @@ python-dotenv==1.0.1
 pytz==2025.1
 requests==2.31.0
 requests-toolbelt==1.0.0
+redis==5.0.4
 selenium==4.18.1
 playwright==1.49.0
 rsa==4.7
