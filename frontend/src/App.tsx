@@ -4202,6 +4202,145 @@ const App: React.FC = () => {
                           </div>
                         </div>
                       </div>
+
+                      {/* Auto Raise – full width card */}
+                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-lg font-semibold text-neutral-900">Auto Raise</h3>
+                            <p className="text-sm text-neutral-500">Pick categories and we’ll bump them on cooldown.</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-neutral-500">Enable</span>
+                            <ToggleRow
+                              label=""
+                              enabled={!!autoRaise}
+                              onChange={(val) => handleToggleAutoRaise(val)}
+                              disabled={autoRaise === null}
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-neutral-600">
+                          <button
+                            type="button"
+                            onClick={reloadCategories}
+                            disabled={categoryLoading}
+                            className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+                          >
+                            {categoryLoading ? "Reloading..." : "Reload from FunPay"}
+                          </button>
+                          {categoryMeta.ts && (
+                            <span className="text-neutral-500">
+                              Loaded {categoryMeta.count || 0} · {new Date(categoryMeta.ts).toLocaleTimeString()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-[2fr_1fr]">
+                          <input
+                            value={categorySearch}
+                            onChange={(e) => setCategorySearch(e.target.value)}
+                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                            placeholder="Search by game/category..."
+                          />
+                          <input
+                            value={categoryIdSearch}
+                            onChange={(e) => setCategoryIdSearch(e.target.value)}
+                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
+                            placeholder="Search by ID..."
+                          />
+                        </div>
+                        <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-[12px] text-neutral-600">
+                          Auto-raise loops roughly every 2h (longer if FunPay cooldowns apply). Leave all unchecked to raise everything.
+                        </div>
+                        {groupedCategories.length ? (
+                          <div className="mt-4 rounded-2xl border border-neutral-200 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+                            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-[12px] text-neutral-600 border-b border-neutral-100">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-neutral-800">
+                                  {groupedCategories.length} categories
+                                </span>
+                                <span className="text-neutral-400">·</span>
+                                <span>
+                                  Selected{" "}
+                                  {
+                                    autoRaiseCategories
+                                      .split(",")
+                                      .map((s) => s.trim())
+                                      .filter(Boolean).length
+                                  }
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const selected = new Set(
+                                      autoRaiseCategories
+                                        .split(",")
+                                        .map((s) => s.trim())
+                                        .filter(Boolean)
+                                    );
+                                    groupedCategories.forEach((c) => selected.add(String(c.id)));
+                                    setAutoRaiseCategories(Array.from(selected).join(","));
+                                  }}
+                                  className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+                                >
+                                  Select visible
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setAutoRaiseCategories("")}
+                                  className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-50"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-[90px_240px_1fr] items-center bg-neutral-50 px-4 py-2 text-[11px] font-semibold text-neutral-600 uppercase tracking-[0.02em]">
+                              <span>ID</span>
+                              <span>Game</span>
+                              <span>Category</span>
+                            </div>
+                            <div className="max-h-[560px] overflow-y-auto divide-y divide-neutral-100">
+                              {groupedCategories.map((c) => {
+                                const selectedIds = autoRaiseCategories
+                                  .split(",")
+                                  .map((s) => s.trim())
+                                  .filter(Boolean);
+                                const isSelected = selectedIds.includes(String(c.id));
+                                const label = c.category || c.name;
+                                const gameLabel = c.game || "Other";
+                                return (
+                                  <label
+                                    key={c.id}
+                                    className="grid grid-cols-[90px_240px_1fr] items-center gap-2 px-4 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={(e) => {
+                                          let next = new Set(selectedIds);
+                                          if (e.target.checked) next.add(String(c.id));
+                                          else next.delete(String(c.id));
+                                          setAutoRaiseCategories(Array.from(next).join(","));
+                                        }}
+                                      />
+                                      <span className="font-mono text-xs text-neutral-500">{c.id}</span>
+                                    </div>
+                                    <span className="truncate text-neutral-600">{gameLabel}</span>
+                                    <span className="truncate">{label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-4 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-neutral-500 text-sm">
+                            No categories loaded.
+                          </div>
+                        )}
+                      </div>
                       <div className="grid gap-6 lg:grid-cols-2">
                         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
                           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4739,143 +4878,6 @@ const App: React.FC = () => {
                         </div>
                       </div>
                       {/* Auto Raise – full width card */}
-                      <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm shadow-neutral-200/70">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <h3 className="text-lg font-semibold text-neutral-900">Auto Raise</h3>
-                            <p className="text-sm text-neutral-500">Pick categories and we’ll bump them on cooldown.</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-neutral-500">Enable</span>
-                            <ToggleRow
-                              label=""
-                              enabled={!!autoRaise}
-                              onChange={(val) => handleToggleAutoRaise(val)}
-                              disabled={autoRaise === null}
-                            />
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-neutral-600">
-                          <button
-                            type="button"
-                            onClick={reloadCategories}
-                            disabled={categoryLoading}
-                            className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-                          >
-                            {categoryLoading ? "Reloading..." : "Reload from FunPay"}
-                          </button>
-                          {categoryMeta.ts && (
-                            <span className="text-neutral-500">
-                              Loaded {categoryMeta.count || 0} · {new Date(categoryMeta.ts).toLocaleTimeString()}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-3 grid gap-2 md:grid-cols-[2fr_1fr]">
-                          <input
-                            value={categorySearch}
-                            onChange={(e) => setCategorySearch(e.target.value)}
-                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                            placeholder="Search by game/category..."
-                          />
-                          <input
-                            value={categoryIdSearch}
-                            onChange={(e) => setCategoryIdSearch(e.target.value)}
-                            className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 outline-none"
-                            placeholder="Search by ID..."
-                          />
-                        </div>
-                        <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-[12px] text-neutral-600">
-                          Auto-raise loops roughly every 2h (longer if FunPay cooldowns apply). Leave all unchecked to raise everything.
-                        </div>
-                        {groupedCategories.length ? (
-                          <div className="mt-4 rounded-2xl border border-neutral-200 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-                            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-[12px] text-neutral-600 border-b border-neutral-100">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-neutral-800">
-                                  {groupedCategories.length} categories
-                                </span>
-                                <span className="text-neutral-400">·</span>
-                                <span>
-                                  Selected{" "}
-                                  {
-                                    autoRaiseCategories
-                                      .split(",")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean).length
-                                  }
-                                </span>
-                              </div>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const selected = new Set(
-                                      autoRaiseCategories
-                                        .split(",")
-                                        .map((s) => s.trim())
-                                        .filter(Boolean)
-                                    );
-                                    groupedCategories.forEach((c) => selected.add(String(c.id)));
-                                    setAutoRaiseCategories(Array.from(selected).join(","));
-                                  }}
-                                  className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
-                                >
-                                  Select visible
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setAutoRaiseCategories("")}
-                                  className="rounded border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-50"
-                                >
-                                  Clear
-                                </button>
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-[90px_240px_1fr] items-center bg-neutral-50 px-4 py-2 text-[11px] font-semibold text-neutral-600 uppercase tracking-[0.02em]">
-                              <span>ID</span>
-                              <span>Game</span>
-                              <span>Category</span>
-                            </div>
-                            <div className="max-h-[560px] overflow-y-auto divide-y divide-neutral-100">
-                              {groupedCategories.map((c) => {
-                                const selectedIds = autoRaiseCategories
-                                  .split(",")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean);
-                                const isSelected = selectedIds.includes(String(c.id));
-                                const label = c.category || c.name;
-                                const gameLabel = c.game || "Other";
-                                return (
-                                  <label
-                                    key={c.id}
-                                    className="grid grid-cols-[90px_240px_1fr] items-center gap-2 px-4 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={(e) => {
-                                          let next = new Set(selectedIds);
-                                          if (e.target.checked) next.add(String(c.id));
-                                          else next.delete(String(c.id));
-                                          setAutoRaiseCategories(Array.from(next).join(","));
-                                        }}
-                                      />
-                                      <span className="font-mono text-xs text-neutral-500">{c.id}</span>
-                                    </div>
-                                    <span className="truncate text-neutral-600">{gameLabel}</span>
-                                    <span className="truncate">{label}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-4 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-neutral-500 text-sm">
-                            No categories loaded.
-                          </div>
-                        )}
-                      </div>
                     </motion.div>
                     )
                   ) : activeNav === "profile" ? (
