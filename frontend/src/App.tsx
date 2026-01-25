@@ -4319,7 +4319,8 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   ))}
-                  {activeNav === "tickets" ? (
+                  {activeNav !== "funpay-stats" && (
+                  activeNav === "tickets" ? (
                     <motion.div
                       key="tickets"
                       initial={{ opacity: 0, y: 12 }}
@@ -6535,7 +6536,7 @@ const App: React.FC = () => {
                       {renderRentalActionsPanel()}
                     </div>
                   </div>
-                  )}
+                  ))}
                 </motion.div>
               </main>
             </div>
