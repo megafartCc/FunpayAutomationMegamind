@@ -4546,6 +4546,7 @@ const App: React.FC = () => {
                           </div>
                         )}
                       </div>
+                    </motion.div>
                   ) : activeNav === "chats" ? (
                     activeKeyId === "all" ? (
                       <div className="mt-8 rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 p-6">
