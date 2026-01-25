@@ -707,6 +707,20 @@ const App: React.FC = () => {
   const [editKeyProxyPassword, setEditKeyProxyPassword] = useState("");
   const [profileName, setProfileName] = useState("");
 
+  const isHardReload = useMemo(() => {
+    try {
+      const navEntries = performance.getEntriesByType?.("navigation") as PerformanceNavigationTiming[] | undefined;
+      if (navEntries && navEntries.length) {
+        return navEntries[0]?.type === "reload";
+      }
+      // Fallback for older browsers
+      // @ts-expect-error legacy navigation type
+      return performance.navigation?.type === 1;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const groupedCategories = useMemo(() => {
     const term = categorySearch.trim().toLowerCase();
     const idTerm = categoryIdSearch.trim();
@@ -1212,7 +1226,7 @@ const App: React.FC = () => {
     if (!sessionChecked) return;
     if (sessionKey === lastSessionRef.current) return;
     const overviewCache = readCache<OverviewCachePayload>(scopedKey(OVERVIEW_CACHE_KEY), CACHE_TTLS.overview);
-    if (overviewCache?.data) {
+    if (overviewCache?.data && !overviewCache.isStale && !isHardReload) {
       setOverview(overviewCache.data.overview || createEmptyOverview());
       setAccountsTable(overviewCache.data.accounts || []);
       setRentalsTable(overviewCache.data.rentals || []);
@@ -1249,7 +1263,7 @@ const App: React.FC = () => {
       chatWsSubscribedRef.current = null;
       setChatWsConnected(false);
       lastSessionRef.current = sessionKey;
-    }, [sessionChecked, sessionKey]);
+    }, [sessionChecked, sessionKey, isHardReload]);
 
   const handleRegister = async (payload: { username: string; password: string; golden_key: string }) => {
     try {
@@ -1504,7 +1518,7 @@ const App: React.FC = () => {
     const guardKey = sessionKey;
     const cacheKey = scopedKey(OVERVIEW_CACHE_KEY);
     const cached = readCache<OverviewCachePayload>(cacheKey, CACHE_TTLS.overview);
-    if (cached?.data && sessionKeyRef.current === guardKey) {
+    if (cached?.data && !cached.isStale && !isHardReload && sessionKeyRef.current === guardKey) {
       setOverview(cached.data.overview || createEmptyOverview());
       setAccountsTable(cached.data.accounts || []);
       setRentalsTable(cached.data.rentals || []);
@@ -1685,7 +1699,7 @@ const App: React.FC = () => {
     } catch {
       // ignore overview load errors
     }
-  }, [apiFetch, scopedKey, sessionKey]);
+  }, [apiFetch, scopedKey, sessionKey, isHardReload]);
 
   const loadNotifications = useCallback(async () => {
     try {
