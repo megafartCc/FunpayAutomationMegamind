@@ -603,7 +603,6 @@ const readCache = <T,>(key: string, maxAgeMs?: number) => {
 
 const App: React.FC = () => {
   const [token, setToken] = useState("");
-  const [sessionChecked, setSessionChecked] = useState(false);
   const [authState, setAuthState] = useState<"unknown" | "authed" | "guest">("unknown");
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [activeNav, setActiveNav] = useState<string>("overview");
@@ -1227,7 +1226,7 @@ const App: React.FC = () => {
         setAuthState("guest");
         clearAppCaches();
       } finally {
-        if (active) setSessionChecked(true);
+        // authState drives rendering; no blocking on session checks
       }
     };
     checkSession();
