@@ -1298,8 +1298,27 @@ def _build_funpay_categories(token: str, proxy: dict | None) -> list[dict]:
         )
     }
 
+    # Normalize any entries that still only have a combined label (e.g., "Game - Category").
+    for v in pruned.values():
+        if not v.get("game") and not v.get("category"):
+            name = (v.get("name") or "").strip()
+            if " - " in name:
+                game_label, cat_label = [part.strip() for part in name.split(" - ", 1)]
+                if game_label and cat_label:
+                    v["game"] = game_label
+                    v["category"] = cat_label
+
+    # Only keep true subcategories (game + category). Drop game-only rows like id 41.
+    filtered = [
+        v for v in pruned.values()
+        if (v.get("game") or "").strip()
+        and (v.get("category") or "").strip()
+        and (v.get("category") or "").strip() != (v.get("game") or "").strip()
+        and (v.get("category") or "").strip() != (v.get("name") or "").strip()
+    ]
+
     items = sorted(
-        pruned.values(),
+        filtered,
         key=lambda x: (x.get("game") or "", x.get("category") or x.get("name") or "", x.get("id") or 0),
     )
     return items
