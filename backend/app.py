@@ -3221,15 +3221,16 @@ async def dashboard(request: Request, fast: bool = True, refresh: bool = False) 
     if not refresh:
         cached = _redis_get_json(cache_key)
     if cached and fast:
-        cached["cached"] = True
-        return cached
+        fast_cached = dict(cached)
+        fast_cached["cached"] = True
+        return _etag_response(request, fast_cached)
 
     stats = db.get_rental_statistics(uid, key_id=key_id) or {}
 
     if fast:
         rentals_payload = active_rentals(
             request,
-            expand="",
+            expand="none",
             fast=True,
             include_steamid=False,
         )
@@ -3258,7 +3259,7 @@ async def dashboard(request: Request, fast: bool = True, refresh: bool = False) 
         "generated_at": datetime.utcnow().isoformat(),
     }
     _redis_set_json(cache_key, payload, DASHBOARD_CACHE_SECONDS)
-    return payload
+    return _etag_response(request, payload)
 
 
 @app.get("/api/rentals/user/{owner}", dependencies=[Depends(require_admin)])
