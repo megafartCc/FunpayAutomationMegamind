@@ -615,6 +615,7 @@ const App: React.FC = () => {
   });
   const [keysLoading, setKeysLoading] = useState(false);
   const [overview, setOverview] = useState<OverviewData>(createEmptyOverview);
+  const [overviewHydrated, setOverviewHydrated] = useState(false);
   const [funpayStats, setFunpayStats] = useState<FunpayStatsPayload>(createEmptyFunpayStats);
   const [funpayStatsLoading, setFunpayStatsLoading] = useState(false);
   const [accountsTable, setAccountsTable] = useState<AccountRow[]>([]);
@@ -1288,6 +1289,7 @@ const App: React.FC = () => {
       setOverview(createEmptyOverview());
       setAccountsTable([]);
       setRentalsTable([]);
+      setOverviewHydrated(false);
       setFunpayStats(createEmptyFunpayStats());
       setNotifications([]);
       setChats([]);
@@ -1319,6 +1321,7 @@ const App: React.FC = () => {
       return;
     }
     if (effectiveSessionKey === lastSessionRef.current && authState !== "unknown") return;
+    setOverviewHydrated(false);
     const overviewCache = readCache<OverviewCachePayload>(scopedKey(OVERVIEW_CACHE_KEY), CACHE_TTLS.overview);
     if (overviewCache?.data && !overviewCache.isStale && !isHardReload) {
       setOverview(overviewCache.data.overview || createEmptyOverview());
@@ -1663,6 +1666,9 @@ const App: React.FC = () => {
         totalHours,
       };
       setOverview(nextOverview);
+      if (mode === "full") {
+        setOverviewHydrated(true);
+      }
 
       const accountSteamMap = new Map<string, string>();
       let mappedAccounts: AccountRow[] = [];
@@ -2039,6 +2045,7 @@ const App: React.FC = () => {
     if (authState === "guest") return;
     if (!(activeNav === "overview" || activeNav === "rentals" || activeNav === "inventory")) return;
     loadOverview("fast");
+    if (authState !== "authed") return;
     if (hydrateTimeoutRef.current) {
       window.clearTimeout(hydrateTimeoutRef.current);
       hydrateTimeoutRef.current = null;
@@ -5466,10 +5473,10 @@ const App: React.FC = () => {
                           {rentalsTable.length === 0 && (
                             <div
                               className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
-                                authState === "unknown" ? "animate-pulse" : ""
+                                authState !== "guest" && !overviewHydrated ? "animate-pulse" : ""
                               }`}
                             >
-                              {authState === "unknown" ? "Loading rentals..." : "No active rentals yet."}
+                              {authState !== "guest" && !overviewHydrated ? "Loading rentals..." : "No active rentals yet."}
                             </div>
                           )}
                             </div>
@@ -6382,10 +6389,10 @@ const App: React.FC = () => {
                                 {accountsTable.length === 0 && (
                                   <div
                                     className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
-                                      authState === "unknown" ? "animate-pulse" : ""
+                                      authState !== "guest" && !overviewHydrated ? "animate-pulse" : ""
                                     }`}
                                   >
-                                    {authState === "unknown" ? "Loading accounts..." : "No accounts loaded yet."}
+                                    {authState !== "guest" && !overviewHydrated ? "Loading accounts..." : "No accounts loaded yet."}
                                   </div>
                                 )}
                               </div>
@@ -6486,10 +6493,10 @@ const App: React.FC = () => {
                           {accountsTable.length === 0 && (
                             <div
                               className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
-                                authState === "unknown" ? "animate-pulse" : ""
+                                authState !== "guest" && !overviewHydrated ? "animate-pulse" : ""
                               }`}
                             >
-                              {authState === "unknown" ? "Loading accounts..." : "No accounts loaded yet."}
+                              {authState !== "guest" && !overviewHydrated ? "Loading accounts..." : "No accounts loaded yet."}
                             </div>
                           )}
                             </div>
@@ -6638,10 +6645,10 @@ const App: React.FC = () => {
                           {rentalsTable.length === 0 && (
                             <div
                               className={`rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 ${
-                                authState === "unknown" ? "animate-pulse" : ""
+                                authState !== "guest" && !overviewHydrated ? "animate-pulse" : ""
                               }`}
                             >
-                              {authState === "unknown" ? "Loading rentals..." : "No active rentals yet."}
+                              {authState !== "guest" && !overviewHydrated ? "Loading rentals..." : "No active rentals yet."}
                             </div>
                           )}
                             </div>
@@ -6678,3 +6685,4 @@ type PresenceData = {
   match_seconds?: number | null;
   fetched_at?: number | null;
 };
+

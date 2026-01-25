@@ -3229,7 +3229,7 @@ async def dashboard(request: Request, fast: bool = True, refresh: bool = False) 
     if fast:
         rentals_payload = active_rentals(
             request,
-            expand="lite",
+            expand="",
             fast=True,
             include_steamid=False,
         )
