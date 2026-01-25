@@ -4270,13 +4270,11 @@ const App: React.FC = () => {
                                   <div className="text-xs text-neutral-500">No rental data yet.</div>
                                 )}
                               </div>
-                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
                     </div>
-                    )
                   )}
                   {activeNav === "funpay-stats" ? null : activeNav === "tickets" ? (
                     <motion.div
