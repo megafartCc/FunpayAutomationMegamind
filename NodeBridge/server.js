@@ -124,6 +124,7 @@ function isInDotaMatchRaw(raw) {
   return false;
 }
 
+
 function toHeroDisplay(token) {
   if (!token) return "";
   const normalized = token.startsWith("#") ? token.slice(1) : token;
@@ -220,6 +221,29 @@ function extractMatchSeconds(rp, rpRaw) {
   return null;
 }
 
+function hasAnyKeyword(source, keywords) {
+  if (!source) return false;
+  return keywords.some((kw) => source.includes(kw));
+}
+
+function normalizePairs(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => ({
+      key: String(entry.key || ""),
+      value: String(entry.value || ""),
+    }))
+    .filter((entry) => entry.key || entry.value);
+}
+
+function buildSearchableText(parts) {
+  return parts
+    .filter(Boolean)
+    .map((part) => String(part).trim())
+    .filter(Boolean)
+    .join(" | ");
+}
+
 function formatMatchTime(seconds) {
   if (seconds === null || seconds === undefined) return null;
   const total = Math.max(0, Math.floor(seconds));
@@ -298,6 +322,7 @@ function updateMatchStart(id64, inMatch, matchId, heroKey) {
 function derivePresence(data) {
   const rp = data.rich_presence || {};
   const rpRaw = data.rich_presence_raw || [];
+  const rpPairs = normalizePairs(rpRaw);
   const lobbyRaw =
     rp.lobby ||
     (Array.isArray(rpRaw)
@@ -307,12 +332,26 @@ function derivePresence(data) {
   const lobbyStateHit = /lobby_state:\s*(run|serversetup)/.test(lobbyLower);
   const statusLower = String(rp.status || "").toLowerCase();
   const displayLower = String(rp.steam_display || "").toLowerCase();
+  const rpText = buildSearchableText([
+    statusLower,
+    displayLower,
+    lobbyLower,
+    ...Object.entries(rp).map(([key, value]) => `${key}=${String(value).toLowerCase()}`),
+    ...rpPairs.map((entry) => `${entry.key}=${String(entry.value).toLowerCase()}`),
+  ]).toLowerCase();
   const statusKeywords = ["private_lobby", "finding_match", "playing", "match", "ranked", "turbo"];
   const statusHit = statusKeywords.some(
     (kw) => statusLower.includes(kw) || displayLower.includes(kw)
   );
-  const inMatch = isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit;
-  const inGame = !!(data.in_game || data.appid || lobbyRaw || statusHit);
+  const demoKeywords = ["demo_hero", "demo hero", "lobby_type_name_demo"];
+  const botKeywords = ["bot_match", "bot match", "lobby_type_name_bot_match"];
+  const inDemo = hasAnyKeyword(rpText, demoKeywords);
+  const inBotMatch = hasAnyKeyword(rpText, botKeywords);
+  const inMatch =
+    !inDemo &&
+    !inBotMatch &&
+    (isInDotaMatch(rp) || isInDotaMatchRaw(rpRaw) || lobbyStateHit || statusHit);
+  const inGame = !!(data.in_game || data.appid || lobbyRaw || statusHit || inDemo || inBotMatch);
   const matchId = extractMatchId(rp, rpRaw);
   const heroToken = extractHeroToken(rp, rpRaw);
   const heroKey = normalizeKey(heroToken);
@@ -349,9 +388,14 @@ function derivePresence(data) {
   return {
     rp,
     rpRaw,
+    rpPairs,
+    rpText,
     lobbyRaw,
     inMatch,
     inGame,
+    inDemo,
+    inBotMatch,
+    matchId,
     heroToken,
     heroName,
     heroLevel,
@@ -395,6 +439,20 @@ app.get("/presence/:steamid", (req, res) => {
     hero_level: derived.heroLevel ?? null,
     match_seconds: derived.matchSeconds ?? null,
     match_time: derived.matchTime ?? null,
+    derived: {
+      in_game: derived.inGame,
+      in_match: derived.inMatch,
+      in_demo: derived.inDemo,
+      in_bot_match: derived.inBotMatch,
+      lobby_info: derived.lobbyRaw || "",
+      match_id: derived.matchId || null,
+      hero_token: derived.heroToken || null,
+      hero_name: derived.heroName || null,
+      hero_level: derived.heroLevel ?? null,
+      match_seconds: derived.matchSeconds ?? null,
+      match_time: derived.matchTime ?? null,
+      searchable_text: derived.rpText || "",
+    },
   });
 });
 
@@ -411,12 +469,21 @@ app.get("/presencefull/:steamid", (req, res) => {
   res.json({
     ...data,
     derived: {
+      in_game: derived.inGame,
+      in_match: derived.inMatch,
+      in_demo: derived.inDemo,
+      in_bot_match: derived.inBotMatch,
+      lobby_info: derived.lobbyRaw || "",
+      match_id: derived.matchId || null,
       hero_token: derived.heroToken || null,
       hero_name: derived.heroName || null,
       hero_level: derived.heroLevel ?? null,
       match_seconds: derived.matchSeconds ?? null,
       match_time: derived.matchTime ?? null,
+      searchable_text: derived.rpText || "",
     },
+    rich_presence_pairs: derived.rpPairs,
+    searchable_text: derived.rpText || "",
   });
 });
 
